@@ -1,0 +1,10 @@
+{
+  "_type": "playlist",
+  "id": "PLabcdef",
+  "title": "A playlist",
+  "extractor_key": "YoutubeTab",
+  "entries": [
+    {"_type": "url", "id": "aBcDeFgHiJk", "url": "https://www.youtube.com/watch?v=aBcDeFgHiJk", "ie_key": "Youtube"},
+    {"_type": "url", "id": "kJiHgFeDcBa", "url": "https://www.youtube.com/watch?v=kJiHgFeDcBa", "ie_key": "Youtube"}
+  ]
+}

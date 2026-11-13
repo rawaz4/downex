@@ -1,0 +1,2 @@
+[youtube] bbbbbbbbbbb: Downloading tv client config
+ERROR: [youtube] bbbbbbbbbbb: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://example.org/wiki/FAQ  for how to manually pass cookies. Also see  https://example.org/wiki/Extractors  for tips on effectively exporting YouTube cookies

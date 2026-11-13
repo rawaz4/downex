@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Time-based SegmentTemplate with SegmentTimeline, negative @r, and two Periods. -->
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT30S">
+  <Period id="first" duration="PT20S">
+    <BaseURL>p1/</BaseURL>
+    <AdaptationSet mimeType="video/mp4" codecs="avc1.4d401e" width="640" height="360">
+      <SegmentTemplate timescale="1000" presentationTimeOffset="1000"
+                       media="$RepresentationID$-$Time$.m4s" initialization="$RepresentationID$-init.m4s">
+        <SegmentTimeline>
+          <S t="1000" d="4000" r="2"/>
+          <S d="3000"/>
+          <S d="2000" r="-1"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="low" bandwidth="500000"/>
+    </AdaptationSet>
+  </Period>
+  <Period id="second">
+    <BaseURL>p2/</BaseURL>
+    <AdaptationSet mimeType="video/mp4" codecs="avc1.4d401e">
+      <SegmentTemplate timescale="10" media="$RepresentationID$/$Number$.m4s" startNumber="10">
+        <SegmentTimeline><S t="0" d="25" r="-1"/></SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="low" bandwidth="500000"/>
+    </AdaptationSet>
+  </Period>
+</MPD>

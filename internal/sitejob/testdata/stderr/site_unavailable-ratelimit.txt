@@ -1,0 +1,1 @@
+ERROR: [youtube] hhhhhhhhhhh: The current session has been rate-limited by YouTube for up to an hour. It is recommended to use `-t sleep` to add a delay between video requests to avoid exceeding the rate limit. For more information, refer to  https://example.org/wiki/Extractors#rate-limit

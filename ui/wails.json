@@ -1,0 +1,20 @@
+{
+  "name": "Downex",
+  "outputfilename": "Downex",
+  "frontend:dir": "frontend",
+  "frontend:install": "pnpm install",
+  "frontend:build": "pnpm build",
+  "frontend:dev:watcher": "pnpm dev",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "./build",
+  "author": {
+    "name": "Downex"
+  },
+  "info": {
+    "companyName": "Downex",
+    "productName": "Downex",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": "Downex download manager"
+  }
+}

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Downex</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="popup">
+      <header class="pp-head">
+        <span class="brand" data-brand-mark="22"></span>
+        <h1>Downex</h1>
+        <!-- main.ts sets data-tone and the text from popup-view.ts statusChip(statusState(…)). -->
+        <span id="status-chip" class="status-chip" data-tone="warn" role="status" aria-live="polite">
+          <span class="dot" aria-hidden="true"></span><span id="status-text">Connecting…</span>
+        </span>
+        <span class="spacer"></span>
+        <button id="open-options" type="button" class="icon-btn" aria-label="Options" title="Options">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M18.74 9.21L19.19 10.74L21.14 10.99L21.14 13.01L19.19 13.26L18.74 14.79L17.97 16.20L19.18 17.75L17.75 19.18L16.20 17.97L14.79 18.74L13.26 19.19L13.01 21.14L10.99 21.14L10.74 19.19L9.21 18.74L7.80 17.97L6.25 19.18L4.82 17.75L6.03 16.20L5.26 14.79L4.81 13.26L2.86 13.01L2.86 10.99L4.81 10.74L5.26 9.21L6.03 7.80L4.82 6.25L6.25 4.82L7.80 6.03L9.21 5.26L10.74 4.81L10.99 2.86L13.01 2.86L13.26 4.81L14.79 5.26L16.20 6.03L17.75 4.82L19.18 6.25L17.97 7.80ZM12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z" />
+          </svg>
+        </button>
+      </header>
+
+      <div class="tabs" role="tablist" aria-label="Downex">
+        <button id="tab-page" type="button" role="tab" aria-selected="true" aria-controls="panel-page">
+          This page<span id="page-count" class="n" hidden></span>
+        </button>
+        <button id="tab-downloads" type="button" role="tab" aria-selected="false" aria-controls="panel-downloads" tabindex="-1">
+          Downloads<span id="history-count" class="n" hidden></span>
+        </button>
+      </div>
+
+      <div class="pp-scroll">
+        <!-- This page: the page's videos, streams and files, then the site's switches. -->
+        <section id="panel-page" class="panel" role="tabpanel" aria-labelledby="tab-page">
+          <!-- Downex cannot be reached (popup-view.ts offlineView): instead of the page's videos. -->
+          <div id="offline" class="offline" hidden>
+            <span class="glyph" aria-hidden="true">
+              <svg class="icon g-not-running" viewBox="0 0 24 24"><path d="M12 4v7M7.4 6.9a7 7 0 1 0 9.2 0" /></svg>
+              <svg class="icon g-not-set-up" viewBox="0 0 24 24"><path d="M9 3.5v4M15 3.5v4M7 7.5h10v3a5 5 0 0 1-10 0zM12 15.5v5" /></svg>
+              <svg class="icon g-update" viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 19.5h14" /></svg>
+              <svg class="icon g-background" viewBox="0 0 24 24"><path d="M12 4.5 20.5 19h-17z" /><path d="M12 10v4M12 16.5v.01" /></svg>
+            </span>
+            <h2 id="offline-title">Downex isn’t running</h2>
+            <p id="offline-text"></p>
+            <div id="offline-command" class="command" hidden>
+              <code id="offline-code"></code>
+              <button id="copy-command" type="button" class="icon-btn sm" aria-label="Copy the command" title="Copy">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2" /><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" /></svg>
+              </button>
+            </div>
+            <p id="offline-detail" class="detail" hidden></p>
+            <button id="check-again" type="button" class="btn sm">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.25 12a7.25 7.25 0 1 1-2.2-5.2M19.5 4.5v4h-4" /></svg>
+              Check again
+            </button>
+          </div>
+
+          <!-- downexd stopped or not answering while the relay works (popup-view.ts daemonNote). -->
+          <div id="daemon-note" class="daemon-note" hidden>
+            <p id="daemon-note-text"></p>
+            <button id="daemon-retry" type="button" class="btn link" hidden>Check again</button>
+          </div>
+
+          <div id="media-section" class="media-section" data-scanning="true">
+            <div id="videos-head" class="pp-sec" hidden>
+              <h2 id="videos-heading">Videos</h2>
+              <span id="videos-host" class="aside"></span>
+            </div>
+            <ul id="videos" class="cards" aria-labelledby="videos-heading"></ul>
+            <div id="folds" class="folds"></div>
+            <p id="media-empty" class="pp-note" aria-live="polite">Checking the page…</p>
+            <div id="find-video" class="find" hidden>
+              <div class="find-row">
+                <button id="find-video-btn" type="button" class="btn sm" aria-describedby="find-video-hint">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></svg>
+                  Find the video on this page
+                </button>
+                <span id="no-cookies" class="chip" hidden>
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l7 2.6v5.4c0 4.3-2.9 7.6-7 9-4.1-1.4-7-4.7-7-9V6.1z" /></svg>
+                  No cookies sent
+                </span>
+              </div>
+              <p id="find-video-hint" class="pp-hint">Downex asks yt-dlp for this page’s video and lists one MP4 quality per class.</p>
+            </div>
+            <div id="media" class="groups"></div>
+          </div>
+
+          <!-- The site's switches (B "Fluent"): today's rules and storage, the send switch inverted. -->
+          <section class="site" aria-labelledby="site-heading">
+            <h2 id="site-heading" class="site-head">On <span id="site-host">this page</span></h2>
+            <div class="switches">
+              <label class="switch-row">
+                <svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h11M10.5 7.5 15 12l-4.5 4.5M19.5 5v14" /></svg>
+                <span class="sw-text">
+                  <span id="site-send-label" class="sw-label">Send downloads to Downex</span>
+                  <span id="site-hint" class="sw-hint">Checking the page…</span>
+                </span>
+                <input id="site-send" type="checkbox" role="switch" aria-labelledby="site-send-label" aria-describedby="site-hint" disabled />
+              </label>
+              <label class="switch-row">
+                <svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v11M7.5 11 12 15.5l4.5-4.5M5.5 19.5h13" /></svg>
+                <span class="sw-text">
+                  <span id="site-buttons-label" class="sw-label">Download buttons on videos</span>
+                  <span id="site-buttons-hint" class="sw-hint">Checking the page…</span>
+                </span>
+                <input id="site-buttons" type="checkbox" role="switch" aria-labelledby="site-buttons-label" aria-describedby="site-buttons-hint" disabled />
+              </label>
+              <label class="switch-row">
+                <svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 7v10M14.5 7v10" /></svg>
+                <span class="sw-text">
+                  <span id="tab-paused-label" class="sw-label">Pause capture in this tab</span>
+                  <span id="tab-paused-hint" class="sw-hint">Also tabs opened from it, until it is closed</span>
+                </span>
+                <input id="tab-paused" type="checkbox" role="switch" aria-labelledby="tab-paused-label" aria-describedby="tab-paused-hint" disabled />
+              </label>
+            </div>
+          </section>
+        </section>
+
+        <!-- Downloads: what was handed to Downex and how it was answered; no live progress. -->
+        <section id="panel-downloads" class="panel" role="tabpanel" aria-labelledby="tab-downloads" hidden>
+          <div class="pp-sec">
+            <h2 id="history-heading">Recent hand-offs</h2>
+            <span id="history-scope" class="aside"></span>
+          </div>
+          <p id="history-empty" class="pp-note" hidden>No hand-offs yet. Downloads and videos you send to Downex are listed here.</p>
+          <ol id="history" class="history" aria-labelledby="history-heading"></ol>
+          <details id="trace-section" class="trace">
+            <summary>
+              <svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" /><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" /></svg>
+              <span class="t">Capture log</span>
+              <span class="sub">for diagnostics</span>
+              <svg class="icon chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 7 5 5-5 5" /></svg>
+            </summary>
+            <div class="trace-body">
+              <p id="trace-empty" class="pp-note">Nothing yet: start a download, then open this menu again.</p>
+              <ol id="trace" class="trace-list"></ol>
+            </div>
+          </details>
+        </section>
+      </div>
+
+      <!-- The global capture switch: the same rule as the options page's. -->
+      <footer id="page-foot" class="pp-foot">
+        <label class="switch-row">
+          <span class="sw-text">
+            <span id="capture-label" class="sw-label">Capture browser downloads</span>
+            <span id="capture-hint" class="sw-hint">
+              <span class="on-note">Matching downloads go to Downex</span>
+              <span class="off-note">Off: every download stays in the browser</span>
+            </span>
+          </span>
+          <input id="capture" type="checkbox" role="switch" aria-labelledby="capture-label" aria-describedby="capture-hint" />
+        </label>
+      </footer>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

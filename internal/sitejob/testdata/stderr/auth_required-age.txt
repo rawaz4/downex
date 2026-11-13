@@ -1,0 +1,4 @@
+[youtube] Extracting URL: https://www.youtube.com/watch?v=aaaaaaaaaaa
+[youtube] aaaaaaaaaaa: Downloading webpage
+WARNING: [youtube] aaaaaaaaaaa: unable to extract yt initial data; please report this issue
+ERROR: [youtube] aaaaaaaaaaa: Sign in to confirm your age. This video may be inappropriate for some users. Use --cookies-from-browser or --cookies for the authentication. See  https://example.org/wiki/FAQ#cookies  for how to manually pass cookies

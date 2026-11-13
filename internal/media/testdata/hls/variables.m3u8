@@ -1,0 +1,9 @@
+#EXTM3U
+#EXT-X-VERSION:8
+#EXT-X-DEFINE:NAME="host",VALUE="https://edge.example.com"
+#EXT-X-DEFINE:QUERYPARAM="token"
+#EXT-X-TARGETDURATION:2
+#EXT-X-MAP:URI="{$host}/init.mp4?t={$token}"
+#EXTINF:2,
+{$host}/s1.m4s?t={$token}
+#EXT-X-ENDLIST

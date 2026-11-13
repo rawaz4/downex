@@ -1,0 +1,1 @@
+ERROR: [example] 42: Login required to view this video. Use --username and --password, --netrc or --cookies

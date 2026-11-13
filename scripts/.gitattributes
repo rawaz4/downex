@@ -1,0 +1,2 @@
+# bash on macOS cannot run a script with CRLF line endings, also when it was checked out on Windows.
+*.sh text eol=lf

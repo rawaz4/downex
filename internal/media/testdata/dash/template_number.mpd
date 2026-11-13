@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Number-based SegmentTemplate with a constant @duration (ISO/IEC 23009-1 5.3.9.4). -->
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT1M0.5S"
+     minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+  <BaseURL>https://cdn.example.org/content/</BaseURL>
+  <Period id="p0">
+    <AdaptationSet id="1" contentType="video" mimeType="video/mp4" segmentAlignment="true">
+      <BaseURL>video/</BaseURL>
+      <SegmentTemplate media="$RepresentationID$/seg-$Number%05d$.m4s" initialization="$RepresentationID$/init.mp4"
+                       startNumber="1" timescale="90000" duration="360000"/>
+      <Representation id="v720" bandwidth="3000000" width="1280" height="720" codecs="avc1.64001f" frameRate="30000/1001"/>
+      <Representation id="v1080" bandwidth="6000000" width="1920" height="1080" codecs="avc1.640028" frameRate="30000/1001"/>
+    </AdaptationSet>
+    <AdaptationSet id="2" contentType="audio" mimeType="audio/mp4" lang="en">
+      <Label>English</Label>
+      <SegmentTemplate media="audio/$RepresentationID$/$Bandwidth$/$Number$.m4s" initialization="audio/$RepresentationID$/init.mp4"
+                       timescale="48000" duration="192000" startNumber="0"/>
+      <Representation id="a128" bandwidth="128000" codecs="mp4a.40.2" audioSamplingRate="48000"/>
+      <Representation id="a64" bandwidth="64000" codecs="mp4a.40.5" audioSamplingRate="48000"/>
+    </AdaptationSet>
+  </Period>
+</MPD>

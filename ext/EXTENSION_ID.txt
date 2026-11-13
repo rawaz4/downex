@@ -1,0 +1,15 @@
+# Chromium extension IDs that downex-nmhost accepts, one per line; "#" starts a comment
+# line and blank lines are skipped. The build scripts join the IDs with commas into
+#   -ldflags "-X main.DefaultChromeExtensionIDs=<id>,<id>"
+# and register writes each one into the host manifests' allowed_origins. Every ID must
+# be valid (32 letters a-p): a bad line fails the build instead of being skipped.
+
+# Development and unpacked builds, pinned by keys/public-key.txt (`pnpm keygen` rewrites
+# this line only).
+dlgpbdafcmciojddbbjikgeeefipejcn
+
+# Chrome Web Store: add the ID its dashboard shows after the first upload on a line of
+# its own here (not needed when the store's public key is adopted in keys/public-key.txt,
+# which makes the store ID the one above).
+
+# Edge Add-ons: Partner Center always gives its own ID; add it on a line of its own here.

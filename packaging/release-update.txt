@@ -1,0 +1,11 @@
+# Release builds of Downex (build-windows.ps1 -Release, build-macos.sh -r) compile these in
+# when DOWNEX_UPDATE_PUBLIC_KEY / DOWNEX_UPDATE_FEED_URL are not set. Development builds
+# ignore this file and cannot update.
+#
+# public_key: the ed25519 public key that checks the signature of every update manifest
+# (go run ./scripts/release-sign keygen). Its private key never enters this repository;
+# it is kept and backed up by the owner. Changing this key cuts off every installation
+# built with the old one.
+# feed_url: the https address of the signed update manifest; its signature is <feed_url>.sig.
+public_key=taU5qsgfFF2MeGPF6f3Sg2fXb4yGT1g4rAQ7YIfo4Ac=
+feed_url=https://downex.app/update.json

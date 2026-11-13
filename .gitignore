@@ -1,0 +1,32 @@
+# build output
+/bin/
+/dist/
+/build/bin/
+*.exe
+/downex
+/downexd
+*.test
+*.out
+coverage.*
+
+# downloads in progress / test artefacts
+*.dxpart
+/testdata/tmp/
+
+# node / ui / extension
+node_modules/
+/ui/frontend/dist/
+/ui/frontend/package.json.md5
+/ui/build/bin/
+/ui/build/wailsjs/
+/ui/build/darwin/
+*.syso
+/ext/.output/
+/ext/.wxt/
+ext/keys/*.pem
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

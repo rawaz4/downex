@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI=#\n#EXTINF:0\n0")

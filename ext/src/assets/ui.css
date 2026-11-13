@@ -1,0 +1,1175 @@
+/* Shared look of the extension pages ("Studio", docs/DESIGN-SYSTEM.md §2, §3): solid surfaces, a
+   Mint-tinted chrome, hairline structure and aligned figures. The tokens have the same names and
+   values as the desktop app's (ui/frontend/src/app.css), so a kind, a state or the brand looks the
+   same in the popup and in the window. Dark follows prefers-color-scheme (the extension has no
+   theme setting). No blur, no gradients, no glows: shadows are neutral and the only coloured
+   outline is the solid focus ring. Contrast: text ≥ 4.5:1 on every ground it sits on, control
+   boundaries ≥ 3:1 (the measured values are in DESIGN-SYSTEM.md §2.1). */
+:root {
+  color-scheme: light dark;
+
+  /* ---- type (§2.2) ---- */
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Noto Sans', Ubuntu, Cantarell, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Noto Sans',
+    sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, ui-monospace, 'SF Mono', Menlo, 'DejaVu Sans Mono', monospace;
+  /* Cascadia Mono's regular is heavier than the UI font: its semi-light (350) matches it. */
+  --mono-weight: 350;
+  --type-tag: 0.625rem;
+  --type-caps: 0.65625rem;
+  --type-meta: 0.71875rem;
+  --type-small: 0.75rem;
+  --type-cell: 0.78125rem;
+  --type-body: 0.8125rem;
+  --type-lead: 0.875rem;
+  --type-section: 0.96875rem;
+  --type-dialog: 1rem;
+  --type-page: 1.25rem;
+  --type-figure: 1.75rem;
+
+  /* ---- spacing: a 2/4 px grid (§2.3) ---- */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 10px;
+  --sp-6: 12px;
+  --sp-7: 16px;
+  --sp-8: 20px;
+  --sp-9: 24px;
+  --sp-10: 32px;
+
+  /* ---- radii (§2.4) ---- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 12px;
+  --r-2xl: 14px;
+  --r-pill: 999px;
+
+  /* ---- motion (§2.7) ---- */
+  --dur-1: 90ms;
+  --dur-2: 120ms;
+  --dur-3: 160ms;
+  --dur-4: 240ms;
+  --dur-5: 320ms;
+  --dur-exit: 140ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  /* ---- grounds and lines ---- */
+  --chrome: #eef2f0;
+  --surface: #ffffff;
+  --surface-2: #f7f9f8;
+  --raised: #ffffff;
+  --field: #ffffff;
+  --line: #dfe5e2;
+  --line-soft: #e9eeeb;
+  --line-strong: #c9d1cd;
+  --line-field: #808b85;
+
+  /* ---- ink ---- */
+  --ink: #0f1613;
+  --ink-2: #2f3b35;
+  --muted: #56625c;
+  --faint: #65706a;
+
+  /* ---- Mint and interaction ---- */
+  --accent: #10804f;
+  --accent-hover: #0c6c42;
+  --accent-press: #0a5a37;
+  --accent-text: #0b6a40;
+  --accent-on: #ffffff;
+  --accent-soft: #e2f3ea;
+  --accent-line: #a3d9bd;
+  --sel: #eaf6ef;
+  --sel-hover: #e1f1e8;
+  --sel-line: #b3dec7;
+  --hover: #f2f6f4;
+  --press: #e7ece9;
+  --focus: #10804f;
+  --primary-lift: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(8 60 36 / 0.25);
+
+  /* ---- semantic states ---- */
+  --warn: #935600;
+  --warn-soft: #fbf0dc;
+  --warn-line: #e6c58c;
+  --danger: #bf3328;
+  --danger-soft: #fbe7e4;
+  --danger-line: #efb3ab;
+  --danger-on: #ffffff;
+  --info: #2a5dbd;
+  --info-soft: #e6eefc;
+  --info-line: #b5c9f0;
+  --tone-on: #ffffff;
+
+  /* ---- segmented progress ---- */
+  --seg-track: #dce3df;
+  --seg-fill: #178553;
+  --seg-edge: #0b4a2f;
+  --seg-paused: #9c680c;
+  --seg-failed: #c8433a;
+  --seg-idle: #8a958f;
+
+  /* ---- file kinds: hue and deep tone; white glyphs on both ---- */
+  --tile-glyph: #ffffff;
+  --c-video: #6a45d4;
+  --c-video-deep: #4e339d;
+  --c-audio: #cf3577;
+  --c-audio-deep: #992758;
+  --c-archives: #c85a12;
+  --c-archives-deep: #94430d;
+  --c-documents: #2f6fd8;
+  --c-documents-deep: #2352a0;
+  --c-programs: #0b8496;
+  --c-programs-deep: #08626f;
+  --c-images: #5d7f12;
+  --c-images-deep: #455e0d;
+  --c-other: #727d77;
+  --c-other-deep: #545d58;
+
+  /* ---- brand (the app and toolbar icon: the same in both themes) ---- */
+  --brand-tile: #1a221e;
+  --brand-hairline: #34403a;
+  --brand-bar: #93e0ba;
+  --brand-head: #cef1e0;
+
+  /* ---- chart, scrim, shadows ---- */
+  --chart-line: var(--accent);
+  --chart-fill: rgb(16 128 79 / 0.12);
+  --chart-grid: #e3e8e5;
+  --scrim: rgb(14 22 18 / 0.38);
+  --shadow-sm: 0 1px 2px rgb(16 28 22 / 0.06);
+  --shadow-md: 0 1px 2px rgb(16 28 22 / 0.06), 0 4px 12px rgb(16 28 22 / 0.07);
+  --shadow-lg: 0 24px 64px rgb(12 22 17 / 0.22), 0 2px 6px rgb(12 22 17 / 0.08);
+
+  /* ---- status aliases ---- */
+  --st-downloading: var(--accent-text);
+  --st-queued: var(--muted);
+  --st-paused: var(--warn);
+  --st-failed: var(--danger);
+  --st-completed: var(--faint);
+  --st-confirm: var(--info);
+  --st-canceled: var(--faint);
+}
+
+/* Dark (§2.1): a green-black chrome keeps Mint as the identity; visible row and card lines. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* the small logo's full-bleed tile vanishes on the dark chrome: its hairline rings it */
+    --brand-ring: var(--brand-hairline);
+    --chrome: #0a0e0c;
+    --surface: #171e1b;
+    --surface-2: #1b2320;
+    --raised: #212a26;
+    --field: #121815;
+    --line: #303b36;
+    --line-soft: #27312c;
+    --line-strong: #3d4943;
+    --line-field: #76837d;
+    --ink: #e8efeb;
+    --ink-2: #c5d0ca;
+    --muted: #9eaba4;
+    --faint: #8b9891;
+    --accent: #3ccb8b;
+    --accent-hover: #5ad79f;
+    --accent-press: #2fb377;
+    --accent-text: #6fdcaa;
+    --accent-on: #04210f;
+    --accent-soft: rgb(60 203 139 / 0.14);
+    --accent-line: rgb(60 203 139 / 0.42);
+    --sel: rgb(60 203 139 / 0.1);
+    --sel-hover: rgb(60 203 139 / 0.14);
+    --sel-line: rgb(60 203 139 / 0.38);
+    --hover: rgb(255 255 255 / 0.035);
+    --press: rgb(255 255 255 / 0.06);
+    --focus: #6fdcaa;
+    --primary-lift: none;
+    --warn: #e6aa4c;
+    --warn-soft: rgb(230 170 76 / 0.12);
+    --warn-line: rgb(230 170 76 / 0.4);
+    --danger: #f2857a;
+    --danger-soft: rgb(242 133 122 / 0.12);
+    --danger-line: rgb(242 133 122 / 0.4);
+    --danger-on: #2a0a07;
+    --info: #84aef7;
+    --info-soft: rgb(132 174 247 / 0.13);
+    --info-line: rgb(132 174 247 / 0.4);
+    --tone-on: #0a0e0c;
+    --seg-track: #2c3833;
+    --seg-fill: #34bd80;
+    --seg-edge: #b5f3d5;
+    --seg-paused: #d3a24a;
+    --seg-failed: #e86b60;
+    --seg-idle: #5d6a64;
+    --c-video: #7f5fe6;
+    --c-video-deep: #5943a1;
+    --c-audio: #e0508f;
+    --c-audio-deep: #9d3864;
+    --c-archives: #d5702a;
+    --c-archives-deep: #954e1d;
+    --c-documents: #4a83e6;
+    --c-documents-deep: #345ca1;
+    --c-programs: #178f9f;
+    --c-programs-deep: #10646f;
+    --c-images: #6a8f22;
+    --c-images-deep: #4a6418;
+    --c-other: #76827c;
+    --c-other-deep: #535b57;
+    --chart-fill: rgb(60 203 139 / 0.14);
+    --chart-grid: #26302b;
+    --scrim: rgb(0 0 0 / 0.55);
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.35);
+    --shadow-md: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 16px rgb(0 0 0 / 0.3);
+    --shadow-lg: 0 24px 64px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.05);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Visibility is the JS's `hidden` attribute: no display rule below may bring an element back. */
+[hidden] {
+  display: none !important;
+}
+
+html {
+  font-size: 100%;
+  background: var(--chrome);
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--chrome);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  /* numbers keep the UI font with aligned figures; monospace is for addresses and paths only */
+  font: 400 var(--type-body) / 1.4 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font: 650 var(--type-dialog) / 1.2 var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--accent-text);
+  text-underline-offset: 2px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+/* The only monospace: addresses, file paths and commands. */
+code,
+.mono {
+  font: var(--mono-weight) 0.75rem / 1.4 var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--sel-hover);
+}
+
+/* Line icons on a 24 grid (§2.6.1). */
+svg.icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+svg.icon.fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* File-type tiles (§2.6.3) and the brand mark (§2.6.4): solid, never recoloured by the text. */
+svg.tile,
+svg.brand-mark {
+  flex: none;
+  display: block;
+}
+
+/* the clapper's tilted arm reaches a little above the cropped 2..30 box (TILE_VIEWBOX) */
+svg.tile {
+  overflow: visible;
+  forced-color-adjust: auto;
+}
+
+/* ---------------------------------------------------------------- buttons (§3.1) */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 30px;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--raised);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink-2);
+  font-size: var(--type-body);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2) ease,
+    border-color var(--dur-2) ease,
+    color var(--dur-2) ease;
+}
+
+.btn svg.icon {
+  color: var(--muted);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--press);
+  transition-duration: var(--dur-1);
+}
+
+.btn.sm {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 9px;
+  gap: 6px;
+  border-radius: 7px;
+  font-size: var(--type-cell);
+}
+
+.btn.sm svg.icon {
+  width: 14px;
+  height: 14px;
+}
+
+.btn.lg {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 13px;
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  color: var(--faint);
+  cursor: default;
+}
+
+.btn:disabled svg.icon,
+.btn[aria-disabled='true'] svg.icon {
+  color: var(--faint);
+  opacity: 0.7;
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  box-shadow: var(--primary-lift);
+  color: var(--accent-on);
+  font-weight: 600;
+}
+
+.btn.primary svg.icon {
+  color: inherit;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn.primary:active:not(:disabled) {
+  background: var(--accent-press);
+}
+
+.btn.primary:disabled {
+  color: var(--accent-on);
+  opacity: 0.55;
+}
+
+.btn.ghost {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+/* A link-like action inside text or a list (Try again, Allow the sign-in). */
+.btn.link {
+  height: auto;
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  box-shadow: none;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-align: start;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.btn.link svg.icon {
+  color: inherit;
+}
+
+.btn.link:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2) ease,
+    border-color var(--dur-2) ease,
+    color var(--dur-2) ease;
+}
+
+.icon-btn.sm {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.icon-btn:active:not(:disabled) {
+  background: var(--press);
+}
+
+.icon-btn:disabled {
+  color: var(--faint);
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------- fields (§3.8) */
+
+.input,
+textarea.input {
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  margin: 0;
+  padding: 0 11px;
+  border: 1px solid var(--line-field);
+  border-radius: 9px;
+  background: var(--field);
+  color: var(--ink);
+  font-size: var(--type-body);
+  transition:
+    border-color var(--dur-2) ease,
+    box-shadow var(--dur-2) ease;
+}
+
+.input.sm {
+  height: 30px;
+  min-height: 30px;
+  border-radius: var(--r-md);
+}
+
+textarea.input {
+  display: block;
+  height: auto;
+  padding: 8px 11px;
+  resize: vertical;
+  font: var(--mono-weight) 0.75rem / 1.55 var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+.input::placeholder {
+  color: var(--faint);
+  opacity: 1;
+}
+
+.input:focus,
+.input:focus-visible {
+  /* A 2 px --focus edge (the border and a 1 px ring: 3:1 or more against the ground, where a
+     hue change of the border alone is 1.4:1), then a solid soft spread, not a blur. */
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus), 0 0 0 4px var(--accent-soft);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.input[aria-invalid='true']:focus {
+  box-shadow:
+    0 0 0 1px var(--danger),
+    0 0 0 4px var(--danger-soft);
+}
+
+.hint {
+  font-size: var(--type-small);
+  color: var(--faint);
+}
+
+.error-text {
+  font-size: var(--type-small);
+  color: var(--danger);
+}
+
+input[type='checkbox']:not([role='switch']) {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------- switch (§3.6) */
+
+input[type='checkbox'][role='switch'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+  /* the off track's edge: --line-field reaches 3:1 on every ground (the grey fill alone is 1.5:1) */
+  box-shadow: inset 0 0 0 1px var(--line-field);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-3) ease,
+    box-shadow var(--dur-3) ease;
+}
+
+input[type='checkbox'][role='switch']::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--dur-3) var(--ease-out);
+}
+
+input[type='checkbox'][role='switch']:checked {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+input[type='checkbox'][role='switch']:checked::before {
+  transform: translateX(12px);
+}
+
+input[type='checkbox'][role='switch']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A switch row: the label (and hint) on the start side, the switch at the end; the whole row is the
+   label, so a click anywhere on it toggles the switch. */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.switch-row:has(> input:disabled) {
+  cursor: default;
+}
+
+.switch-row > .sw-text {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.switch-row .sw-label {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.switch-row .sw-hint {
+  font-size: var(--type-small);
+  line-height: 1.4;
+  color: var(--faint);
+}
+
+.switch-row .sw-hint.tone-error {
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- chips, pills, tags (§3.7) */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--type-small);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.chip svg.icon {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.pill.ok {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.pill.info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.pill.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.pill.fail {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.pill.done {
+  background: var(--chrome);
+  color: var(--muted);
+}
+
+/* HLS, DASH and a site name: the hue at 11 % with the hue as text. */
+.tag {
+  --tag-hue: var(--c-video);
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--tag-hue) 11%, transparent);
+  color: var(--tag-hue);
+  font-size: var(--type-tag);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* the dark video hue is a step too deep for small text: the tag reads it lighter */
+  .tag {
+    color: color-mix(in srgb, var(--tag-hue) 55%, var(--ink));
+  }
+}
+
+.caps {
+  font-size: var(--type-caps);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Cards (§2.5 level 1). */
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Notes (hints and errors in a box). */
+.note {
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--type-cell);
+  line-height: 1.45;
+}
+
+.note.info {
+  border-color: var(--info-line);
+  background: var(--info-soft);
+}
+
+.note.warn {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+}
+
+.note.fail {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+/* ---------------------------------------------------------------- text tones (the JS swaps these) */
+
+.muted {
+  color: var(--muted);
+}
+
+.tone-ok {
+  color: var(--accent-text);
+}
+
+.tone-warn {
+  color: var(--warn);
+}
+
+.tone-error {
+  color: var(--danger);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- select menu (§3.5, select-menu.ts) */
+
+.sm-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 30px;
+  margin: 0;
+  padding: 0 7px 0 10px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--r-md);
+  background: var(--field);
+  color: var(--ink);
+  font-size: var(--type-cell);
+  text-align: start;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-2) ease,
+    box-shadow var(--dur-2) ease;
+}
+
+.sm-trigger:hover:not(:disabled) {
+  border-color: var(--ink-2);
+}
+
+.sm-trigger:focus-visible,
+.sm-trigger[aria-expanded='true'] {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus), 0 0 0 4px var(--accent-soft);
+}
+
+.sm-trigger:disabled {
+  color: var(--faint);
+  background: var(--surface-2);
+  cursor: default;
+}
+
+.sm-trigger[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.sm-trigger > .sm-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sm-trigger .sm-label {
+  font-weight: 600;
+}
+
+.sm-trigger .sm-detail {
+  margin-left: 5px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sm-trigger[data-empty='true'] .sm-label {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.sm-trigger > .sm-end {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.sm-trigger > .sm-end svg.icon {
+  width: 14px;
+  height: 14px;
+  transition: transform var(--dur-3) var(--ease-out);
+}
+
+.sm-trigger[aria-expanded='true'] > .sm-end svg.icon {
+  transform: rotate(180deg);
+}
+
+.sm-trigger[aria-busy='true'] > .sm-end svg.icon {
+  display: none;
+}
+
+.sm-trigger:not([aria-busy='true']) > .sm-end .spinner {
+  display: none;
+}
+
+/* The list: fixed (so it escapes a card's edges), placed by select-menu.ts under or over the trigger. */
+.sm-list {
+  position: fixed;
+  z-index: 60;
+  min-width: 160px;
+  max-height: 320px;
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+  animation: sm-rise var(--dur-3) var(--ease-out);
+}
+
+.sm-list[data-place='above'] {
+  animation-name: sm-drop;
+}
+
+.sm-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
+  min-height: 30px;
+  padding: 4px 9px 4px 6px;
+  border-radius: 7px;
+  color: var(--ink);
+  font-size: var(--type-cell);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sm-option > .sm-check {
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent);
+  visibility: hidden;
+}
+
+.sm-option > .sm-check svg.icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.sm-option[aria-selected='true'] > .sm-check {
+  visibility: visible;
+}
+
+.sm-option > .sm-text {
+  min-width: 0;
+}
+
+.sm-option .sm-olabel {
+  font-weight: 500;
+}
+
+.sm-option[aria-selected='true'] .sm-olabel {
+  font-weight: 600;
+}
+
+.sm-option .sm-odetail {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.sm-option > .sm-ometa {
+  color: var(--muted);
+  font-size: var(--type-small);
+  white-space: nowrap;
+}
+
+.sm-option.active {
+  background: var(--sel);
+  box-shadow: inset 0 0 0 1px var(--sel-line);
+}
+
+/* the keyboard's active option also gets a --focus ring (the tint alone is under 3:1) */
+.sm-list.keys .sm-option.active {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.sm-option[aria-disabled='true'] {
+  color: var(--faint);
+  cursor: default;
+}
+
+@keyframes sm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes sm-drop {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* ---------------------------------------------------------------- motion */
+
+/* The indeterminate spinner: 0.9 s per turn (the only infinite animation, §2.7). */
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--seg-track);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: x-spin 0.9s linear infinite;
+}
+
+.spin {
+  animation: x-spin 0.9s linear infinite;
+}
+
+/* New rows fade in once; opacity only, so a fixed list inside never loses its place. */
+.enter {
+  animation: x-fade var(--dur-3) var(--ease-out) both;
+}
+
+@keyframes x-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes x-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------- forced colours: every edge drawn */
+
+@media (forced-colors: active) {
+  .card,
+  .btn,
+  .chip,
+  .pill,
+  .tag,
+  .note,
+  .input,
+  .sm-trigger,
+  .sm-list {
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .btn {
+    border-color: ButtonText;
+  }
+
+  .btn.ghost,
+  .btn.link {
+    border-color: transparent;
+  }
+
+  .btn.primary {
+    forced-color-adjust: none;
+    background: ButtonText;
+    border-color: ButtonText;
+    color: ButtonFace;
+  }
+
+  .btn.primary:disabled {
+    forced-color-adjust: auto;
+    background: ButtonFace;
+    border-color: GrayText;
+    color: GrayText;
+    opacity: 1;
+  }
+
+  .input[aria-invalid='true'],
+  .sm-trigger[aria-invalid='true'] {
+    border: 3px double FieldText;
+  }
+
+  .sm-option.active {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+    box-shadow: none;
+  }
+
+  input[type='checkbox'][role='switch'] {
+    forced-color-adjust: none;
+    background: Canvas;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  input[type='checkbox'][role='switch']::before {
+    top: 1px;
+    left: 1px;
+    background: CanvasText;
+    box-shadow: none;
+  }
+
+  input[type='checkbox'][role='switch']:checked {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  input[type='checkbox'][role='switch']:checked::before {
+    background: HighlightText;
+  }
+
+  input[type='checkbox'][role='switch']:disabled {
+    border-color: GrayText;
+    opacity: 1;
+  }
+
+  input[type='checkbox'][role='switch']:disabled::before {
+    background: GrayText;
+  }
+
+  :focus-visible,
+  .input:focus,
+  .sm-trigger:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+}

@@ -1,0 +1,684 @@
+// Downex daemon API (M2). Served by downexd over a per-user local endpoint
+// (Windows named pipe / Linux unix socket) using Connect over HTTP/2 cleartext.
+// Clients: the downex CLI, the desktop UI and the native-messaging relay.
+syntax = "proto3";
+
+package downex.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "downex/internal/rpc/downex/v1;downexv1";
+
+enum DownloadState {
+  DOWNLOAD_STATE_UNSPECIFIED = 0;
+  DOWNLOAD_STATE_QUEUED = 1;
+  DOWNLOAD_STATE_PROBING = 2;
+  DOWNLOAD_STATE_DOWNLOADING = 3;
+  DOWNLOAD_STATE_PAUSED = 4;
+  DOWNLOAD_STATE_COMPLETED = 5;
+  DOWNLOAD_STATE_FAILED = 6;
+  DOWNLOAD_STATE_CANCELED = 7;
+  // Added from the browser and waiting for the user to confirm folder/name (M4.5).
+  DOWNLOAD_STATE_AWAITING_CONFIRMATION = 8;
+}
+
+// What a download is: one file, or a streaming-media job (HLS/DASH fragments + remux) (M5).
+enum DownloadKind {
+  DOWNLOAD_KIND_UNSPECIFIED = 0; // treated as FILE
+  DOWNLOAD_KIND_FILE = 1;
+  DOWNLOAD_KIND_MEDIA = 2;
+}
+
+// Where a media download's presentation comes from (docs/SITE-MEDIA-SPEC.md).
+enum MediaOrigin {
+  MEDIA_ORIGIN_UNSPECIFIED = 0; // = MANIFEST: every client written before site media
+  MEDIA_ORIGIN_MANIFEST = 1; // an HLS/DASH manifest URL (MEDIA-SPEC)
+  MEDIA_ORIGIN_SITE = 2; // a web page resolved with yt-dlp
+}
+
+// One selectable track of a streaming presentation (docs/MEDIA-SPEC.md §1 Track).
+message MediaTrack {
+  string id = 1;
+  string kind = 2; // "video" | "audio" | "muxed" | "subtitles"
+  int64 bandwidth = 3; // bits/s
+  int32 width = 4;
+  int32 height = 5;
+  double frame_rate = 6;
+  string codecs = 7;
+  string language = 8;
+  string name = 9;
+  // Site media (docs/SITE-MEDIA-SPEC.md §3.1)
+  int64 size = 10; // bytes as the site declares them; 0 = unknown
+  bool size_approx = 11; // size is the site's estimate
+  string ext = 12; // the site's file type for this track: "mp4" | "m4a" ("" = unknown)
+}
+
+message MediaInfo {
+  string manifest_url = 1; // SITE: ""
+  string format = 2; // "hls" | "dash"; SITE: "http" | "hls" | "dash"
+  repeated MediaTrack tracks = 3;
+  string selected_video = 4; // track id ("" = none)
+  string selected_audio = 5; // track id ("" = none / muxed)
+  int64 duration_ms = 6;
+  int32 fragments_total = 7;
+  int32 fragments_done = 8;
+  string container = 9; // output container: "mp4" for every new download; "ts" only on legacy records; "" = unknown yet
+  string title = 10; // page/media title hint
+  MediaOrigin origin = 11;
+  string site = 12; // SITE: the site's display name, e.g. "YouTube"
+  string page_url = 13; // the page (SITE: the address resolved; MANIFEST: the page hint)
+}
+
+// Who asked for a download; the daemon applies the confirmation policy to browser hand-offs.
+enum AddSource {
+  ADD_SOURCE_UNSPECIFIED = 0;
+  ADD_SOURCE_CLI = 1;
+  ADD_SOURCE_UI = 2;
+  ADD_SOURCE_BROWSER = 3;
+  ADD_SOURCE_CLIPBOARD = 4; // M6: URL seen on the clipboard (confirmation applies like browser hand-offs)
+}
+
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_RANGED = 1;
+  MODE_SINGLE = 2;
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+// Segment is a live view of one byte range (inclusive end; -1 = open-ended).
+message Segment {
+  int64 start = 1;
+  int64 end = 2;
+  int64 received = 3;
+}
+
+message Download {
+  int64 id = 1;
+  string url = 2;
+  string final_url = 3;
+  string dir = 4;
+  string filename = 5;
+  int64 size = 6; // -1 when unknown; an estimate when size_approx
+  int64 received = 7;
+  DownloadState state = 8;
+  Mode mode = 9;
+  int32 max_connections = 10; // 0 = daemon default
+  int64 speed_limit = 11; // bytes/s, 0 = unlimited
+  string error = 12; // human-readable, empty unless failed; on a completed download a post-processing note (antivirus scan, M6)
+  string error_code = 13; // stable machine code: "validator_changed", "disk_full", "tls", "http_status", "network", ...
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+  google.protobuf.Timestamp completed_at = 16;
+  // Live fields (only meaningful while downloading).
+  double speed_bps = 17;
+  int32 connections = 18;
+  repeated Segment segments = 19;
+  int32 queue_position = 20; // 1-based position among queued downloads, 0 otherwise
+  AddSource source = 21;
+  int64 expected_size = 22; // size hint from the requester (browser), -1/0 when unknown; size wins once probed
+  string mime = 23; // MIME hint from the requester
+  string category = 24; // category name chosen for this download ("" = none)
+  DownloadKind kind = 25;
+  MediaInfo media = 26; // set for DOWNLOAD_KIND_MEDIA
+  repeated ConnectionInfo connection_info = 27; // live, per worker connection (progress window)
+  bool completion_dialog = 28; // the user opened this download's progress window: show the completion dialog (§8)
+  int64 active_ms = 29; // total time spent running (excluding pauses), for "Time taken"
+  google.protobuf.Timestamp started_at = 30; // first time the download started running
+  int64 queue_id = 31; // M6: queue the download belongs to (1 = main queue)
+  // size is an estimate: a stream that is not completed (its fragments' bytes so far over
+  // the rest, else the probe's size or bit rate × duration of the chosen tracks); a
+  // completed download's size is always its file's.
+  bool size_approx = 32;
+}
+
+// What one worker connection is doing right now (docs/DESKTOP-SPEC.md §7).
+enum ConnectionState {
+  CONNECTION_STATE_UNSPECIFIED = 0;
+  CONNECTION_STATE_CONNECTING = 1; // dialling / TLS handshake / proxy
+  CONNECTION_STATE_REQUESTING = 2; // request sent, waiting for the response head
+  CONNECTION_STATE_RECEIVING = 3; // body bytes flowing
+  CONNECTION_STATE_RETRYING = 4; // waiting before a retry (detail says why / when)
+  CONNECTION_STATE_IDLE = 5; // slot open but without work
+  CONNECTION_STATE_DONE = 6; // finished its range
+  CONNECTION_STATE_ERROR = 7; // failed permanently (detail has the reason)
+}
+
+message ConnectionInfo {
+  int32 index = 1; // 1-based slot number, stable while the download runs
+  ConnectionState state = 2;
+  int64 start = 3; // current range (inclusive); -1 when none
+  int64 end = 4;
+  int64 received = 5; // bytes received in the current range
+  double speed_bps = 6;
+  string detail = 7; // short human text, e.g. "HTTP 503, retrying in 4 s" (no URLs, no secrets)
+  int32 fragment = 8; // media downloads: current fragment index, -1 otherwise
+}
+
+message AddRequest {
+  string url = 1;
+  string method = 2; // empty = GET
+  repeated Header headers = 3; // e.g. Cookie, Referer, User-Agent from the browser
+  bytes body = 4; // optional POST body (bounded by the daemon)
+  string dir = 5; // empty = settings.default_dir; must be absolute
+  string filename = 6; // optional; sanitised by the daemon
+  int32 max_connections = 7;
+  int64 speed_limit = 8;
+  bool start_paused = 9; // add without starting
+  AddSource source = 10; // ADD_SOURCE_BROWSER may require confirmation (Settings.confirm_browser_downloads)
+  int64 expected_size = 11; // optional size hint (bytes) shown in the confirmation dialog
+  string mime = 12; // optional MIME hint used for category selection
+  int64 queue_id = 13; // M6: 0 = the main queue
+}
+
+// Confirm completes a download in DOWNLOAD_STATE_AWAITING_CONFIRMATION.
+// To cancel instead, call Remove.
+message ConfirmRequest {
+  int64 id = 1;
+  string dir = 2; // empty = keep the folder the daemon proposed
+  string filename = 3; // empty = keep the proposed name; sanitised by the daemon
+  bool start = 4; // true = queue now, false = keep it paused ("download later")
+  optional int32 max_connections = 5;
+  optional int64 speed_limit = 6;
+  string video_track = 7; // media downloads: chosen track ids ("" = keep the daemon's default pick)
+  string audio_track = 8;
+  int64 queue_id = 9; // M6: 0 = keep the current queue
+}
+
+// AddMedia adds a streaming-media download for an HLS (.m3u8) or DASH (.mpd) manifest.
+// The daemon fetches and parses the manifest first (encrypted → InvalidArgument "encrypted",
+// live → InvalidArgument "live"); browser hand-offs then await confirmation like files.
+message AddMediaRequest {
+  string manifest_url = 1;
+  repeated Header headers = 2; // Cookie/Referer/User-Agent the page used
+  string dir = 3;
+  string filename = 4; // without extension is fine; the daemon appends .mp4
+  AddSource source = 5;
+  string video_track = 6; // "" = default best pick
+  string audio_track = 7;
+  string page_url = 8;
+  string title = 9;
+  bool start_paused = 10;
+  int64 queue_id = 11; // M6: 0 = the main queue
+  MediaOrigin origin = 12; // SITE: page_url is the address and manifest_url must be empty
+}
+
+message AddMediaResponse {
+  Download download = 1;
+}
+
+// ProbeMedia fetches and parses a manifest and lists its tracks without adding anything.
+// With origin SITE it resolves page_url with yt-dlp instead and lists every MP4 quality.
+message ProbeMediaRequest {
+  string manifest_url = 1;
+  repeated Header headers = 2;
+  string page_url = 3; // SITE: the page to resolve
+  MediaOrigin origin = 4;
+  // SITE: a look-ahead while the user watches (SITE-MEDIA-SPEC §5.6). It never installs tools
+  // (tools_unavailable while they are not ready), never waits behind or delays a user's probe,
+  // and fills the same extraction cache a later probe, Add and run use.
+  bool prefetch = 5;
+}
+
+message ProbeMediaResponse {
+  MediaInfo media = 1;
+}
+
+message ConfirmResponse {
+  Download download = 1;
+}
+
+message PauseAllRequest {}
+
+message PauseAllResponse {
+  int32 paused = 1;
+}
+
+message ResumeAllRequest {}
+
+message ResumeAllResponse {
+  int32 resumed = 1;
+}
+
+message AddResponse {
+  Download download = 1;
+}
+
+message ListRequest {}
+
+message ListResponse {
+  repeated Download downloads = 1;
+}
+
+message GetRequest {
+  int64 id = 1;
+}
+
+message GetResponse {
+  Download download = 1;
+}
+
+message PauseRequest {
+  int64 id = 1;
+}
+
+message PauseResponse {
+  Download download = 1;
+}
+
+// What a restart does with the file of a completed download (docs/ENGINE-SPEC.md §7.1).
+// It is ignored for a download that is not completed: that one keeps the choice it was
+// restarted with (a completed download restarted with REPLACE that then failed or was
+// paused still replaces its file once it completes).
+enum ExistingFile {
+  EXISTING_FILE_UNSPECIFIED = 0; // = KEEP_BOTH
+  // The file stays; the new copy is saved under a free name ("name (1).ext"), or under the
+  // same name when the file is no longer there.
+  EXISTING_FILE_KEEP_BOTH = 1;
+  // The new copy replaces the file once it is complete; until then (and after a failure)
+  // the file stays as it is. Only a regular file is ever replaced, never a folder or a
+  // link: the new copy then gets a free name instead.
+  EXISTING_FILE_REPLACE = 2;
+}
+
+message ResumeRequest {
+  int64 id = 1;
+  // Discard saved data and download again from the start (after the remote file changed);
+  // a completed download is downloaded again (existing_file says what happens to its file).
+  bool restart = 2;
+  optional int32 max_connections = 3;
+  optional int64 speed_limit = 4;
+  ExistingFile existing_file = 5; // only together with restart (else InvalidArgument)
+}
+
+message ResumeResponse {
+  Download download = 1;
+}
+
+message RemoveRequest {
+  int64 id = 1;
+  bool delete_file = 2; // also delete the completed file or the .dxpart
+}
+
+message RemoveResponse {}
+
+message WatchRequest {
+  repeated int64 ids = 1; // empty = all downloads
+}
+
+message Event {
+  oneof kind {
+    Download snapshot = 1; // initial state of each watched download
+    Download updated = 2; // state or progress changed
+    int64 removed = 3; // download id that was removed
+    Queue queue_updated = 4; // M6: a queue changed (settings, order, running state)
+    int64 queue_removed = 5; // M6
+    PostActionPending post_action = 6; // M6: a post-queue action is counting down (deadline) or was cancelled (cancelled=true)
+    ToolsStatus tools = 7; // site media: Watch without ids, in the first batch, then on each change (≤ 4 batches/s)
+    // The result of the latest automatic update check (docs/M6-SPEC.md §4): Watch without ids, in
+    // the first batch once a check has run, then after each automatic check (at most one a day,
+    // and one after downexd starts). The window offers an available one in a pop-up.
+    UpdateInfo update = 8;
+  }
+}
+
+// WatchResponse batches events; the daemon sends at most 4 batches per second.
+message WatchResponse {
+  repeated Event events = 1;
+}
+
+service DownloadService {
+  rpc Add(AddRequest) returns (AddResponse);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Pause(PauseRequest) returns (PauseResponse);
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+  rpc Remove(RemoveRequest) returns (RemoveResponse);
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
+  rpc Confirm(ConfirmRequest) returns (ConfirmResponse);
+  rpc PauseAll(PauseAllRequest) returns (PauseAllResponse);
+  rpc ResumeAll(ResumeAllRequest) returns (ResumeAllResponse);
+  rpc AddMedia(AddMediaRequest) returns (AddMediaResponse);
+  rpc ProbeMedia(ProbeMediaRequest) returns (ProbeMediaResponse);
+  // SetDownloadOptions changes a download's limits; a running download applies the speed limit
+  // at once and the connection limit as soon as the engine can (§7).
+  rpc SetDownloadOptions(SetDownloadOptionsRequest) returns (SetDownloadOptionsResponse);
+}
+
+message SetDownloadOptionsRequest {
+  int64 id = 1;
+  optional int64 speed_limit = 2; // bytes/s, 0 = unlimited
+  optional int32 max_connections = 3; // 1–32, 0 = default
+  optional bool completion_dialog = 4; // the UI sets true when it opens the progress window (§8)
+}
+
+message SetDownloadOptionsResponse {
+  Download download = 1;
+}
+
+// Category maps file extensions to a save folder.
+message Category {
+  string name = 1; // unique, e.g. "Video"
+  repeated string extensions = 2; // lower-case, without dots, e.g. ["mp4", "mkv"]
+  string dir = 3; // absolute; empty = <default_dir>/<name>
+}
+
+// Settings is replaced as a whole by UpdateSettings: clients must read, modify and write back
+// every field (including ones they do not display) so newer fields are not lost.
+message Settings {
+  int32 max_concurrent_downloads = 1; // default 3
+  int64 global_speed_limit = 2; // bytes/s, 0 = unlimited
+  string default_dir = 3; // absolute; default = the user's Downloads folder
+  int32 default_max_connections = 4; // default 32, max 32
+  // M4.5
+  repeated Category categories = 5; // default: Video, Audio, Archives, Documents, Programs
+  bool use_category_folders = 6; // default true: save into the category's folder when no dir is given
+  bool confirm_browser_downloads = 7; // default true: browser hand-offs wait for the user
+  bool notify_on_complete = 8; // default true
+  bool notify_on_failure = 9; // default true
+  bool launch_at_login = 10; // default false: start downexd (with tray) when the user signs in
+  bool show_tray_icon = 11; // default true
+  bool show_progress_window = 12; // default true: open a progress window when a download starts interactively
+  bool show_complete_dialog = 13; // default true: the progress window turns into a completion view
+  // M6 network (docs/M6-SPEC.md §2)
+  ProxySettings proxy = 14;
+  repeated HostRule host_rules = 15;
+  repeated SiteLogin site_logins = 16; // passwords are never here: see DaemonService.SetSecret
+  // M6 desktop (§3)
+  bool clipboard_monitor = 17; // default false
+  bool mark_downloaded_files = 18; // default true: Mark-of-the-Web / quarantine / origin xattrs
+  bool av_scan_enabled = 19; // default false
+  string av_scan_command = 20; // absolute path of the scanner executable
+  string av_scan_args = 21; // arguments; [File] is replaced by the downloaded file path (default "[File]")
+  // M6 updates (§4)
+  string update_feed_url = 22; // https URL of the signed update manifest; empty = the build's own feed (none: updates off)
+  bool auto_check_updates = 23; // default true (only when update_feed_url is set)
+  // Site media (docs/SITE-MEDIA-SPEC.md §3.8)
+  bool site_media = 24; // default true: resolve video pages with yt-dlp (downloaded on first use)
+  bool tools_auto_update = 25; // default true: daily check; updates only Downex's own yt-dlp and Deno
+  string tools_channel = 26; // "stable" | "nightly"; "" reads as the default "nightly"
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  string version = 1;
+  int32 pid = 2;
+  google.protobuf.Timestamp started_at = 3;
+  int32 active = 4;
+  int32 queued = 5;
+  string endpoint = 6;
+  // Folders of this daemon (absolute; "" = not known): the database and settings, the
+  // log file, and the yt-dlp and Deno copies ("" also when it has no tools folder).
+  string data_dir = 7;
+  string log_dir = 8;
+  string tools_dir = 9;
+  // This build can verify and install updates (an update signing key is built in).
+  bool updates_supported = 10;
+}
+
+message GetSettingsRequest {}
+
+message GetSettingsResponse {
+  Settings settings = 1;
+}
+
+message UpdateSettingsRequest {
+  Settings settings = 1; // full replacement; validated by the daemon
+}
+
+message UpdateSettingsResponse {
+  Settings settings = 1;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}
+
+service DaemonService {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
+  rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);
+  // Shutdown pauses every running download (progress committed) and exits.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  // M6
+  rpc SetSecret(SetSecretRequest) returns (SetSecretResponse);
+  rpc ClearSecret(ClearSecretRequest) returns (ClearSecretResponse);
+  rpc CheckForUpdate(CheckForUpdateRequest) returns (CheckForUpdateResponse);
+  rpc InstallUpdate(InstallUpdateRequest) returns (InstallUpdateResponse);
+  rpc CancelPostAction(CancelPostActionRequest) returns (CancelPostActionResponse);
+  // Site media (docs/SITE-MEDIA-SPEC.md §3.3)
+  rpc GetTools(GetToolsRequest) returns (GetToolsResponse);
+  rpc InstallTools(InstallToolsRequest) returns (InstallToolsResponse);
+}
+
+// ===================== M6 (docs/M6-SPEC.md) =====================
+
+// What happens when a queue finishes all its downloads (after a cancellable countdown).
+enum PostAction {
+  POST_ACTION_UNSPECIFIED = 0; // nothing
+  POST_ACTION_QUIT_DOWNEX = 1; // stop downexd (and its windows)
+  POST_ACTION_SLEEP = 2;
+  POST_ACTION_HIBERNATE = 3;
+  POST_ACTION_SHUTDOWN = 4;
+}
+
+// Schedule for a queue, in local time.
+message Schedule {
+  bool enabled = 1;
+  int32 start_minute = 2; // minutes after local midnight, 0..1439
+  bool stop_enabled = 3;
+  int32 stop_minute = 4; // 0..1439; may be earlier than start (window crosses midnight)
+  int32 weekdays = 5; // bit0 = Monday ... bit6 = Sunday; 0 = once on once_date
+  string once_date = 6; // "YYYY-MM-DD" (local), used when weekdays == 0
+  bool wake_computer = 7; // Windows: wake from sleep for the start (waitable timer)
+  int32 repeat_minutes = 8; // 0 = off; re-check/restart unfinished downloads every N minutes while inside the window
+}
+
+message Queue {
+  int64 id = 1; // 1 = main queue
+  string name = 2; // unique, ≤ 64 chars
+  bool running = 3; // processing downloads now
+  int32 max_concurrent = 4; // 0 = Settings.max_concurrent_downloads; 1..16
+  int64 speed_limit = 5; // bytes/s, 0 = unlimited (a child of the global limit)
+  Schedule schedule = 6;
+  PostAction post_action = 7;
+  bool is_main = 8; // the main queue cannot be deleted
+  repeated int64 download_ids = 9; // ordered; read-only in UpdateQueue (use MoveDownloads)
+}
+
+message PostActionPending {
+  int64 queue_id = 1;
+  PostAction action = 2;
+  google.protobuf.Timestamp deadline = 3; // when the action runs
+  bool cancelled = 4; // the countdown was cancelled (or the action was aborted)
+}
+
+message ListQueuesRequest {}
+
+message ListQueuesResponse {
+  repeated Queue queues = 1;
+}
+
+message CreateQueueRequest {
+  Queue queue = 1; // id/running/is_main/download_ids ignored
+}
+
+message CreateQueueResponse {
+  Queue queue = 1;
+}
+
+message UpdateQueueRequest {
+  Queue queue = 1; // full replacement of name/max_concurrent/speed_limit/schedule/post_action
+}
+
+message UpdateQueueResponse {
+  Queue queue = 1;
+}
+
+message DeleteQueueRequest {
+  int64 id = 1; // its downloads move to the end of the main queue
+}
+
+message DeleteQueueResponse {}
+
+message StartQueueRequest {
+  int64 id = 1;
+}
+
+message StartQueueResponse {
+  Queue queue = 1;
+}
+
+message StopQueueRequest {
+  int64 id = 1; // pauses the queue's running downloads (progress committed)
+}
+
+message StopQueueResponse {
+  Queue queue = 1;
+}
+
+message MoveDownloadsRequest {
+  repeated int64 ids = 1;
+  int64 queue_id = 2;
+  int32 position = 3; // 0-based insertion index in the target queue; -1 = end
+}
+
+message MoveDownloadsResponse {
+  Queue queue = 1;
+}
+
+service QueueService {
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+  rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse);
+  rpc UpdateQueue(UpdateQueueRequest) returns (UpdateQueueResponse);
+  rpc DeleteQueue(DeleteQueueRequest) returns (DeleteQueueResponse);
+  rpc StartQueue(StartQueueRequest) returns (StartQueueResponse);
+  rpc StopQueue(StopQueueRequest) returns (StopQueueResponse);
+  rpc MoveDownloads(MoveDownloadsRequest) returns (MoveDownloadsResponse);
+}
+
+enum ProxyMode {
+  PROXY_MODE_UNSPECIFIED = 0; // = SYSTEM
+  PROXY_MODE_SYSTEM = 1; // Windows WinHTTP/IE settings incl. PAC/WPAD; macOS SystemConfiguration; Linux env/gsettings
+  PROXY_MODE_NONE = 2;
+  PROXY_MODE_MANUAL = 3;
+  PROXY_MODE_PAC = 4; // pac_url (http/https/file) evaluated by Downex
+}
+
+message ProxySettings {
+  ProxyMode mode = 1;
+  string http_proxy = 2; // "host:port" for http:// downloads
+  string https_proxy = 3; // "host:port" for https:// downloads (CONNECT)
+  string socks_proxy = 4; // "socks5://host:port", "socks4://host:port" or "socks4a://host:port"; overrides http/https when set
+  string bypass = 5; // ';'-separated host patterns, "<local>" = names without dots
+  string pac_url = 6;
+  string username = 7; // proxy auth user (password via SetSecret kind "proxy")
+  bool has_password = 8; // read-only
+}
+
+message HostRule {
+  string pattern = 1; // "example.com", "*.example.com"
+  int32 max_connections = 2; // 0 = default, 1..32
+  int64 speed_limit = 3; // bytes/s per download from this host, 0 = unlimited
+  int64 max_request_bytes = 4; // site media: 0 = no cap; else 1 MiB..1 GiB per ranged request to the host
+}
+
+message SiteLogin {
+  string id = 1; // stable id assigned by the daemon
+  string url_pattern = 2; // "https://example.com/*", "*.example.com"
+  string username = 3;
+  bool has_password = 4; // read-only; password via SetSecret kind "site_login"
+}
+
+message SetSecretRequest {
+  string kind = 1; // "proxy" | "site_login"
+  string id = 2; // site login id ("" for proxy)
+  string password = 3; // stored in the OS credential store; never returned or logged
+}
+
+message SetSecretResponse {}
+
+message ClearSecretRequest {
+  string kind = 1;
+  string id = 2;
+}
+
+message ClearSecretResponse {}
+
+message UpdateInfo {
+  string current_version = 1;
+  string latest_version = 2;
+  bool available = 3;
+  string notes = 4;
+  google.protobuf.Timestamp published_at = 5;
+  google.protobuf.Timestamp checked_at = 6;
+}
+
+message CheckForUpdateRequest {}
+
+message CheckForUpdateResponse {
+  UpdateInfo info = 1;
+}
+
+message InstallUpdateRequest {}
+
+message InstallUpdateResponse {
+  UpdateInfo info = 1; // the installer was started; the daemon exits for it
+}
+
+message CancelPostActionRequest {
+  int64 queue_id = 1;
+}
+
+message CancelPostActionResponse {}
+
+// ===================== Site media (docs/SITE-MEDIA-SPEC.md) =====================
+
+// State of one external tool (yt-dlp or Deno) that site media runs.
+enum ToolState {
+  TOOL_STATE_UNSPECIFIED = 0;
+  TOOL_STATE_MISSING = 1;
+  TOOL_STATE_INSTALLING = 2; // also while updating; a ready copy keeps working meanwhile
+  TOOL_STATE_READY = 3;
+  TOOL_STATE_FAILED = 4;
+  TOOL_STATE_DISABLED = 5; // site_media off, or no build for this platform (deno on musl, 32-bit, armv7)
+}
+
+message ToolInfo {
+  string name = 1; // "yt-dlp" | "deno"
+  ToolState state = 2;
+  string version = 3; // of the copy in use ("" = none)
+  string path = 4; // absolute path of the copy in use
+  bool managed = 5; // true: Downex's tools folder; false: found on PATH
+  string latest_version = 6; // last seen release ("" = not checked)
+  google.protobuf.Timestamp checked_at = 7;
+  int64 bytes_done = 8; // while INSTALLING
+  int64 bytes_total = 9; // while INSTALLING; -1 = unknown
+  string error = 10; // short text of the last failure, no URLs (≤ 200 bytes)
+  string error_code = 11; // network | tls | http_status | checksum | signature | authenticode | disk_full | unsupported_platform | smoke_test | internal
+  string verified = 12; // what Downex checked: "openpgp+sha256" | "sha256+authenticode" | "sha256" | "" (PATH copy)
+}
+
+message ToolsStatus {
+  repeated ToolInfo tools = 1;
+  bool enabled = 2; // Settings.site_media
+  bool ready = 3; // yt-dlp READY and Deno READY or DISABLED for the platform
+}
+
+message GetToolsRequest {}
+
+message GetToolsResponse {
+  ToolsStatus status = 1;
+}
+
+message InstallToolsRequest {
+  bool update = 1; // start or join the install; true also looks for newer releases
+}
+
+message InstallToolsResponse {
+  ToolsStatus status = 1; // when done, or at the caller's deadline (the install goes on)
+}

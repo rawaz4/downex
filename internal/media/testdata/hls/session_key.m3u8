@@ -1,0 +1,4 @@
+#EXTM3U
+#EXT-X-SESSION-KEY:METHOD=SAMPLE-AES-CTR,URI="keys/session.key",KEYFORMAT="com.example.streamingkey"
+#EXT-X-STREAM-INF:BANDWIDTH=1000000
+v.m3u8

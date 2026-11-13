@@ -1,0 +1,1 @@
+ERROR: [example] 9: Bad â€®nameÿ here

@@ -1,0 +1,12 @@
+{
+  "id": "artist/track",
+  "title": "Audio only",
+  "duration": 180,
+  "extractor_key": "Soundcloud",
+  "formats": [
+    {"format_id": "http_mp3_128", "ext": "mp3", "protocol": "https", "url": "https://cf-media.sndcdn.com/abc.128.mp3", "vcodec": "none", "acodec": "mp3", "abr": 128, "asr": 44100},
+    {"format_id": "http_aac_160", "ext": "m4a", "protocol": "https", "container": "m4a_dash", "url": "https://cf-media.sndcdn.com/abc.160.m4a", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 160},
+    {"format_id": "hls_opus_64", "ext": "opus", "protocol": "m3u8_native", "url": "https://cf-hls-opus-media.sndcdn.com/playlist/abc.64.opus/playlist.m3u8", "vcodec": "none", "acodec": "opus", "abr": 64},
+    {"format_id": "hls_aac_96", "ext": "m4a", "protocol": "m3u8_native", "url": "https://cf-hls-media.sndcdn.com/playlist/abc.96.m4a/playlist.m3u8", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 96}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "123456789",
+  "title": "Muxed only",
+  "duration": 95.5,
+  "extractor_key": "Vimeo",
+  "webpage_url": "https://vimeo.com/123456789",
+  "formats": [
+    {"format_id": "http-360p", "ext": "mp4", "protocol": "https", "url": "https://vod-progressive.akamaized.net/exp=1792648800~hmac=abc/vimeo-prod/360.mp4", "width": 640, "height": 360, "fps": 25, "vcodec": "avc1.64001E", "acodec": "mp4a.40.2", "tbr": 600, "filesize": 5000000, "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36", "Referer": "https://vimeo.com/123456789"}},
+    {"format_id": "http-720p", "ext": "mp4", "protocol": "https", "url": "https://vod-progressive.akamaized.net/exp=1792648800~hmac=abc/vimeo-prod/720.mp4", "width": 1280, "height": 720, "fps": 25, "vcodec": "avc1.64001F", "acodec": "mp4a.40.2", "tbr": 2000, "filesize": 15000000, "no_resume": true, "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"}},
+    {"format_id": "http-1080p", "ext": "mp4", "protocol": "https", "url": "https://vod-progressive.akamaized.net/exp=1792648800~hmac=abc/vimeo-prod/1080.mp4", "width": 1920, "height": 1080, "fps": 25, "tbr": 4000, "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"}},
+    {"format_id": "dash-480p", "ext": "mp4", "protocol": "https", "container": "mp4_dash", "url": "https://vod-progressive.akamaized.net/exp=1792648800~hmac=abc/vimeo-prod/480-frag.mp4", "width": 854, "height": 480, "fps": 25, "vcodec": "avc1.64001E", "acodec": "mp4a.40.2", "tbr": 1000},
+    {"format_id": "http-540p-webm", "ext": "webm", "protocol": "https", "url": "https://vod-progressive.akamaized.net/exp=1792648800~hmac=abc/vimeo-prod/540.webm", "width": 960, "height": 540, "fps": 25, "vcodec": "vp9", "acodec": "opus", "tbr": 1500},
+    {"format_id": "http-720p-vp9", "ext": "mp4", "protocol": "https", "url": "https://vod-progressive.akamaized.net/exp=1792648800~hmac=abc/vimeo-prod/720-vp9.mp4", "width": 1280, "height": 720, "fps": 25, "vcodec": "vp09.00.31.08", "acodec": "mp4a.40.2", "tbr": 1800},
+    {"format_id": "hls-720p", "ext": "mp4", "protocol": "m3u8_native", "url": "https://vod.example.net/720/index.m3u8", "manifest_url": "https://vod.example.net/master.m3u8", "width": 1280, "height": 720, "vcodec": "avc1.64001F", "acodec": "mp4a.40.2"}
+  ]
+}

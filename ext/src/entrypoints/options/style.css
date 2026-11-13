@@ -1,0 +1,404 @@
+@import '../../assets/ui.css';
+
+/* Options page ("Studio", DESIGN-SYSTEM.md §4.12): a section rail and two forms on cards over the
+   chrome ground; the forms save differently (the capture rules with Save, the video options at
+   once). It opens in a tab. */
+body {
+  min-height: 100vh;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 680px);
+  justify-content: center;
+  align-items: start;
+  gap: var(--sp-9);
+  padding: var(--sp-10) var(--sp-9);
+}
+
+/* ---------- rail ---------- */
+.rail {
+  position: sticky;
+  top: var(--sp-10);
+  display: grid;
+  gap: var(--sp-7);
+  padding: var(--sp-7) var(--sp-6);
+}
+
+.rail .who {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: 0 var(--sp-2);
+}
+
+.rail .who h1 {
+  font: 650 var(--type-section) / 1.2 var(--font-display);
+}
+
+.rail .who p {
+  font-size: var(--type-meta);
+  color: var(--faint);
+}
+
+.rail nav {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.rail nav a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 32px;
+  padding: 0 var(--sp-5);
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color var(--dur-2) ease;
+}
+
+.rail nav a svg.icon {
+  color: var(--muted);
+}
+
+.rail nav a:hover {
+  background: var(--hover);
+}
+
+/* the section in view (main.ts sets aria-current): Mint selection with its bar and icon */
+.rail nav a[aria-current='true'] {
+  background: var(--sel);
+  box-shadow: inset 0 0 0 1px var(--sel-line);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.rail nav a[aria-current='true']::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.rail nav a[aria-current='true'] svg.icon {
+  color: var(--accent-text);
+}
+
+.rail .foot {
+  padding: var(--sp-6) var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+  color: var(--faint);
+}
+
+main {
+  display: grid;
+  gap: var(--sp-8);
+}
+
+/* the rail's links land below the top edge */
+form {
+  scroll-margin-top: var(--sp-9);
+}
+
+form.card {
+  padding: 0;
+  overflow: clip;
+}
+
+/* ---------- section head: tile, title, the save model, intro ---------- */
+.sec-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: var(--sp-6);
+  row-gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-8) var(--sp-8) var(--sp-7);
+}
+
+.sec-head .tile {
+  grid-row: 1 / 3;
+  align-self: start;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-lg);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.sec-head .tile svg.icon {
+  width: 20px;
+  height: 20px;
+}
+
+.sec-head h2 {
+  font: 650 var(--type-dialog) / 1.25 var(--font-display);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.sec-head .intro {
+  grid-column: 2 / 4;
+  font-size: var(--type-body);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* how the section saves: a neutral note, not a result */
+.sec-head .pill {
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--line);
+  font-size: var(--type-small);
+}
+
+.sec-head .pill svg.icon {
+  width: 13px;
+  height: 13px;
+}
+
+code {
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  background: var(--chrome);
+}
+
+/* ---------- fields ---------- */
+.field {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-7) var(--sp-8);
+  border-top: 1px solid var(--line-soft);
+}
+
+.field > label:not(.switch-row),
+.label-row > label {
+  font-size: var(--type-cell);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-6);
+}
+
+.label-row .aside {
+  font-size: var(--type-small);
+  color: var(--faint);
+}
+
+.field .hint {
+  line-height: 1.5;
+}
+
+/* a switch field: the row is the label; the hint under its name */
+.field:has(> .switch-row) {
+  padding-block: var(--sp-5);
+}
+
+.field > .switch-row .sw-label {
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+
+/* every extension in view: the box grows with its text (rows="8" where field-sizing is missing) */
+#extensions {
+  /* file extensions are words, not addresses: the UI font (monospace is for URLs and paths) */
+  font: 400 var(--type-body) / 1.6 var(--font-ui);
+  letter-spacing: 0;
+  word-spacing: 0.35em;
+  field-sizing: content;
+  min-height: calc(6lh + 18px);
+  max-height: calc(16lh + 18px);
+}
+
+/* "Off: …" only while the switch is off (main.ts sets data-state from it). */
+#enabled-hint .off-note,
+#enabled-hint[data-state='off'] .on-note {
+  display: none;
+}
+
+#enabled-hint[data-state='off'] .off-note {
+  display: inline;
+  color: var(--warn);
+  font-weight: 500;
+}
+
+/* the number and its unit side by side */
+.joined {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.joined input {
+  width: 120px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.joined .sm-root {
+  display: inline-flex;
+}
+
+.joined .unit-trigger {
+  min-width: 96px;
+}
+
+/* ---------- action and status bars: at the bottom of the window while the form is in view ---------- */
+.actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-8);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* the video form's bar shows only a result: nothing to show, no bar */
+.status-bar:has(> #video-status:empty) {
+  padding-block: 0;
+  border-top-color: transparent;
+  background: transparent;
+}
+
+/* Results: plain text whose class main.ts sets (muted, tone-ok, tone-error); the mark is drawn
+   from the class: a check for ok, a diamond for an error. */
+#form-status,
+#video-status {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: var(--type-small);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+#form-status {
+  margin-left: auto;
+}
+
+#form-status.tone-ok::before,
+#video-status.tone-ok::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 9px;
+  margin: 0 2px 0 3px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+/* drawn with borders, so forced colours keep it too */
+#form-status.tone-error::before,
+#video-status.tone-error::before {
+  content: '';
+  flex: none;
+  width: 0;
+  height: 0;
+  margin: 0 3px;
+  border: 3.5px solid currentColor;
+  border-radius: 1px;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+/* ---------- narrow tabs: the rail becomes a header ---------- */
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: minmax(0, 680px);
+    gap: var(--sp-6);
+    padding: var(--sp-7) var(--sp-4);
+  }
+
+  .rail {
+    position: static;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+  }
+
+  .rail nav {
+    grid-auto-flow: column;
+    justify-content: end;
+  }
+
+  .rail .foot {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .rail {
+    grid-template-columns: 1fr;
+  }
+
+  .rail nav {
+    justify-content: start;
+  }
+
+  .sec-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: var(--sp-7);
+  }
+
+  .sec-head .pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .sec-head .intro {
+    grid-column: 1 / -1;
+  }
+
+  .field,
+  .actions {
+    padding-inline: var(--sp-7);
+  }
+}
+
+/* ---------- forced colours ---------- */
+@media (forced-colors: active) {
+  .sec-head .tile {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+
+  .actions {
+    background: Canvas;
+  }
+
+  .status-bar:has(> #video-status:empty) {
+    border-top-color: Canvas;
+  }
+
+  code {
+    background: Canvas;
+  }
+
+  .rail nav a[aria-current='true'] {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+
+  .rail nav a[aria-current='true']::before {
+    background: Highlight;
+  }
+}

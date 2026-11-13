@@ -1,0 +1,16 @@
+{
+  "id": "1790000000000000001",
+  "title": "HLS only",
+  "duration": 31.2,
+  "extractor_key": "Twitter",
+  "formats": [
+    {"format_id": "hls-audio-128000-Audio", "ext": "mp4", "protocol": "m3u8_native", "url": "https://video.example.org/a/128000/a.m3u8", "manifest_url": "https://video.example.org/ext_tw_video/1/pu/pl/master.m3u8?tag=12", "vcodec": "none", "acodec": "mp4a.40.2"},
+    {"format_id": "dash-1", "ext": "mp4", "protocol": "http_dash_segments", "url": "https://video.example.org/x/manifest.mpd", "manifest_url": "https://video.example.org/x/manifest.mpd", "vcodec": "avc1.4d401f", "acodec": "none", "height": 720},
+    {"format_id": "hls-256", "ext": "mp4", "protocol": "m3u8_native", "url": "https://video.example.org/v/256/v.m3u8", "manifest_url": "https://video.example.org/ext_tw_video/1/pu/pl/master.m3u8?tag=12", "width": 480, "height": 270, "vcodec": "avc1.4d401e", "acodec": "none", "tbr": 256, "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36", "Referer": "https://example.org/status/1", "Cookie": "auth=leak"}, "cookies": "guest_id=v1; Domain=.example.org; Path=/; Secure; ct0=zz; Domain=.other.example; Path=/"},
+    {"format_id": "hls-832", "ext": "mp4", "protocol": "m3u8_native", "url": "https://video.example.org/v/832/v.m3u8", "manifest_url": "https://video.example.org/ext_tw_video/1/pu/pl/master.m3u8?tag=12", "width": 640, "height": 360, "vcodec": "avc1.4d401f", "acodec": "none", "tbr": 832},
+    {"format_id": "hls-2176", "ext": "mp4", "protocol": "m3u8_native", "url": "https://video.example.org/v/2176/v.m3u8", "manifest_url": "https://video.example.org/ext_tw_video/1/pu/pl/master.m3u8?tag=12", "width": 1280, "height": 720, "vcodec": "avc1.640020", "acodec": "none", "tbr": 2176},
+    {"format_id": "hls-other", "ext": "mp4", "protocol": "m3u8_native", "url": "https://cdn.example.net/o.m3u8", "manifest_url": "https://cdn.example.net/master.m3u8", "vcodec": "avc1.4d401f", "acodec": "mp4a.40.2"},
+    {"format_id": "http-video-only", "ext": "mp4", "protocol": "https", "container": "mp4_dash", "url": "https://video.example.org/v.mp4", "vcodec": "avc1.640028", "acodec": "none", "height": 1080, "tbr": 4000},
+    {"format_id": "http-webm", "ext": "webm", "protocol": "https", "url": "https://video.example.org/v.webm", "vcodec": "vp9", "acodec": "opus", "height": 720}
+  ]
+}

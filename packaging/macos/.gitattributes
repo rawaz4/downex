@@ -1,0 +1,2 @@
+# Files that end up in the macOS bundle and disk image keep Unix line endings on every checkout.
+* text=auto eol=lf

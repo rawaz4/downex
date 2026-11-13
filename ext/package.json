@@ -1,0 +1,38 @@
+{
+  "name": "downex-extension",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "description": "Downex browser integration: hands downloads to downexd through the downex-nmhost native-messaging relay.",
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "build:store": "wxt build --mode store",
+    "build:store:edge": "wxt build -b edge --mode store",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "zip:store": "wxt zip --mode store",
+    "zip:store:edge": "wxt zip -b edge --mode store",
+    "zip:stores": "pnpm run zip:store && pnpm run zip:store:edge && pnpm run zip:firefox",
+    "test": "vitest run",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "check": "pnpm run typecheck",
+    "keygen": "node scripts/gen-key.mjs",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "happy-dom": "20.14.5",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.5",
+    "wxt": "0.21.4"
+  }
+}

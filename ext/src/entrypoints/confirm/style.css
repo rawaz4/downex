@@ -1,0 +1,122 @@
+@import '../../assets/ui.css';
+
+/* "Download all links with Downex" (DESIGN-SYSTEM.md §4.12): the question, where the links come
+   from, the list on a card and the actions, on the chrome ground of a small window. */
+main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  height: 100vh;
+  padding: var(--sp-7) var(--sp-8) var(--sp-7);
+}
+
+/* The window's name is a small label beside the mark; the question or the result is the headline. */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+#title {
+  font: 600 var(--type-small) / 1.2 var(--font-ui);
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+#summary {
+  font: 650 var(--type-page) / 1.3 var(--font-display);
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+#summary.tone-ok {
+  color: var(--accent-text);
+}
+
+#summary.tone-error {
+  color: var(--danger);
+}
+
+/* Without the list (loading, an expired request): the message as a card in the middle. */
+main:has(> #links[hidden]) > #summary {
+  margin-block: auto;
+  padding: var(--sp-9) var(--sp-8);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--type-dialog);
+  text-align: center;
+  text-wrap: balance;
+}
+
+main:has(> #links[hidden]) > .source:empty {
+  display: none;
+}
+
+.source {
+  overflow-wrap: anywhere;
+  font-size: var(--type-small);
+  color: var(--faint);
+}
+
+/* The links: one list that scrolls, sized to its rows (the actions sit under a short list).
+   Each row is its file's tile, name and server, as in the popup; the address is its tooltip. */
+.links {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  overflow: auto;
+  list-style: none;
+  border-radius: var(--r-xl);
+}
+
+.links li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 9px;
+  min-height: 30px;
+  padding-inline: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.links li:last-child {
+  border-bottom: 0;
+}
+
+.links .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-cell);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.links .host {
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-small);
+  color: var(--faint);
+}
+
+/* the space a short list leaves goes above the actions, never into an empty card */
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-4);
+  margin-top: auto;
+}
+
+@media (forced-colors: active) {
+  main:has(> #links[hidden]) > #summary {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+}

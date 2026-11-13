@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT12S">
+  <BaseURL>http://list.example.com/media/</BaseURL>
+  <Period>
+    <AdaptationSet mimeType="video/mp2t">
+      <Representation id="ts1" bandwidth="800000" codecs="avc1.42c01e,mp4a.40.2" width="640" height="480">
+        <BaseURL>stream.ts</BaseURL>
+        <SegmentList timescale="2" duration="8">
+          <Initialization range="0-187"/>
+          <SegmentURL mediaRange="188-50000"/>
+          <SegmentURL mediaRange="50001-99999"/>
+          <SegmentURL media="extra.ts"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

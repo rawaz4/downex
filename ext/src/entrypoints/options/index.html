@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="manifest.open_in_tab" content="true" />
+    <title>Downex options</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="rail card" aria-label="Downex options">
+        <div class="who">
+          <span class="brand" data-brand-mark="32"></span>
+          <div>
+            <h1>Downex</h1>
+            <p>Browser extension options</p>
+          </div>
+        </div>
+        <nav aria-label="Sections">
+          <a href="#rules-form">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.5v4a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4M12 4.5v10M7.5 10l4.5 4.5 4.5-4.5" /></svg>
+            Capture rules
+          </a>
+          <a href="#video-form">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.75 5.5h14.5a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM10.25 8.5v5l4.25-2.5zM4.5 19.5h3M10.5 19.5h3M16.5 19.5h3" /></svg>
+            Videos on web pages
+          </a>
+        </nav>
+        <p class="foot">Switches you change in the toolbar menu show up here at once; edits you have not saved are kept.</p>
+      </aside>
+
+      <main>
+        <!-- Capture rules: saved with Save. -->
+        <form id="rules-form" class="card" novalidate aria-labelledby="rules-title">
+          <div class="sec-head">
+            <span class="tile" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M4.5 13.5v4a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4M12 4.5v10M7.5 10l4.5 4.5 4.5-4.5" /></svg>
+            </span>
+            <h2 id="rules-title">Capture rules</h2>
+            <span class="pill">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 8v4.3l2.8 1.7" /></svg>
+              Saved when you press Save
+            </span>
+            <p class="intro">
+              Choose which downloads the browser hands to Downex. Downloads from private windows and
+              <code>blob:</code>/<code>data:</code> downloads always stay in the browser, and holding Alt
+              while clicking a link keeps that download in the browser.
+            </p>
+          </div>
+
+          <div class="field">
+            <label class="switch-row">
+              <span class="sw-text">
+                <span id="enabled-label" class="sw-label">Capture downloads</span>
+                <span id="enabled-hint" class="sw-hint">
+                  <span class="on-note">Matching downloads go to Downex; the toolbar menu has the same switch.</span>
+                  <span class="off-note">Off: every download stays in the browser.</span>
+                </span>
+              </span>
+              <input id="enabled" name="enabled" type="checkbox" role="switch" aria-labelledby="enabled-label" aria-describedby="enabled-hint" />
+            </label>
+          </div>
+
+          <div class="field">
+            <div class="label-row">
+              <label for="extensions">File extensions</label>
+              <span id="extensions-count" class="aside" aria-hidden="true"></span>
+            </div>
+            <p id="extensions-hint" class="hint">Separated by spaces, commas or new lines, e.g. <code>zip iso tar.gz</code>.</p>
+            <textarea id="extensions" name="extensions" class="input" rows="8" spellcheck="false" autocapitalize="off"
+              aria-describedby="extensions-hint extensions-error"></textarea>
+            <p id="extensions-error" class="error-text" role="alert" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="min-size">Minimum size</label>
+            <p id="min-size-hint" class="hint">0 captures any size. Downloads of unknown size are always captured.</p>
+            <div class="joined">
+              <input id="min-size" name="minSize" type="text" class="input sm" inputmode="decimal" size="10"
+                aria-describedby="min-size-hint min-size-error" />
+              <label id="min-size-unit-label" for="min-size-unit" class="visually-hidden">Unit</label>
+              <!-- main.ts puts the size unit's select menu (popup/select-menu.ts) here. -->
+              <span id="min-size-unit-slot" class="unit"></span>
+            </div>
+            <p id="min-size-error" class="error-text" role="alert" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="excluded-hosts">Never capture from these hosts</label>
+            <p id="excluded-hosts-hint" class="hint">One per line. <code>*.example.com</code> also matches <code>example.com</code>. Downloads started on pages of these hosts stay in the browser too; the toolbar menu’s “Send downloads to Downex” switch adds or removes the page’s host here.</p>
+            <textarea id="excluded-hosts" name="excludedHosts" class="input" rows="4" spellcheck="false" autocapitalize="off"
+              aria-describedby="excluded-hosts-hint excluded-hosts-error"></textarea>
+            <p id="excluded-hosts-error" class="error-text" role="alert" hidden></p>
+          </div>
+
+          <div class="actions">
+            <button id="save" type="submit" class="btn primary lg">Save</button>
+            <button id="reset" type="button" class="btn ghost lg">Reset to defaults</button>
+            <p id="form-status" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+
+        <!-- Videos on web pages: each switch is saved when it changes, the sites when the field is left. -->
+        <form id="video-form" class="card" novalidate aria-labelledby="video-title">
+          <div class="sec-head">
+            <span class="tile" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M4.75 5.5h14.5a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM10.25 8.5v5l4.25-2.5zM4.5 19.5h3M10.5 19.5h3M16.5 19.5h3" /></svg>
+            </span>
+            <h2 id="video-title">Videos on web pages</h2>
+            <span class="pill">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3.5 6 13.5h5.5l-1 7 7-10H12z" /></svg>
+              Saved as you change it
+            </span>
+            <p class="intro">
+              A Download button over a video lists what the browser loaded for it (MP4 files and streams)
+              and, with yt-dlp (downloaded with Deno on first use), the site's MP4 qualities. The one you
+              choose is saved as one MP4 file. Protected (DRM) videos and live streams are never offered.
+              Whether a site's terms allow downloading is your responsibility.
+            </p>
+          </div>
+
+          <div class="field">
+            <label class="switch-row">
+              <span class="sw-text">
+                <span id="video-button-label" class="sw-label">Show a Download button over videos</span>
+                <span id="video-button-hint" class="sw-hint">On YouTube and every other site. The toolbar menu lists a page's videos either way.</span>
+              </span>
+              <input id="video-button" type="checkbox" role="switch" aria-labelledby="video-button-label" aria-describedby="video-button-hint" />
+            </label>
+          </div>
+
+          <div class="field">
+            <label for="hidden-sites">Don't show the button on these sites</label>
+            <p id="hidden-sites-hint" class="hint">One per line. <code>*.example.com</code> also matches <code>example.com</code>. The site of the tab decides, so its embedded players follow it; a panel's "Don't show on" and the toolbar menu's switch add or remove the page's host here. Saved when you leave the field.</p>
+            <textarea id="hidden-sites" name="hiddenSites" class="input" rows="4" spellcheck="false" autocapitalize="off"
+              aria-describedby="hidden-sites-hint hidden-sites-error"></textarea>
+            <p id="hidden-sites-error" class="error-text" role="alert" hidden></p>
+          </div>
+
+          <div class="field">
+            <label class="switch-row">
+              <span class="sw-text">
+                <span id="video-prefetch-label" class="sw-label">Prepare video qualities while you watch</span>
+                <span id="video-prefetch-hint" class="sw-hint">
+                  After you stay 1.5 seconds on a video of YouTube, Vimeo, X, TikTok, Dailymotion, Reddit,
+                  Twitch or Streamable, Downex gets its qualities in the background, so Download lists them at
+                  once. It runs only while the Download button is shown on that site, Downex is running and
+                  its video tools are set up: one video at a time, at most about one a minute. It never sends
+                  your sign-in cookies, so it pauses while sending them is allowed.
+                </span>
+              </span>
+              <input id="video-prefetch" type="checkbox" role="switch" aria-labelledby="video-prefetch-label" aria-describedby="video-prefetch-hint" />
+            </label>
+          </div>
+
+          <div class="field">
+            <label class="switch-row">
+              <span class="sw-text">
+                <span id="video-sign-in-label" class="sw-label">Send my sign-in cookies when a video needs it</span>
+                <span id="video-sign-in-hint" class="sw-hint">
+                  For age-checked, members-only or bot-checked videos: the cookies of the video's own page go
+                  to Downex on this computer for that video only, and are never stored. The site may restrict
+                  accounts used this way.
+                </span>
+              </span>
+              <input id="video-sign-in" type="checkbox" role="switch" aria-labelledby="video-sign-in-label" aria-describedby="video-sign-in-hint" />
+            </label>
+          </div>
+
+          <div class="actions status-bar">
+            <p id="video-status" class="muted" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </main>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

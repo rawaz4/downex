@@ -1,0 +1,12 @@
+{
+  "id": "80012345",
+  "title": "Protected",
+  "extractor_key": "Generic",
+  "_has_drm": true,
+  "formats": [
+    {"format_id": "dash-video=1000", "ext": "mp4", "protocol": "http_dash_segments", "url": "https://drm.example.com/m.mpd", "vcodec": "avc1.4d401f", "acodec": "none", "has_drm": true},
+    {"format_id": "dash-audio=128", "ext": "m4a", "protocol": "http_dash_segments", "url": "https://drm.example.com/m.mpd", "vcodec": "none", "acodec": "mp4a.40.2", "has_drm": "maybe"},
+    {"format_id": "http-mp4", "ext": "mp4", "protocol": "https", "url": "https://drm.example.com/v.mp4", "vcodec": "avc1.4d401f", "acodec": "mp4a.40.2", "has_drm": true},
+    {"format_id": "http-webm", "ext": "webm", "protocol": "https", "url": "https://drm.example.com/v.webm", "vcodec": "vp9", "acodec": "opus"}
+  ]
+}

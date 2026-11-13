@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Download all links with Downex</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main aria-labelledby="title">
+      <header class="head">
+        <span class="brand" data-brand-mark="20"></span>
+        <h1 id="title">Download all links with Downex</h1>
+      </header>
+      <p id="summary" role="status" aria-live="polite">Loading…</p>
+      <p id="source" class="source"></p>
+      <ul id="links" class="links card" tabindex="0" aria-label="Links on the page" hidden></ul>
+      <div class="actions">
+        <button id="cancel" type="button" class="btn lg">Cancel</button>
+        <button id="accept" type="button" class="btn primary lg" disabled>Download</button>
+      </div>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

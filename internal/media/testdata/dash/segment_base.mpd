@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- On-demand profile: each Representation is one file with a segment index. -->
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT2M"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period>
+    <AdaptationSet mimeType="audio/mp4" codecs="opus" lang="fr">
+      <Representation id="opus" bandwidth="96000">
+        <BaseURL>audio_fr.mp4</BaseURL>
+        <SegmentBase indexRange="842-1201" timescale="48000">
+          <Initialization range="0-841"/>
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet mimeType="video/webm" codecs="vp09.00.40.08">
+      <Representation id="vp9" bandwidth="2000000" width="1920" height="1080">
+        <BaseURL>video.webm</BaseURL>
+        <SegmentBase indexRange="4000-4999"><Initialization sourceURL="video-init.webm"/></SegmentBase>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet contentType="image" mimeType="image/jpeg">
+      <SegmentTemplate media="thumbs/$Number$.jpg" duration="10"/>
+      <Representation id="thumbs" bandwidth="10000" width="320" height="180"/>
+    </AdaptationSet>
+  </Period>
+</MPD>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Downex</title>
+    <script>
+      // The viewer's theme and list density before the first paint (the stores in
+      // lib/stores keep them afterwards); without storage the defaults apply.
+      try {
+        var root = document.documentElement;
+        var theme = localStorage.getItem('downex.theme');
+        if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
+        root.dataset.density = localStorage.getItem('downex.density') === 'compact' ? 'compact' : 'comfortable';
+      } catch (e) {
+        document.documentElement.dataset.density = 'comfortable';
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

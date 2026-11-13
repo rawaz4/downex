@@ -1,0 +1,1 @@
+ERROR: [example] 12345: This video is DRM protected
