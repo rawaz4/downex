@@ -978,31 +978,45 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 		QueueServiceListQueuesProcedure,
 		svc.ListQueues,
 		connect.WithSchema(queueServiceMethods.ByName("ListQueues")),
-		connect.WithhhhhhhhhhhhhhhhhhhhhhhhhhhhhhqueueServiceCreateQueueHandler := connect.NewUnaryHandler(
+		connect.WithHandlerOptions(opts...),
+	)
+	queueServiceCreateQueueHandler := connect.NewUnaryHandler(
 		QueueServiceCreateQueueProcedure,
 		svc.CreateQueue,
 		connect.WithSchema(queueServiceMethods.ByName("CreateQueue")),
-		connect.WithhhhhhhhhhhhhhhhhhhhhhhhhhhhhhqueueServiceUpdateQueueHandler := connect.NewUnaryHandler(
+		connect.WithHandlerOptions(opts...),
+	)
+	queueServiceUpdateQueueHandler := connect.NewUnaryHandler(
 		QueueServiceUpdateQueueProcedure,
 		svc.UpdateQueue,
 		connect.WithSchema(queueServiceMethods.ByName("UpdateQueue")),
-		connect.WithhhhhhhhhhhhhhhhhhhhhhhhhhhhhhqueueServiceDeleteQueueHandler := connect.NewUnaryHandler(
+		connect.WithHandlerOptions(opts...),
+	)
+	queueServiceDeleteQueueHandler := connect.NewUnaryHandler(
 		QueueServiceDeleteQueueProcedure,
 		svc.DeleteQueue,
 		connect.WithSchema(queueServiceMethods.ByName("DeleteQueue")),
-		connect.WithhhhhhhhhhhhhhhhhhhhhhhhhhhhhhqueueServiceStartQueueHandler := connect.NewUnaryHandler(
+		connect.WithHandlerOptions(opts...),
+	)
+	queueServiceStartQueueHandler := connect.NewUnaryHandler(
 		QueueServiceStartQueueProcedure,
 		svc.StartQueue,
 		connect.WithSchema(queueServiceMethods.ByName("StartQueue")),
-		connect.WithhhhhhhhhhhhhhhhhhhhhhhhhhhhhhqueueServiceStopQueueHandler := connect.NewUnaryHandler(
+		connect.WithHandlerOptions(opts...),
+	)
+	queueServiceStopQueueHandler := connect.NewUnaryHandler(
 		QueueServiceStopQueueProcedure,
 		svc.StopQueue,
 		connect.WithSchema(queueServiceMethods.ByName("StopQueue")),
-		connect.WithhhhhhhhhhhhhhhhhhhhhhhhhhhhhhqueueServiceMoveDownloadsHandler := connect.NewUnaryHandler(
+		connect.WithHandlerOptions(opts...),
+	)
+	queueServiceMoveDownloadsHandler := connect.NewUnaryHandler(
 		QueueServiceMoveDownloadsProcedure,
 		svc.MoveDownloads,
 		connect.WithSchema(queueServiceMethods.ByName("MoveDownloads")),
-		connect.Withhhhhhhhhhhhhhhhhhhhhhhhhhhhhhreturn "/downex.v1.QueueService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/downex.v1.QueueService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case QueueServiceListQueuesProcedure:
 			queueServiceListQueuesHandler.ServeHTTP(w, r)
