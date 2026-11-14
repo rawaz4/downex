@@ -18,6 +18,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/rawaz4/downex/releases/tag/v1.0.0"><img alt="Windows downloads" src="https://img.shields.io/github/downloads/rawaz4/downex/v1.0.0/Downex-Setup-1.0.0.exe?label=Windows%20downloads&color=3ccb8b&style=flat-square"></a>
+  <a href="https://github.com/rawaz4/downex/releases/tag/v1.0.0"><img alt="macOS downloads" src="https://img.shields.io/github/downloads/rawaz4/downex/v1.0.0/Downex-1.0.0.dmg?label=macOS%20downloads&color=3ccb8b&style=flat-square"></a>
+  <a href="https://github.com/rawaz4/downex/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/rawaz4/downex/total?label=total%20downloads&color=0f1613&style=flat-square"></a>
+</p>
+
+<p align="center">
   <a href="https://downex.app"><b>Website</b></a> ·
   <a href="#install"><b>Install</b></a> ·
   <a href="#features"><b>Features</b></a> ·
