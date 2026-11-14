@@ -113,7 +113,7 @@
 | | Windows | macOS |
 |---|---|---|
 | **Needs** | Windows 10 or 11 (x64) | macOS 13 Ventura or later (Intel and Apple silicon) |
-| **Download** | `Downex-Setup-1.0.0.exe` from the [release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0) or [downex.app](https://downex.app) | `Downex-1.0.0.dmg`, published on the same release page when it is ready |
+| **Download** | `Downex-Setup-1.0.0.exe` from the [release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0) or [downex.app](https://downex.app) | `Downex-1.0.0.dmg` from the same [release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0) or [downex.app](https://downex.app) |
 | **Installs** | for you only, no administrator rights | drag **Downex** onto **Applications** |
 
 To check your download, compare its SHA-256 checksum with the one in `SHA256SUMS.txt` on the
