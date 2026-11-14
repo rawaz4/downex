@@ -1,71 +1,45 @@
 Adding the Downex browser extension (macOS)
 ===========================================
 
-Downex takes over downloads from Firefox, Edge, Chrome, Brave and Chromium through its
-browser extension. Browsers do not let programs install extensions themselves, so it has to
-be added once in each browser.
+Downex takes over downloads from Chrome, Edge, Brave, Chromium (based on Chromium 116 or
+later) and Firefox (140 or later) through its browser extension. Browsers do not let programs install
+extensions themselves, so you add it by hand, once in each browser.
 
-First register Downex with the browsers (the native-messaging host "com.downex.host"),
-once per user, in Terminal, after Downex.app is in its final place (again after moving it):
-
-    /Applications/Downex.app/Contents/Helpers/downex-nmhost register
-
-Firefox and Edge install the extension from their add-on sites once Downex is listed there.
-Chrome, Brave and Chromium (and Firefox and Edge until then) load it from inside the Downex
-app, next to this file:
+The extension is not in any browser store yet. It is not on the Chrome Web Store, and the
+listings on Firefox Add-ons and Edge Add-ons are planned but not ready. For now, load it from
+inside the Downex app, next to this file:
 
     /Applications/Downex.app/Contents/Resources/extension/chrome-mv3     (Chrome, Edge, Brave, Chromium)
     /Applications/Downex.app/Contents/Resources/extension/firefox-mv3    (Firefox)
 
-(Use the app's real location if it is not in /Applications.) The browsers' file dialogs
-show Downex.app as one item: to choose a folder inside it, press Command-Shift-G in the
-dialog, paste the path above and press Return.
+(Use the app's real location if it is not in /Applications.) In Downex, Settings >
+Integration shows both folders, with "Copy path" and "Open folder" buttons. The browsers'
+file dialogs show Downex.app as one item: to choose a folder inside it, press
+Command-Shift-G in the dialog, paste the path above and press Return.
 
 Do not move or delete Downex.app while the extension is loaded from it.
 
 
-Firefox
--------
+First, connect Downex to the browsers
+-------------------------------------
 
-1. Open https://addons.mozilla.org, search for "Downex" and click "Add to Firefox".
-2. Firefox lists what the add-on may do and the data it hands to the Downex program on this
-   Mac; click "Add" to install it. Firefox keeps it and updates it from then on.
+Each time it opens, Downex registers itself with the browsers you have opened at least once
+(the native-messaging host "com.downex.host"). So open each browser once, then open Downex.
+To do it again by hand, use Settings > Integration > "Register with browsers again", or in
+Terminal:
 
-Until Downex is listed there, Firefox can load it from the app for one session only
-(release versions of Firefox keep only add-ons that Mozilla has signed):
-
-1. Open about:debugging#/runtime/this-firefox
-2. Click "Load Temporary Add-on...", press Command-Shift-G, paste
-
-       /Applications/Downex.app/Contents/Resources/extension/firefox-mv3/manifest.json
-
-   press Return and click "Open".
-
-Firefox removes temporary add-ons when it quits; repeat these steps after a restart, or
-install the listed add-on as soon as it is there.
+    /Applications/Downex.app/Contents/Helpers/downex-nmhost register
 
 
-Edge
-----
+Chrome, Edge, Brave and Chromium
+--------------------------------
 
-Once Downex is listed there, open https://microsoftedge.microsoft.com/addons, search for
-"Downex" and click "Get". Edge keeps it and updates it from then on. If its button then
-says that Downex does not accept this copy, this version of Downex does not know the listed
-copy yet: remove it, and load Downex from the app as below until Downex has
-updated.
-
-Until Downex is listed there, load it from the app as described for Chrome below, on
-edge://extensions.
-
-
-Chrome, Brave and Chromium (and Edge until Downex is listed)
-------------------------------------------------------------
-
-1. Open the extensions page:
+1. Open the extensions page (type it in the address bar and press Return):
    Chrome:   chrome://extensions
    Edge:     edge://extensions
    Brave:    brave://extensions
-2. Turn on "Developer mode".
+   Chromium: chrome://extensions
+2. Turn on "Developer mode" (a switch at the top right; in Edge, in the left pane).
 3. Click "Load unpacked", press Command-Shift-G, paste
 
        /Applications/Downex.app/Contents/Resources/extension/chrome-mv3
@@ -77,33 +51,70 @@ Chrome, Brave and Chromium (and Edge until Downex is listed)
 
    Downex accepts a copy loaded from this folder only with this ID. If a different ID is
    shown, the folder was not the one from this app.
+5. Pin it: click the extensions (puzzle) icon in the toolbar, then the pin next to Downex
+   (in Edge, the eye icon, "Show in toolbar").
 
-Keep "Developer mode" on. Chrome 134 and later turn off extensions loaded this way when it is
-switched off, and downloads then stay in the browser. The browser may warn about
-developer-mode extensions when it starts; that is expected for extensions loaded this way.
+Keep "Developer mode" on. Recent versions of Chrome turn off extensions loaded this way when
+it is switched off, and downloads then stay in the browser. The browser may warn about
+developer-mode extensions when it starts; that is expected, and it is safe to keep Downex.
+
+
+Firefox
+-------
+
+Firefox keeps an add-on for good only when Mozilla has signed it. Downex is not signed yet,
+so release and Beta versions of Firefox load it as a temporary add-on, until Firefox quits:
+
+1. Open about:debugging#/runtime/this-firefox
+2. Click "Load Temporary Add-on...", press Command-Shift-G, paste
+
+       /Applications/Downex.app/Contents/Resources/extension/firefox-mv3/manifest.json
+
+   press Return and click "Open".
+3. Pin it: click the extensions (puzzle) icon in the toolbar, then the gear next to Downex,
+   and choose "Pin to Toolbar".
+
+Firefox removes temporary add-ons when it quits; repeat these steps after each restart.
+
+Firefox Developer Edition, Nightly and ESR can keep it: set xpinstall.signatures.required to
+false in about:config, copy the firefox-mv3 folder out of Downex.app (for example to
+Documents; never change files inside the app), zip the files inside the copy (manifest.json
+at the top of the zip) into a file named downex.xpi, and install that file from about:addons
+(gear icon, "Install Add-on From File..."). Make a new downex.xpi after each Downex update.
 
 
 Checking that it works
 ----------------------
 
 Click the Downex button in the browser's toolbar (it may be hidden behind the extensions
-(puzzle) icon). It shows whether Downex is reachable. When it is not, open Downex from
-Applications once, check that "downex-nmhost register" above reported no error, then try
-again.
+(puzzle) icon). It shows "Connected" when it reaches Downex.
+
+- "Downex isn't running": open Downex from Applications, then click "Check again".
+- "Downex isn't set up in this browser": in Downex, open Settings > Integration and click
+  "Register with browsers again", then "Check again". If it still says so, restart the
+  browser.
+- "Downex doesn't accept this extension": the extension came from another build of Downex,
+  so its ID is wrong. Remove it, then load the chrome-mv3 folder inside Downex.app, or install
+  the latest Downex.
+- The extension is gone or off in Chrome, Edge, Brave or Chromium: "Developer mode" was
+  switched off. Turn it on again, then turn the Downex card on (or load the folder again).
+- The add-on is gone from Firefox: a temporary add-on goes when Firefox quits; load it
+  again.
 
 
 After updating Downex
 ---------------------
 
-Downex installs its updates itself when you choose Update now.
+Downex installs its updates itself when you choose Update now, and the files in the
+extension folders are replaced.
 
-- Installed from addons.mozilla.org or Edge Add-ons: the browser updates the extension
-  itself; nothing to do.
-- Loaded from the app (Chrome, Brave, Chromium, or Edge before the listing): click the
-  reload arrow of the Downex card on the extensions page (or restart the browser).
-- Loaded as a temporary add-on in Firefox: load it again.
+- Chrome, Edge, Brave, Chromium: click the reload arrow of the Downex card on the
+  extensions page (or restart the browser).
+- Firefox, temporary add-on: load it again.
+- Firefox, downex.xpi: make and install a new one.
 
-Run "downex-nmhost register" again only when the app moved.
+Opening Downex registers it again; run "downex-nmhost register" by hand only if the
+extension says Downex isn't set up.
 
 
 Uninstalling
@@ -121,3 +132,5 @@ Uninstalling
 Your download list and settings stay in ~/Library/Application Support/Downex and the logs
 in ~/Library/Logs/Downex; delete those folders as well to remove everything. Downloaded
 files are never deleted.
+
+Help: support@downex.app

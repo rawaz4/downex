@@ -176,8 +176,7 @@ From the repository root:
 - [ ] Chrome: `chrome://extensions` → Developer mode → Load unpacked → ⌘⇧G →
       `/Applications/Downex.app/Contents/Resources/extension/chrome-mv3`. The ID equals
       `ext/EXTENSION_ID.txt`, and the popup shows Downex connected (daemon version).
-- [ ] Firefox (140 or later): the add-on from addons.mozilla.org, or until it is listed
-      `about:debugging#/runtime/this-firefox` → Load Temporary Add-on… →
+- [ ] Firefox (140 or later): `about:debugging#/runtime/this-firefox` → Load Temporary Add-on… →
       `…/extension/firefox-mv3/manifest.json` (ID `extension@downex.app`); the popup shows Downex
       connected.
 

@@ -104,7 +104,7 @@ func newIntegrationPage(d *Dialog) *integrationPage {
 	tileBox := newSurface(kit.Style{Display: kit.DisplayFlex, AlignItems: kit.AlignCenter, Justify: kit.JustifyCenter, Flex: kit.FlexNone,
 		Width: kit.Px(32), Height: kit.Px(32)}, inkAccentSoft, nil, 8, icon("plug", 18, views.InkAccent))
 	tileBox.Semantics.Hidden = true
-	words := sText("The Downex browser extension", sHint("Downloads you start in Chrome, Edge or Firefox arrive here. Hold Alt while clicking a link to keep one in the browser."))
+	words := sText("The Downex browser extension", sHint("Downloads you start in Chrome, Edge, Brave, Chromium or Firefox arrive here. Hold Alt while clicking a link to keep one in the browser."))
 	words.Style.Flex = kit.FlexOf(0, 1, kit.Length{})
 	extHead := el(kit.Style{Display: kit.DisplayFlex, AlignItems: kit.AlignStart, ColumnGap: kit.Px(12), MinWidth: kit.Px(0)}, tileBox, words)
 	plain := func(s string) span { return span{text: s, font: fontSteps, ink: views.InkInk2} }
@@ -137,12 +137,13 @@ func newIntegrationPage(d *Dialog) *integrationPage {
 	}
 	steps := el(kit.Style{Display: kit.DisplayBlock, RowGap: kit.Px(10), MinWidth: kit.Px(0), Padding: kit.Edges{Start: kit.Px(44)}},
 		step("1", step1,
-			plain("Chrome or Edge: open "), code("chrome://extensions"), plain(" (Edge: "), code("edge://extensions"),
-			plain(", unless Downex is listed on Edge Add-ons), turn on Developer mode and keep it on, choose Load unpacked and pick this folder. Reload it there after updating Downex.")),
+			plain("Chrome, Edge, Brave or Chromium: open "), code("chrome://extensions"), plain(" (Edge: "), code("edge://extensions"),
+			plain(", Brave: "), code("brave://extensions"),
+			plain("), turn on Developer mode and keep it on, choose Load unpacked and pick this folder. Reload it there after updating Downex.")),
 		step("2", []kit.Widget{p.folderRow(host.FolderExtensionFirefox, "Firefox")},
-			plain("Firefox: add Downex from addons.mozilla.org. Until it is listed there, open "), code("about:debugging"),
+			plain("Firefox: open "), code("about:debugging"),
 			plain(", choose This Firefox, then Load Temporary Add-on… and pick the "),
-			code("manifest.json"), plain(" file in this folder; Firefox removes that copy when it closes.")),
+			code("manifest.json"), plain(" file in this folder; Firefox removes it when it closes.")),
 		step("3", []kit.Widget{sAfter(p.register, p.said), p.fail},
 			plain("It reaches Downex through the relay "), code("downex-nmhost"),
 			plain(", which the installer registers with your browsers. If the extension says Downex is not set up, register it again.")),

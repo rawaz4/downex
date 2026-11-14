@@ -29,5 +29,8 @@ macOS (GPL-3.0-or-later).
   the background service only on your own computer.
 
 Known limits: the Windows Setup is not code-signed and the macOS app is not notarised (see the
-README for the first start); Windows on Arm and Linux have no release yet; the Chrome extension
-is loaded unpacked in Developer mode, as it is not in the Chrome Web Store.
+README for the first start); Windows on Arm and Linux have no release yet; the browser extension
+is in no browser store yet (it is not on the Chrome Web Store, and the Firefox Add-ons and Edge
+Add-ons listings are not ready), so it is added by hand: loaded unpacked in Developer mode in
+Chrome, Edge, Brave and Chromium, and as a temporary add-on in Firefox, which removes it when
+Firefox closes (see the README).

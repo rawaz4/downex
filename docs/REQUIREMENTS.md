@@ -75,8 +75,10 @@ resumable downloads, browser capture, media grabbing and scheduling.
 - Later: buf (protobuf), NSIS + WiX v5, GoReleaser + nfpm, flatpak-builder, an Ubuntu 22.04/24.04
   test machine or WSL2 distro.
 - Release: no paid code signing (the Windows Setup is unsigned, macOS builds are ad-hoc signed);
-  the extension is to be listed on addons.mozilla.org and Edge Add-ons and is loaded unpacked
-  in Chrome, Brave and Chromium (no Chrome Web Store listing). Later: CI on GitHub Actions.
+  the extension is in no browser store yet and is loaded by hand in every browser (unpacked in
+  Chrome, Edge, Brave and Chromium, as a temporary add-on in Firefox); listings on
+  addons.mozilla.org and Edge Add-ons are planned, a Chrome Web Store listing is not. Later: CI
+  on GitHub Actions.
 
 ## 4. Milestones
 | Milestone | Scope | Status |

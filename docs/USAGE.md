@@ -31,13 +31,12 @@ Contents: [Install (Windows)](#install-windows) · [macOS](#macos) · [Usage](#u
 says "Windows protected your PC", choose *More info* → *Run anyway*. On a PC with Smart App
 Control turned on, Windows may refuse unsigned apps altogether.
 
-The browser extension cannot be installed by Setup: the finish page links to `EXTENSION.txt`
-in the installation folder. Firefox gets it from addons.mozilla.org and Edge from Edge Add-ons,
-each once Downex is listed there (until then Firefox loads
-`extension\firefox-mv3\manifest.json` as a temporary add-on in `about:debugging`, and Edge loads the
-unpacked copy). In Chrome, Brave and Chromium, load `extension\chrome-mv3` with
-*Developer mode → Load unpacked* and keep *Developer mode* on (see
-[Browser integration](#browser-integration)).
+The browser extension cannot be installed by Setup, and it is in no browser store yet: the
+finish page links to `EXTENSION.txt` in the installation folder, which shows how to add it by
+hand. In Chrome, Edge, Brave and Chromium, load `extension\chrome-mv3` with
+*Developer mode → Load unpacked* and keep *Developer mode* on. Firefox loads
+`extension\firefox-mv3\manifest.json` as a temporary add-on in `about:debugging` until it
+closes (see [Browser integration](#browser-integration)).
 
 **Upgrading.** Run the new Setup. Before it replaces any file it closes the Downex window and
 stops the daemon with `downex daemon stop` (running downloads are paused, their progress is
@@ -176,22 +175,22 @@ go test ./packaging/macos      # templates and script functions; uses Git for Wi
    too, or macOS calls Downex "damaged", remove the quarantine flag the download set:
    `xattr -dr com.apple.quarantine /Applications/Downex.app`. A build made on the same Mac carries
    no quarantine flag and opens directly.
-3. Register the relay with the browsers, once per user and again after moving the app (it writes
-   the manifests of [MACOS-SPEC.md §4](MACOS-SPEC.md#4-browser-registration-downex-nmhost-register-darwin)
+3. Register the relay with the browsers. The window does this each time it opens
+   (`register --keep`, for the browsers this user has opened). To do it by hand (for example
+   after opening a new browser), run the command below (it writes the manifests of [MACOS-SPEC.md §4](MACOS-SPEC.md#4-browser-registration-downex-nmhost-register-darwin)
    with the relay's path inside the app; see [Browser integration](#browser-integration) for the flags):
 
    ```bash
    /Applications/Downex.app/Contents/Helpers/downex-nmhost register
    ```
 
-4. Add the browser extension: Firefox from addons.mozilla.org and Edge from Edge Add-ons, each
-   once Downex is listed there (until then Firefox loads
-   `Contents/Resources/extension/firefox-mv3/manifest.json` as a temporary add-on in
-   `about:debugging`, and Edge loads the unpacked copy as below). In Chrome, Brave and
-   Chromium, load it from inside the app with *Developer mode* → *Load unpacked* →
+4. Add the browser extension by hand (it is in no browser store yet). In Chrome, Edge, Brave
+   and Chromium, load it from inside the app with *Developer mode* → *Load unpacked* →
    `/Applications/Downex.app/Contents/Resources/extension/chrome-mv3`, and keep
-   *Developer mode* on. The file dialogs show `Downex.app` as one item: press **⌘⇧G** and paste
-   the path. `Contents/Resources/EXTENSION.txt` has the details (`open -e` it).
+   *Developer mode* on. Firefox loads `Contents/Resources/extension/firefox-mv3/manifest.json`
+   as a temporary add-on in `about:debugging` until it quits. The file dialogs show
+   `Downex.app` as one item: press **⌘⇧G** and paste the path.
+   `Contents/Resources/EXTENSION.txt` has the details (`open -e` it).
 5. Optionally put the CLI on `PATH`:
    `sudo ln -sf /Applications/Downex.app/Contents/Helpers/downex /usr/local/bin/downex`.
 
@@ -874,18 +873,21 @@ The extension in `ext/` (one Manifest V3 build for Chrome, Edge and Firefox) han
 `downexd` through `downex-nmhost`, a native-messaging host that the browser starts itself.
 Nothing listens on a network port. See [BROWSER-SPEC.md](BROWSER-SPEC.md).
 
-**With a release of Downex,** Setup installs and registers the relay (on macOS, register it as in
-step 3 of [macOS](#macos)), and the extension comes from the browser:
+**With a release of Downex,** Setup installs and registers the relay (on macOS the window
+registers it each time it opens; see step 3 of [Installing on a Mac](#installing-on-a-mac)). The
+extension is not in any browser store yet: it is not on the Chrome Web Store, and the listings on
+Firefox Add-ons and Edge Add-ons are planned but not ready. Add it by hand from the installation
+(a step-by-step guide per browser is in the [README](../README.md#the-browser-extension)):
 
-- **Firefox:** from addons.mozilla.org, once it is listed there; until then load
-  `extension\firefox-mv3\manifest.json` as a temporary add-on in
-  `about:debugging#/runtime/this-firefox` (Firefox removes it when it closes).
-- **Edge:** from Edge Add-ons, once it is listed there.
-- **Chrome, Brave and Chromium:** the extension is not in the Chrome Web Store. Open the
-  browser's extensions page, turn on *Developer mode*, choose *Load unpacked* and select the
-  `extension\chrome-mv3` folder in Downex's installation folder (on macOS
-  `Downex.app/Contents/Resources/extension/chrome-mv3`). Keep *Developer mode* on, or the
+- **Chrome, Edge, Brave and Chromium:** open the browser's extensions page, turn on
+  *Developer mode*, choose *Load unpacked* and select the `extension\chrome-mv3` folder in
+  Downex's installation folder (on macOS `Downex.app/Contents/Resources/extension/chrome-mv3`).
+  The ID shown must be `dlgpbdafcmciojddbbjikgeeefipejcn`. Keep *Developer mode* on, or the
   browser may turn the extension off.
+- **Firefox:** load `extension\firefox-mv3\manifest.json` as a temporary add-on in
+  `about:debugging#/runtime/this-firefox`. Firefox removes it when it closes, because release
+  and Beta versions keep only add-ons that Mozilla has signed. Developer Edition, Nightly and ESR
+  can install it for good as an `.xpi` with `xpinstall.signatures.required` set to `false`.
 
 The steps below build and load everything from source.
 
@@ -918,8 +920,7 @@ pnpm build:firefox    # Firefox:         ext/.output/firefox-mv3
 
 **3. Load it unpacked.** Chrome: `chrome://extensions`, Edge: `edge://extensions` → enable
 *Developer mode* → *Load unpacked* → select `ext/.output/chrome-mv3`. The ID shown must equal
-`ext/EXTENSION_ID.txt`. Firefox (140 or later) installs the add-on from addons.mozilla.org once it
-is listed there; until then, and for a development build, it loads through
+`ext/EXTENSION_ID.txt`. Firefox (140 or later) loads it through
 `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on…* → select `ext/.output/firefox-mv3/manifest.json` (add-on ID `extension@downex.app`).
 
 **4. Register the relay** with the browsers, once, from where it is installed (again after

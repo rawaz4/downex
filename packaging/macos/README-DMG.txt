@@ -34,11 +34,14 @@ flag that the download put on the app (in Terminal):
 3. Connect the browsers
 -----------------------
 
-Once per user, in Terminal (again after moving the app):
+Each time it opens, Downex registers itself with the browsers you have opened at least once.
+To do it by hand, in Terminal (again after moving the app):
 
     /Applications/Downex.app/Contents/Helpers/downex-nmhost register
 
-Then add the browser extension to each browser as described in EXTENSION.txt inside the app:
+The browser extension is not in any browser store yet, so add it by hand, once in each
+browser (Chrome, Edge, Brave, Chromium or Firefox), as described in EXTENSION.txt inside the
+app:
 
     open -e /Applications/Downex.app/Contents/Resources/EXTENSION.txt
 
