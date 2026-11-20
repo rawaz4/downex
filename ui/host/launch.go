@@ -161,11 +161,12 @@ func (v View) InstanceID() string {
 	return MainInstanceID
 }
 
-// The standalone Confirm download window's sizes, in DIPs: it opens as wide as the dialog of
-// a file and fits the dialog it shows (ui/views/confirmwin).
+// The standalone Confirm download window's sizes, in DIPs: it opens as the dialog of a file
+// asks (44rem wide, its height at that width), so that the common dialog shows without a
+// resize, and fits the dialog it shows (ui/views/confirmwin).
 const (
 	ConfirmWidth     = 704
-	ConfirmHeight    = 420
+	ConfirmHeight    = 439
 	ConfirmMinWidth  = 480
 	ConfirmMinHeight = 300
 )
@@ -177,13 +178,16 @@ type RGB struct{ R, G, B uint8 }
 func (c RGB) COLORREF() uint32 { return uint32(c.R) | uint32(c.G)<<8 | uint32(c.B)<<16 }
 
 // The pages' grounds (docs/DESIGN-SYSTEM.md §2.1), so that a window opens in the colour it
-// then paints: the main window's --chrome (title bar, sidebar, status bar) and the
-// progress window's --surface, each in the light and the dark theme.
+// then paints: the main window's --chrome (title bar, sidebar, status bar), the progress
+// window's --surface and the Confirm download window's --raised (the dialog filling it),
+// each in the light and the dark theme.
 var (
 	ChromeLight  = RGB{0xee, 0xf2, 0xf0}
 	ChromeDark   = RGB{0x0a, 0x0e, 0x0c}
 	SurfaceLight = RGB{0xff, 0xff, 0xff}
 	SurfaceDark  = RGB{0x17, 0x1e, 0x1b}
+	RaisedLight  = RGB{0xff, 0xff, 0xff}
+	RaisedDark   = RGB{0x21, 0x2a, 0x26}
 )
 
 // WindowSpec is the window of a view, and its single-instance lock.
@@ -211,7 +215,7 @@ func (v View) WindowOn(goos string) WindowSpec {
 			Width: ConfirmWidth, Height: ConfirmHeight,
 			MinWidth: ConfirmMinWidth, MinHeight: ConfirmMinHeight,
 			InstanceID: ConfirmInstanceID,
-			Light:      SurfaceLight, Dark: SurfaceDark,
+			Light:      RaisedLight, Dark: RaisedDark,
 		}
 	}
 	if v.IsProgress() {

@@ -2,6 +2,7 @@ package dialogs
 
 import (
 	"context"
+	"math"
 	"time"
 
 	downexv1 "downex/internal/rpc/downex/v1"
@@ -9,6 +10,7 @@ import (
 	"downex/ui/core/text"
 	"downex/ui/host"
 	"downex/ui/kit"
+	"downex/ui/kit/tokens"
 	"downex/ui/kit/widgets"
 	"downex/ui/state"
 	"downex/ui/views"
@@ -33,9 +35,13 @@ type Update struct {
 	tone   *tone
 	notes  *views.Note
 	status *kit.Element
-	later  *widgets.Button
-	submit *widgets.Button
-	close  *widgets.Button
+	// prog shows the running install: a bar and what it does (hidden while none runs).
+	prog     *kit.Element
+	progBar  *widgets.ProgressBar
+	progLine *views.Text
+	later    *widgets.Button
+	submit   *widgets.Button
+	close    *widgets.Button
 
 	openedAt time.Time
 	busy     bool
@@ -95,7 +101,14 @@ func NewUpdate(app *views.App, store *state.UpdateStore, info *downexv1.UpdateIn
 	u.status = &kit.Element{Style: kit.Style{Display: kit.DisplayBlock, MinWidth: kit.Px(0)}}
 	u.status.Semantics.Live = kit.LivePolite
 	u.status.SetHidden(true)
-	u.Body.Add(u.status)
+	u.prog = &kit.Element{Style: kit.Style{Display: kit.DisplayFlex, Axis: kit.AxisColumn, RowGap: kit.Px(6), MinWidth: kit.Px(0)}}
+	u.prog.Semantics.Live = kit.LivePolite
+	u.progBar = widgets.NewProgressBar("Update progress", false)
+	u.progBar.Set(0, widgets.BarDownloading) // no hatch animation while it is hidden
+	u.progLine = views.NewParagraph("", kit.Font{Family: tokens.FontUI, Size: kit.Rem(0.8125), Weight: 400, LineHeight: 1.4, Tabular: true}, views.InkMuted)
+	u.prog.Add(u.progBar, u.progLine)
+	u.prog.SetHidden(true)
+	u.Body.Add(u.prog, u.status)
 
 	u.later = footButton(t.Later, widgets.Secondary, u.Later)
 	u.submit = footButton(t.Submit, widgets.Primary, u.Submit)
@@ -122,6 +135,21 @@ func (u *Update) Status() *views.Note {
 		}
 	}
 	return nil
+}
+
+// Refresh shows the running install's progress that downexd reports (the store's Progress):
+// the bar, how much has arrived and what comes next.
+func (u *Update) Refresh() {
+	p := u.store.Progress()
+	if p == nil {
+		if !u.busy {
+			u.prog.SetHidden(true)
+		}
+		return
+	}
+	u.prog.SetHidden(false)
+	u.progBar.Set(state.UpdateFraction(p), widgets.BarDownloading)
+	u.progLine.SetText(state.UpdateProgressText(p))
 }
 
 // Busy reports that the install runs.
@@ -168,6 +196,10 @@ func (u *Update) Submit() {
 	}
 	u.setBusy(true)
 	u.showStatus(nil)
+	u.prog.SetHidden(false)
+	u.progBar.Set(math.NaN(), widgets.BarDownloading)
+	u.progLine.SetText("Getting the update ready…")
+	u.Refresh()
 	u.app.Go(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), host.InstallTimeout)
 		defer cancel()
@@ -175,6 +207,7 @@ func (u *Update) Submit() {
 		failure := u.store.Failure()
 		u.app.UI(func() {
 			u.setBusy(false)
+			u.prog.SetHidden(true)
 			if ok {
 				u.installing()
 				return

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"downex/ui/kit"
 	"downex/ui/win/internal/w32"
@@ -262,6 +263,65 @@ func TestResizeWhileMinimised(t *testing.T) {
 	}
 	w32.ShowWindow(w.hwnd, w32.SW_SHOWNOACTIVATE)
 	pump(t, a, w, "the restored size", time.Second, func() bool { return w.Size() == kit.Size{W: 400, H: 260} })
+}
+
+// SetMaxSize holds the user's resizing back (WM_GETMINMAXINFO's MaxTrackSize, never below the
+// least size) but not the window's own resizes; ResizeCentered keeps the window's centre.
+func TestMaxSizeAndResizeCentered(t *testing.T) {
+	root := &testRoot{}
+	a, w := openTest(t, root, WindowOptions{Size: kit.Size{W: 320, H: 200}})
+	pump(t, a, w, "the first frame", 2*time.Second, func() bool { return w.painted })
+	w.SetMinSize(kit.Size{W: 300, H: 180})
+	w.SetMaxSize(kit.Size{W: 400, H: 300})
+	mmi := heapMMI
+	*mmi = w32.MINMAXINFO{}
+	w.proc(w32.WM_GETMINMAXINFO, 0, uintptr(unsafe.Pointer(mmi)))
+	ow, oh := w.outerSize(w.pixels(400), w.pixels(300), w.sysDPI())
+	if mmi.MaxTrackSize.X != ow || mmi.MaxTrackSize.Y != oh {
+		t.Errorf("max track size %v, want %d×%d", mmi.MaxTrackSize, ow, oh)
+	}
+
+	// The system clamps SetWindowPos to the largest size too (a resizable frame).
+	wr := w32.GetWindowRect(w.hwnd)
+	w32.SetWindowPos(w.hwnd, wr.Left, wr.Top, ow+100, oh+100, w32.SWP_NOZORDER|w32.SWP_NOACTIVATE)
+	if got := w32.GetWindowRect(w.hwnd); got.Right-got.Left != ow || got.Bottom-got.Top != oh {
+		t.Errorf("a resize past the largest size gave %dx%d, want %dx%d", got.Right-got.Left, got.Bottom-got.Top, ow, oh)
+	}
+
+	// The window's own resize is not held back, and keeps the centre (to a pixel).
+	before := w32.GetWindowRect(w.hwnd)
+	w.ResizeCentered(kit.Size{W: 440, H: 330})
+	after := w32.GetWindowRect(w.hwnd)
+	if w.px != (w32.Point{X: w.pixels(440), Y: w.pixels(330)}) {
+		t.Errorf("client after ResizeCentered past the largest size: %v px", w.px)
+	}
+	cx := func(r w32.Rect) int32 { return r.Left + r.Right }
+	cy := func(r w32.Rect) int32 { return r.Top + r.Bottom }
+	if d := cx(after) - cx(before); d < -1 || d > 1 {
+		t.Errorf("the centre moved %d/2 px across: %v to %v", d, before, after)
+	}
+	if d := cy(after) - cy(before); d < -1 || d > 1 {
+		t.Errorf("the centre moved %d/2 px down: %v to %v", d, before, after)
+	}
+	// Resize keeps the top-left corner.
+	w.Resize(kit.Size{W: 360, H: 220})
+	if got := w32.GetWindowRect(w.hwnd); got.Left != after.Left || got.Top != after.Top {
+		t.Errorf("Resize moved the corner from %v to %v", after, got)
+	}
+
+	// A largest size under the least is the least; 0 has none.
+	w.SetMaxSize(kit.Size{W: 200, H: 100})
+	*mmi = w32.MINMAXINFO{}
+	w.proc(w32.WM_GETMINMAXINFO, 0, uintptr(unsafe.Pointer(mmi)))
+	if mmi.MaxTrackSize != mmi.MinTrackSize {
+		t.Errorf("max track size %v under the min %v", mmi.MaxTrackSize, mmi.MinTrackSize)
+	}
+	w.SetMaxSize(kit.Size{})
+	*mmi = w32.MINMAXINFO{MaxTrackSize: w32.Point{X: 9999, Y: 9999}}
+	w.proc(w32.WM_GETMINMAXINFO, 0, uintptr(unsafe.Pointer(mmi)))
+	if mmi.MaxTrackSize != (w32.Point{X: 9999, Y: 9999}) {
+		t.Errorf("no largest size changed the system's to %v", mmi.MaxTrackSize)
+	}
 }
 
 // A GPU that keeps losing the device falls back to the software renderer instead of making

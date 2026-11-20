@@ -7,6 +7,7 @@ import type { LinksBatchResponse, LinksConfirmResponse } from '../../lib/message
 import { ask } from '../../lib/runtime';
 import { FILE_TILE_AUDIO_SMALL, FILE_TILES, SMALL_TILE_PX, TILE_VIEWBOX, tileKind } from '../popup/popup-view';
 import { linkRow } from './links';
+import { setSvgMarkup } from '../../lib/svg-markup';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TILE_PX = 16;
@@ -24,7 +25,7 @@ function linkItem(url: string): HTMLLIElement {
   tile.setAttribute('focusable', 'false');
   tile.style.setProperty('--hue', `var(--c-${kind})`);
   tile.style.setProperty('--deep', `var(--c-${kind}-deep)`);
-  tile.innerHTML = kind === 'audio' && TILE_PX <= SMALL_TILE_PX ? FILE_TILE_AUDIO_SMALL : FILE_TILES[kind];
+  setSvgMarkup(tile, kind === 'audio' && TILE_PX <= SMALL_TILE_PX ? FILE_TILE_AUDIO_SMALL : FILE_TILES[kind]);
   const name = document.createElement('span');
   name.className = 'name';
   name.dir = 'auto';

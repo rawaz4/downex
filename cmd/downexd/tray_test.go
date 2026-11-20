@@ -371,6 +371,9 @@ func TestTrayNotificationsAndFailures(t *testing.T) {
 	stop := startTray(t.Context(), trayConfig{daemon: f, retryInterval: 20 * time.Millisecond})
 	defer stop()
 
+	// An outcome that its progress window shows gets no balloon.
+	f.notices <- daemon.Notice{Kind: daemon.NoticeFailed, InWindow: true, Download: &downexv1.Download{Id: 20, Filename: "shown.bin"}}
+	f.notices <- daemon.Notice{Kind: daemon.NoticeCompleted, InWindow: true, Download: &downexv1.Download{Id: 21, Filename: "shown.zip"}}
 	for i := int64(1); i <= 5; i++ {
 		f.notices <- daemon.Notice{Kind: daemon.NoticeCompleted, Download: &downexv1.Download{Id: i, Filename: fmt.Sprintf("f%d.zip", i)}}
 	}

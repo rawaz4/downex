@@ -463,6 +463,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if site != nil && site.downloads {
 		stopTools := daemon.StartTools(m, daemon.ToolsServiceConfig{})
 		defer stopTools()
+		// yt-dlp and Deno are set up in the background right after the start, before the first
+		// video page needs them: the user never waits for them or hears about them.
+		go func() {
+			select {
+			case <-time.After(3 * time.Second):
+			case <-ctx.Done():
+				return
+			}
+			ectx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+			defer cancel()
+			if err := site.mgr.Ensure(ectx); err != nil {
+				log.Info("yt-dlp and Deno are not ready yet", "err", err)
+			}
+		}()
+	}
+	if own {
+		unquarantine(log, toolsDir)
 	}
 	// The clipboard monitor (docs/M6-SPEC.md §3) only for the user's own daemon; it
 	// follows the clipboard_monitor setting and ends with the Manager.
@@ -483,7 +500,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		stopTray = startTray(ctx, trayConfig{
 			daemon: m,
 			log:    log,
-			quit:   requestShutdown,
+			// Quit ends all of Downex: its windows close, then downexd stops.
+			quit:   func() { m.AnnounceQuit(); requestShutdown() },
 			openUI: func() error { return openUI() },
 		})
 	}

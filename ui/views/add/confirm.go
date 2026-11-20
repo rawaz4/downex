@@ -856,6 +856,9 @@ func (c *Confirm) confirm(start bool) {
 		}
 	}
 	req := &downexv1.ConfirmRequest{Id: c.download.GetId(), Start: start, QueueId: named}
+	// The window opens the progress window of a download that starts now (show_progress_window):
+	// downexd marks it at once, so its outcome shows there.
+	req.ProgressWindow = start && c.settings.GetShowProgressWindow()
 	if folder != c.proposed.dir {
 		req.Dir = folder
 	}

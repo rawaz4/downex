@@ -40,6 +40,7 @@ type subscriber struct {
 	tools   bool                 // the tools status changed (docs/SITE-MEDIA-SPEC.md §3.1)
 	update  *downexv1.UpdateInfo // an automatic update check's result (docs/M6-SPEC.md §4)
 	polite  bool                 // Polite mode's status changed (docs/POLITE-SPEC.md §7)
+	quit    bool                 // the user quit Downex: the windows close
 	signal  chan struct{}        // capacity 1: something became pending
 }
 
@@ -51,10 +52,11 @@ type pendingBatch struct {
 	tools     bool
 	update    *downexv1.UpdateInfo // the latest automatic update check's result, if one ran since
 	polite    bool
+	quit      bool
 }
 
 func (b pendingBatch) empty() bool {
-	return len(b.downloads) == 0 && len(b.queues) == 0 && len(b.posts) == 0 && !b.tools && b.update == nil && !b.polite
+	return len(b.downloads) == 0 && len(b.queues) == 0 && len(b.posts) == 0 && !b.tools && b.update == nil && !b.polite && !b.quit
 }
 
 func newHub() *hub {
@@ -163,6 +165,17 @@ func (h *hub) publishUpdate(info *downexv1.UpdateInfo) {
 	}
 }
 
+// publishQuit tells every subscriber, with ids or without, that the user quit Downex: the
+// windows close. A stream that ends at Shutdown still sends it (finalBatch).
+func (h *hub) publishQuit() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for s := range h.subs {
+		s.quit = true
+		s.wake()
+	}
+}
+
 // publishPolite records that Polite mode's status changed for the subscribers of every
 // download (docs/POLITE-SPEC.md §7).
 func (h *hub) publishPolite() {
@@ -181,8 +194,8 @@ func (h *hub) publishPolite() {
 func (h *hub) take(s *subscriber) pendingBatch {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	b := pendingBatch{downloads: s.pending, queues: s.queues, posts: s.posts, tools: s.tools, update: s.update, polite: s.polite}
-	s.tools, s.update, s.polite = false, nil, false
+	b := pendingBatch{downloads: s.pending, queues: s.queues, posts: s.posts, tools: s.tools, update: s.update, polite: s.polite, quit: s.quit}
+	s.tools, s.update, s.polite, s.quit = false, nil, false, false
 	if len(s.pending) > 0 {
 		s.pending = make(map[model.DownloadID]eventKind, len(b.downloads))
 	} else {

@@ -136,3 +136,44 @@ func TestUpdateInstall(t *testing.T) {
 		t.Errorf("after MarkInstalled: offer %v, installed %v, %d hook runs", ok, s.Installed(), hooks)
 	}
 }
+
+// TestUpdateProgress: the install's progress events (whoever started it) show its state and
+// keep the pop-up's offer away while it runs; a failure brings the offer back.
+func TestUpdateProgress(t *testing.T) {
+	d := statetest.NewDaemon()
+	u := state.NewUpdate(state.UpdateOptions{Daemon: d, Events: &d.Events})
+	u.Start()
+	defer u.Dispose()
+	day := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	d.Emit(checked("1.1.1", true, day))
+	if _, ok := u.Offer(); !ok {
+		t.Fatal("no offer")
+	}
+	progress := func(stage downexv1.UpdateInstallStage, done, total int64) {
+		ev := checked("1.1.1", true, day)
+		info := ev.GetUpdate()
+		info.InstallStage, info.DownloadDone, info.DownloadTotal = stage, done, total
+		d.Emit(ev)
+	}
+	progress(downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_DOWNLOADING, 11_450_000, 22_900_000)
+	if _, ok := u.Offer(); ok {
+		t.Error("offered while the update installs")
+	}
+	if f := u.Fraction(); f != 0.5 {
+		t.Errorf("fraction %v, want 0.5", f)
+	}
+	if got := state.UpdateProgressText(u.Progress()); got != "Downloading the update… 50% (11.4 of 22.9 MB)" {
+		t.Errorf("text %q", got)
+	}
+	progress(downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_INSTALLING, 22_900_000, 22_900_000)
+	if u.Fraction() != 1 || u.Progress() == nil {
+		t.Errorf("installing: fraction %v, progress %v", u.Fraction(), u.Progress())
+	}
+	progress(downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_FAILED, 0, 0)
+	if u.Progress() != nil {
+		t.Error("progress after a failure")
+	}
+	if _, ok := u.Offer(); !ok {
+		t.Error("no offer after a failed install")
+	}
+}

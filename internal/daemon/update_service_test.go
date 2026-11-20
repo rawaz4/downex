@@ -571,17 +571,25 @@ func TestInstallUpdateRefusals(t *testing.T) {
 		wantCode(t, "InstallUpdate", install(t, h), connect.CodeUnimplemented)
 		alive(t, h, nil)
 	})
-	t.Run("one at a time", func(t *testing.T) {
+	t.Run("one at a time: a second call joins the running install", func(t *testing.T) {
 		feed := newUpdateFeed(t)
-		inst := &fakeInstaller{prepareErr: errors.New("stop here"), block: make(chan struct{}), entered: make(chan struct{}, 1)}
+		inst := &fakeInstaller{prepareErr: errors.New("stop here"), block: make(chan struct{}), entered: make(chan struct{}, 2)}
 		h := updateHarness(t, feed, UpdatesConfig{Installer: inst})
-		first := make(chan error, 1)
+		first, second := make(chan error, 1), make(chan error, 1)
 		go func() { first <- install(t, h) }()
 		<-inst.entered
-		wantCode(t, "second InstallUpdate", install(t, h), connect.CodeAborted)
+		go func() { second <- install(t, h) }()
+		time.Sleep(100 * time.Millisecond) // the second call joins before the first ends
 		close(inst.block)
-		if err := <-first; connect.CodeOf(err) != connect.CodeInternal {
-			t.Errorf("first InstallUpdate: %v", err)
+		for i, ch := range []chan error{first, second} {
+			if err := <-ch; connect.CodeOf(err) != connect.CodeInternal {
+				t.Errorf("InstallUpdate %d: %v", i+1, err)
+			}
+		}
+		select {
+		case <-inst.entered:
+			t.Error("the second call started an install of its own")
+		default:
 		}
 		alive(t, h, inst)
 	})
@@ -670,12 +678,12 @@ func TestUpdateAutoCheck(t *testing.T) {
 		}
 	}
 
-	// First check a minute after the start.
-	timers.wantArmed(t, time.Minute)
+	// First check soon after the start.
+	timers.wantArmed(t, updateFirstDelay)
 	if feed.hits.Load() != 0 {
 		t.Fatal("checked before the first delay")
 	}
-	timers.advance(time.Minute)
+	timers.advance(updateFirstDelay)
 	timers.fire()
 	select {
 	case i := <-notified:
@@ -685,7 +693,7 @@ func TestUpdateAutoCheck(t *testing.T) {
 	case <-time.After(waitTimeout):
 		t.Fatal("no notification")
 	}
-	timers.wantArmed(t, time.Hour) // 24 h, in timers of at most an hour
+	timers.wantArmed(t, time.Hour) // the interval, in timers of at most an hour
 
 	// An early timer (the wall clock says not yet) only re-arms.
 	timers.advance(time.Hour)
@@ -707,8 +715,8 @@ func TestUpdateAutoCheck(t *testing.T) {
 		}
 	}
 
-	// A day later the same version is offered again (the user may have chosen Later).
-	timers.advance(23 * time.Hour)
+	// An interval later the same version is offered again (the user may have chosen Later).
+	timers.advance(updateInterval - time.Hour)
 	timers.fire()
 	wantNotice("0.4.0")
 	timers.wantArmed(t, time.Hour)
@@ -723,22 +731,22 @@ func TestUpdateAutoCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	noNotice()
-	timers.advance(24 * time.Hour)
+	timers.advance(updateInterval)
 	timers.fire()
 	wantNotice("0.5.0")
 	timers.wantArmed(t, time.Hour)
 
 	// Up to date: nothing is notified.
 	feed.publish(t, "0.3.3", feed.pkg)
-	timers.advance(24 * time.Hour)
+	timers.advance(updateInterval)
 	timers.fire()
 	timers.wantArmed(t, time.Hour)
 	noNotice()
 
 	// A feed that is not published yet (404) or cannot be reached is only logged.
 	setUpdateSettings(h.m, UpdateSettings{FeedURL: feed.srv.URL + "/missing.json", AutoCheck: true})
-	timers.wantArmed(t, time.Minute) // a new feed: checked a minute later
-	timers.advance(time.Minute)
+	timers.wantArmed(t, updateFirstDelay) // a new feed: checked soon after
+	timers.advance(updateFirstDelay)
 	timers.fire()
 	timers.wantArmed(t, time.Hour)
 	noNotice()
@@ -751,20 +759,20 @@ func TestUpdateAutoCheck(t *testing.T) {
 		t.Errorf("a feed that is not published is logged as a failure: %v", recs)
 	}
 	setUpdateSettings(h.m, UpdateSettings{FeedURL: feed.url(), AutoCheck: true})
-	timers.wantArmed(t, time.Minute)
+	timers.wantArmed(t, updateFirstDelay)
 
 	// Automatic checks off: the timer keeps running but nothing is fetched.
 	setUpdateSettings(h.m, UpdateSettings{FeedURL: feed.url(), AutoCheck: false})
 	hits := feed.hits.Load()
-	timers.advance(24 * time.Hour)
+	timers.advance(updateInterval)
 	timers.fire()
 	timers.wantArmed(t, time.Hour)
 	if feed.hits.Load() != hits {
 		t.Error("checked with auto_check_updates off")
 	}
-	// Turned on again: the next check is a minute away.
+	// Turned on again: the next check is soon.
 	setUpdateSettings(h.m, UpdateSettings{FeedURL: feed.url(), AutoCheck: true})
-	timers.wantArmed(t, time.Minute)
+	timers.wantArmed(t, updateFirstDelay)
 }
 
 // TestUpdateWatchEvent: the window learns each automatic check's result through Watch (its
@@ -818,8 +826,8 @@ func TestUpdateWatchEvent(t *testing.T) {
 		t.Error("CheckForUpdate's result reached the Watch streams")
 	}
 
-	timers.wantArmed(t, time.Minute)
-	timers.advance(time.Minute)
+	timers.wantArmed(t, updateFirstDelay)
+	timers.advance(updateFirstDelay)
 	timers.fire()
 	i := next(first)
 	if i == nil || !i.GetAvailable() || i.GetLatestVersion() != "0.4.0" || i.GetNotes() != "Release 0.4.0" ||
@@ -835,7 +843,7 @@ func TestUpdateWatchEvent(t *testing.T) {
 
 	// The next day's check sends its own result (a new checked_at), also an up-to-date one.
 	feed.publish(t, "0.3.3", feed.pkg)
-	timers.advance(24 * time.Hour)
+	timers.advance(updateInterval)
 	timers.fire()
 	i = next(first)
 	if i == nil || i.GetAvailable() || i.GetLatestVersion() != "0.3.3" || !i.GetCheckedAt().AsTime().Equal(timers.clock()) {

@@ -123,7 +123,7 @@ func (r *confirmRig) waitConfirm(t *testing.T) {
 }
 
 func req(start bool, dir, name string) string {
-	return (&downexv1.ConfirmRequest{Id: 0, Start: start, Dir: dir, Filename: name}).String()
+	return (&downexv1.ConfirmRequest{Id: 0, Start: start, Dir: dir, Filename: name, ProgressWindow: start}).String()
 }
 
 // confirmed is the last confirmation without its id (the test's onconfirm has none).
@@ -325,7 +325,7 @@ func (r *confirmRig) audioSelect() *audioPart {
 }
 
 func tracksReq(start bool, video, audio string) string {
-	return (&downexv1.ConfirmRequest{Start: start, VideoTrack: video, AudioTrack: audio}).String()
+	return (&downexv1.ConfirmRequest{Start: start, VideoTrack: video, AudioTrack: audio, ProgressWindow: start}).String()
 }
 
 func TestConfirmDialogMediaDownloads(t *testing.T) {
@@ -589,7 +589,7 @@ func TestConfirmDialogQueues(t *testing.T) {
 		choose(t, r.h, r.c.QueueSelect, "3")
 		r.start()
 		r.waitConfirm(t)
-		eq(t, "confirm", r.confirmed().String(), (&downexv1.ConfirmRequest{Start: true, QueueId: 3}).String())
+		eq(t, "confirm", r.confirmed().String(), (&downexv1.ConfirmRequest{Start: true, QueueId: 3, ProgressWindow: true}).String())
 		eq(t, "moves", r.moves.n(), 0)
 	})
 	t.Run("reports a move that fails and confirms nothing", func(t *testing.T) {

@@ -264,35 +264,12 @@ func (m *Main) arrivalsEffect() {
 
 // ---- the tools toast (SITE-MEDIA-SPEC §5.4) ---------------------------------------------------
 
-// toolsEffect: a progress toast while downexd downloads yt-dlp and Deno the first time (not for
-// updates of working copies), and a notice that offers the settings when that failed.
-func (m *Main) toolsEffect(stale bool) {
-	a := m.App
-	status := a.Main.Tools.Status()
-	first := state.IsFirstInstall(status)
-	m.Shell.ShowTools(!stale && first)
-	if !stale && first {
-		m.Shell.ToolsToast().Update(status, a.Main.Tools.Fraction())
-	}
-	if first {
-		m.toolsWere = true
-		return
-	}
-	if !m.toolsWere {
-		return
-	}
+// toolsEffect keeps yt-dlp and Deno out of sight: downexd sets them up and updates them in the
+// background by itself (from its start), so the window shows no toast or notice about them. A
+// video page that needs them while they are still missing says so where it is added.
+func (m *Main) toolsEffect(bool) {
+	m.Shell.ShowTools(false)
 	m.toolsWere = false
-	failed := state.FailedTools(status)
-	if status == nil || status.GetReady() || len(failed) == 0 {
-		return
-	}
-	detail := failed[0].GetError()
-	if detail == "" {
-		detail = "Video downloads from web pages need them."
-	}
-	a.Notices.Show(widgets.Notice{Key: "tools", Title: "Downex could not set up yt-dlp/Deno", Detail: text.EscapeBidi(detail), Actions: []widgets.NoticeAction{
-		{Label: "Open settings", Primary: true, Run: m.openVideoSettings},
-	}})
 }
 
 // openVideoSettings is Settings → Video sites (from the Add dialog or a notice).
@@ -316,7 +293,9 @@ func (m *Main) updateEffect(stale bool) {
 	a := m.App
 	st := a.Main.Update
 	info, ok := st.Offer()
+	m.Shell.ShowUpdateProgress(st.Progress(), st.Fraction())
 	if on := m.updateOn; on != nil {
+		on.Refresh()
 		switch {
 		case a.Dialogs.Dialog() != views.Modal(on): // closed, or replaced by another dialog
 			m.updateOn = nil

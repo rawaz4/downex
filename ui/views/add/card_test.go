@@ -31,7 +31,7 @@ func TestVideoCardAddress(t *testing.T) {
 		}
 		eq(t, "tooltip", page.TooltipText(), value)
 		eq(t, "cursor", page.Cursor, kit.CursorText)
-		eq(t, "ellipsis while unfocused", page.Options().Truncate, kit.TruncateEnd)
+		eq(t, "ellipsis in the middle while unfocused (the video id stays)", page.Options().Truncate, kit.TruncateMiddle)
 		eq(t, "dir", page.Options().Direction, kit.DirLTR)
 	})
 
@@ -75,7 +75,7 @@ func TestVideoCardAddress(t *testing.T) {
 	t.Run("a press puts the caret without selecting, and the focus leaving hides the selection", func(t *testing.T) {
 		h.Window.Blur()
 		h.Settle()
-		eq(t, "ellipsis again", page.Options().Truncate, kit.TruncateEnd)
+		eq(t, "ellipsis again", page.Options().Truncate, kit.TruncateMiddle)
 		h.Click(page.Base())
 		if !page.Focused() {
 			t.Fatal("not focused by a press")

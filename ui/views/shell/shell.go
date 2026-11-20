@@ -73,6 +73,7 @@ type Shell struct {
 	postPrev   *kit.Element
 	tools      *ToolsToast
 	toolsShown bool
+	updateBar  *UpdateBar
 }
 
 // ErrNoSlots is New's answer without an App or a grid slot.

@@ -760,6 +760,62 @@ func (ProxyMode) EnumDescriptor() ([]byte, []int) {
 	return file_downex_v1_downex_proto_rawDescGZIP(), []int{12}
 }
 
+// What a running InstallUpdate does.
+type UpdateInstallStage int32
+
+const (
+	UpdateInstallStage_UPDATE_INSTALL_STAGE_UNSPECIFIED UpdateInstallStage = 0 // no install runs
+	UpdateInstallStage_UPDATE_INSTALL_STAGE_DOWNLOADING UpdateInstallStage = 1
+	UpdateInstallStage_UPDATE_INSTALL_STAGE_VERIFYING   UpdateInstallStage = 2
+	UpdateInstallStage_UPDATE_INSTALL_STAGE_INSTALLING  UpdateInstallStage = 3 // downexd pauses the downloads and starts the installer; it exits next
+	UpdateInstallStage_UPDATE_INSTALL_STAGE_FAILED      UpdateInstallStage = 4 // the install failed; downexd keeps running (InstallUpdate says why)
+)
+
+// Enum value maps for UpdateInstallStage.
+var (
+	UpdateInstallStage_name = map[int32]string{
+		0: "UPDATE_INSTALL_STAGE_UNSPECIFIED",
+		1: "UPDATE_INSTALL_STAGE_DOWNLOADING",
+		2: "UPDATE_INSTALL_STAGE_VERIFYING",
+		3: "UPDATE_INSTALL_STAGE_INSTALLING",
+		4: "UPDATE_INSTALL_STAGE_FAILED",
+	}
+	UpdateInstallStage_value = map[string]int32{
+		"UPDATE_INSTALL_STAGE_UNSPECIFIED": 0,
+		"UPDATE_INSTALL_STAGE_DOWNLOADING": 1,
+		"UPDATE_INSTALL_STAGE_VERIFYING":   2,
+		"UPDATE_INSTALL_STAGE_INSTALLING":  3,
+		"UPDATE_INSTALL_STAGE_FAILED":      4,
+	}
+)
+
+func (x UpdateInstallStage) Enum() *UpdateInstallStage {
+	p := new(UpdateInstallStage)
+	*p = x
+	return p
+}
+
+func (x UpdateInstallStage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (UpdateInstallStage) Descriptor() protoreflect.EnumDescriptor {
+	return file_downex_v1_downex_proto_enumTypes[13].Descriptor()
+}
+
+func (UpdateInstallStage) Type() protoreflect.EnumType {
+	return &file_downex_v1_downex_proto_enumTypes[13]
+}
+
+func (x UpdateInstallStage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use UpdateInstallStage.Descriptor instead.
+func (UpdateInstallStage) EnumDescriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{13}
+}
+
 // State of one external tool (yt-dlp or Deno) that site media runs.
 type ToolState int32
 
@@ -803,11 +859,11 @@ func (x ToolState) String() string {
 }
 
 func (ToolState) Descriptor() protoreflect.EnumDescriptor {
-	return file_downex_v1_downex_proto_enumTypes[13].Descriptor()
+	return file_downex_v1_downex_proto_enumTypes[14].Descriptor()
 }
 
 func (ToolState) Type() protoreflect.EnumType {
-	return &file_downex_v1_downex_proto_enumTypes[13]
+	return &file_downex_v1_downex_proto_enumTypes[14]
 }
 
 func (x ToolState) Number() protoreflect.EnumNumber {
@@ -816,7 +872,7 @@ func (x ToolState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolState.Descriptor instead.
 func (ToolState) EnumDescriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{13}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{14}
 }
 
 // One file the tab's player fetched for a video (SITE-MEDIA-SPEC §2.9).
@@ -2479,9 +2535,14 @@ type ConfirmRequest struct {
 	Clip           *MediaClip             `protobuf:"bytes,10,opt,name=clip,proto3" json:"clip,omitempty"`                      // media downloads: unset = keep the part; set with start_ms 0 and end_ms 0 = the whole video
 	// SITE media of a page with several videos (SITE-MEDIA-SPEC §3.12): "" = keep the item; another
 	// item's id resolves the page again for it (its tracks, title and part replace the old ones).
-	EntryId       string `protobuf:"bytes,11,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EntryId string `protobuf:"bytes,11,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	// The caller opens the download's progress window when it starts now (the Confirm download
+	// window and the main window's dialog do, with show_progress_window on): downexd marks the
+	// download for the download complete dialog at once, so its outcome shows in that window,
+	// raised above the browser, instead of a tray notification.
+	ProgressWindow bool `protobuf:"varint,12,opt,name=progress_window,json=progressWindow,proto3" json:"progress_window,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ConfirmRequest) Reset() {
@@ -2589,6 +2650,13 @@ func (x *ConfirmRequest) GetEntryId() string {
 		return x.EntryId
 	}
 	return ""
+}
+
+func (x *ConfirmRequest) GetProgressWindow() bool {
+	if x != nil {
+		return x.ProgressWindow
+	}
+	return false
 }
 
 // AddMedia adds a streaming-media download for an HLS (.m3u8) or DASH (.mpd) manifest.
@@ -4154,6 +4222,7 @@ type Event struct {
 	//	*Event_Tools
 	//	*Event_Update
 	//	*Event_Polite
+	//	*Event_Quit
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4277,6 +4346,15 @@ func (x *Event) GetPolite() *PoliteStatus {
 	return nil
 }
 
+func (x *Event) GetQuit() bool {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_Quit); ok {
+			return x.Quit
+		}
+	}
+	return false
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -4322,6 +4400,12 @@ type Event_Polite struct {
 	Polite *PoliteStatus `protobuf:"bytes,20,opt,name=polite,proto3,oneof"`
 }
 
+type Event_Quit struct {
+	// The user quit Downex (the tray's Quit, the menu-bar icon's Quit, macOS ⌘Q): every window
+	// closes; downexd stops right after. Sent to every Watch stream, with ids or without.
+	Quit bool `protobuf:"varint,21,opt,name=quit,proto3,oneof"`
+}
+
 func (*Event_Snapshot) isEvent_Kind() {}
 
 func (*Event_Updated) isEvent_Kind() {}
@@ -4339,6 +4423,8 @@ func (*Event_Tools) isEvent_Kind() {}
 func (*Event_Update) isEvent_Kind() {}
 
 func (*Event_Polite) isEvent_Kind() {}
+
+func (*Event_Quit) isEvent_Kind() {}
 
 type PoliteStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -5671,7 +5757,9 @@ func (x *UpdateSettingsResponse) GetSettings() *Settings {
 }
 
 type ShutdownRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Also close every window of Downex (macOS ⌘Q in the window): a Watch quit event.
+	QuitApp       bool `protobuf:"varint,1,opt,name=quit_app,json=quitApp,proto3" json:"quit_app,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5704,6 +5792,13 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
 	return file_downex_v1_downex_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *ShutdownRequest) GetQuitApp() bool {
+	if x != nil {
+		return x.QuitApp
+	}
+	return false
 }
 
 type ShutdownResponse struct {
@@ -7063,8 +7158,13 @@ type UpdateInfo struct {
 	Notes          string                 `protobuf:"bytes,4,opt,name=notes,proto3" json:"notes,omitempty"`
 	PublishedAt    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
 	CheckedAt      *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=checked_at,json=checkedAt,proto3" json:"checked_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Set while an InstallUpdate runs (update events of Watch, at most a few a second): what it
+	// does and how much of the package has arrived (download_total 0: not known yet).
+	InstallStage  UpdateInstallStage `protobuf:"varint,7,opt,name=install_stage,json=installStage,proto3,enum=downex.v1.UpdateInstallStage" json:"install_stage,omitempty"`
+	DownloadDone  int64              `protobuf:"varint,8,opt,name=download_done,json=downloadDone,proto3" json:"download_done,omitempty"`
+	DownloadTotal int64              `protobuf:"varint,9,opt,name=download_total,json=downloadTotal,proto3" json:"download_total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateInfo) Reset() {
@@ -7137,6 +7237,27 @@ func (x *UpdateInfo) GetCheckedAt() *timestamppb.Timestamp {
 		return x.CheckedAt
 	}
 	return nil
+}
+
+func (x *UpdateInfo) GetInstallStage() UpdateInstallStage {
+	if x != nil {
+		return x.InstallStage
+	}
+	return UpdateInstallStage_UPDATE_INSTALL_STAGE_UNSPECIFIED
+}
+
+func (x *UpdateInfo) GetDownloadDone() int64 {
+	if x != nil {
+		return x.DownloadDone
+	}
+	return 0
+}
+
+func (x *UpdateInfo) GetDownloadTotal() int64 {
+	if x != nil {
+		return x.DownloadTotal
+	}
+	return 0
 }
 
 type CheckForUpdateRequest struct {
@@ -7925,7 +8046,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\rexpected_size\x18\v \x01(\x03R\fexpectedSize\x12\x12\n" +
 	"\x04mime\x18\f \x01(\tR\x04mime\x12\x19\n" +
 	"\bqueue_id\x18\r \x01(\x03R\aqueueId\x12\x19\n" +
-	"\bpage_url\x18\x0e \x01(\tR\apageUrl\"\xfe\x02\n" +
+	"\bpage_url\x18\x0e \x01(\tR\apageUrl\"\xa7\x03\n" +
 	"\x0eConfirmRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x10\n" +
 	"\x03dir\x18\x02 \x01(\tR\x03dir\x12\x1a\n" +
@@ -7941,7 +8062,8 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\bqueue_id\x18\t \x01(\x03R\aqueueId\x12(\n" +
 	"\x04clip\x18\n" +
 	" \x01(\v2\x14.downex.v1.MediaClipR\x04clip\x12\x19\n" +
-	"\bentry_id\x18\v \x01(\tR\aentryIdB\x12\n" +
+	"\bentry_id\x18\v \x01(\tR\aentryId\x12'\n" +
+	"\x0fprogress_window\x18\f \x01(\bR\x0eprogressWindowB\x12\n" +
 	"\x10_max_connectionsB\x0e\n" +
 	"\f_speed_limit\"\xde\x04\n" +
 	"\x0fAddMediaRequest\x12!\n" +
@@ -8047,7 +8169,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"deleteFile\"\x10\n" +
 	"\x0eRemoveResponse\" \n" +
 	"\fWatchRequest\x12\x10\n" +
-	"\x03ids\x18\x01 \x03(\x03R\x03ids\"\xc4\x03\n" +
+	"\x03ids\x18\x01 \x03(\x03R\x03ids\"\xda\x03\n" +
 	"\x05Event\x121\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x13.downex.v1.DownloadH\x00R\bsnapshot\x12/\n" +
 	"\aupdated\x18\x02 \x01(\v2\x13.downex.v1.DownloadH\x00R\aupdated\x12\x1a\n" +
@@ -8058,7 +8180,8 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"postAction\x12.\n" +
 	"\x05tools\x18\a \x01(\v2\x16.downex.v1.ToolsStatusH\x00R\x05tools\x12/\n" +
 	"\x06update\x18\b \x01(\v2\x15.downex.v1.UpdateInfoH\x00R\x06update\x121\n" +
-	"\x06polite\x18\x14 \x01(\v2\x17.downex.v1.PoliteStatusH\x00R\x06politeB\x06\n" +
+	"\x06polite\x18\x14 \x01(\v2\x17.downex.v1.PoliteStatusH\x00R\x06polite\x12\x14\n" +
+	"\x04quit\x18\x15 \x01(\bH\x00R\x04quitB\x06\n" +
 	"\x04kind\"\xc1\x01\n" +
 	"\fPoliteStatus\x12,\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x16.downex.v1.PoliteStateR\x05state\x12\x1d\n" +
@@ -8186,8 +8309,9 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x15UpdateSettingsRequest\x12/\n" +
 	"\bsettings\x18\x01 \x01(\v2\x13.downex.v1.SettingsR\bsettings\"I\n" +
 	"\x16UpdateSettingsResponse\x12/\n" +
-	"\bsettings\x18\x01 \x01(\v2\x13.downex.v1.SettingsR\bsettings\"\x11\n" +
-	"\x0fShutdownRequest\"\x12\n" +
+	"\bsettings\x18\x01 \x01(\v2\x13.downex.v1.SettingsR\bsettings\",\n" +
+	"\x0fShutdownRequest\x12\x19\n" +
+	"\bquit_app\x18\x01 \x01(\bR\aquitApp\"\x12\n" +
 	"\x10ShutdownResponse\"\x90\x02\n" +
 	"\bSchedule\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12!\n" +
@@ -8276,7 +8400,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x12ClearSecretRequest\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\"\x15\n" +
-	"\x13ClearSecretResponse\"\x8a\x02\n" +
+	"\x13ClearSecretResponse\"\x9a\x03\n" +
 	"\n" +
 	"UpdateInfo\x12'\n" +
 	"\x0fcurrent_version\x18\x01 \x01(\tR\x0ecurrentVersion\x12%\n" +
@@ -8285,7 +8409,10 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x05notes\x18\x04 \x01(\tR\x05notes\x12=\n" +
 	"\fpublished_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\x129\n" +
 	"\n" +
-	"checked_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcheckedAt\"\x17\n" +
+	"checked_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcheckedAt\x12B\n" +
+	"\rinstall_stage\x18\a \x01(\x0e2\x1d.downex.v1.UpdateInstallStageR\finstallStage\x12#\n" +
+	"\rdownload_done\x18\b \x01(\x03R\fdownloadDone\x12%\n" +
+	"\x0edownload_total\x18\t \x01(\x03R\rdownloadTotal\"\x17\n" +
 	"\x15CheckForUpdateRequest\"C\n" +
 	"\x16CheckForUpdateResponse\x12)\n" +
 	"\x04info\x18\x01 \x01(\v2\x15.downex.v1.UpdateInfoR\x04info\"\x16\n" +
@@ -8403,7 +8530,13 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x11PROXY_MODE_SYSTEM\x10\x01\x12\x13\n" +
 	"\x0fPROXY_MODE_NONE\x10\x02\x12\x15\n" +
 	"\x11PROXY_MODE_MANUAL\x10\x03\x12\x12\n" +
-	"\x0ePROXY_MODE_PAC\x10\x04*\xa0\x01\n" +
+	"\x0ePROXY_MODE_PAC\x10\x04*\xca\x01\n" +
+	"\x12UpdateInstallStage\x12$\n" +
+	" UPDATE_INSTALL_STAGE_UNSPECIFIED\x10\x00\x12$\n" +
+	" UPDATE_INSTALL_STAGE_DOWNLOADING\x10\x01\x12\"\n" +
+	"\x1eUPDATE_INSTALL_STAGE_VERIFYING\x10\x02\x12#\n" +
+	"\x1fUPDATE_INSTALL_STAGE_INSTALLING\x10\x03\x12\x1f\n" +
+	"\x1bUPDATE_INSTALL_STAGE_FAILED\x10\x04*\xa0\x01\n" +
 	"\tToolState\x12\x1a\n" +
 	"\x16TOOL_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12TOOL_STATE_MISSING\x10\x01\x12\x19\n" +
@@ -8465,7 +8598,7 @@ func file_downex_v1_downex_proto_rawDescGZIP() []byte {
 	return file_downex_v1_downex_proto_rawDescData
 }
 
-var file_downex_v1_downex_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
+var file_downex_v1_downex_proto_enumTypes = make([]protoimpl.EnumInfo, 15)
 var file_downex_v1_downex_proto_msgTypes = make([]protoimpl.MessageInfo, 98)
 var file_downex_v1_downex_proto_goTypes = []any{
 	(DownloadState)(0),                 // 0: downex.v1.DownloadState
@@ -8481,275 +8614,277 @@ var file_downex_v1_downex_proto_goTypes = []any{
 	(RenewLinks)(0),                    // 10: downex.v1.RenewLinks
 	(PostAction)(0),                    // 11: downex.v1.PostAction
 	(ProxyMode)(0),                     // 12: downex.v1.ProxyMode
-	(ToolState)(0),                     // 13: downex.v1.ToolState
-	(*PlayedResource)(nil),             // 14: downex.v1.PlayedResource
-	(*PlayedSource)(nil),               // 15: downex.v1.PlayedSource
-	(*MediaTrack)(nil),                 // 16: downex.v1.MediaTrack
-	(*MediaInfo)(nil),                  // 17: downex.v1.MediaInfo
-	(*MediaItem)(nil),                  // 18: downex.v1.MediaItem
-	(*Chapter)(nil),                    // 19: downex.v1.Chapter
-	(*MediaClip)(nil),                  // 20: downex.v1.MediaClip
-	(*Header)(nil),                     // 21: downex.v1.Header
-	(*Segment)(nil),                    // 22: downex.v1.Segment
-	(*Download)(nil),                   // 23: downex.v1.Download
-	(*RenewOffer)(nil),                 // 24: downex.v1.RenewOffer
-	(*FileCheck)(nil),                  // 25: downex.v1.FileCheck
-	(*ConnectionInfo)(nil),             // 26: downex.v1.ConnectionInfo
-	(*AddRequest)(nil),                 // 27: downex.v1.AddRequest
-	(*ConfirmRequest)(nil),             // 28: downex.v1.ConfirmRequest
-	(*AddMediaRequest)(nil),            // 29: downex.v1.AddMediaRequest
-	(*AddMediaResponse)(nil),           // 30: downex.v1.AddMediaResponse
-	(*TakeBrowserFetchRequest)(nil),    // 31: downex.v1.TakeBrowserFetchRequest
-	(*TakeBrowserFetchResponse)(nil),   // 32: downex.v1.TakeBrowserFetchResponse
-	(*BrowserFetch)(nil),               // 33: downex.v1.BrowserFetch
-	(*PutBrowserFetchRequest)(nil),     // 34: downex.v1.PutBrowserFetchRequest
-	(*BrowserFetchHead)(nil),           // 35: downex.v1.BrowserFetchHead
-	(*PutBrowserFetchResponse)(nil),    // 36: downex.v1.PutBrowserFetchResponse
-	(*ProbeMediaRequest)(nil),          // 37: downex.v1.ProbeMediaRequest
-	(*ProbeMediaResponse)(nil),         // 38: downex.v1.ProbeMediaResponse
-	(*ConfirmResponse)(nil),            // 39: downex.v1.ConfirmResponse
-	(*PauseAllRequest)(nil),            // 40: downex.v1.PauseAllRequest
-	(*PauseAllResponse)(nil),           // 41: downex.v1.PauseAllResponse
-	(*ResumeAllRequest)(nil),           // 42: downex.v1.ResumeAllRequest
-	(*ResumeAllResponse)(nil),          // 43: downex.v1.ResumeAllResponse
-	(*AddResponse)(nil),                // 44: downex.v1.AddResponse
-	(*ListRequest)(nil),                // 45: downex.v1.ListRequest
-	(*ListResponse)(nil),               // 46: downex.v1.ListResponse
-	(*GetRequest)(nil),                 // 47: downex.v1.GetRequest
-	(*GetResponse)(nil),                // 48: downex.v1.GetResponse
-	(*PauseRequest)(nil),               // 49: downex.v1.PauseRequest
-	(*PauseResponse)(nil),              // 50: downex.v1.PauseResponse
-	(*ResumeRequest)(nil),              // 51: downex.v1.ResumeRequest
-	(*ResumeResponse)(nil),             // 52: downex.v1.ResumeResponse
-	(*RemoveRequest)(nil),              // 53: downex.v1.RemoveRequest
-	(*RemoveResponse)(nil),             // 54: downex.v1.RemoveResponse
-	(*WatchRequest)(nil),               // 55: downex.v1.WatchRequest
-	(*Event)(nil),                      // 56: downex.v1.Event
-	(*PoliteStatus)(nil),               // 57: downex.v1.PoliteStatus
-	(*WatchResponse)(nil),              // 58: downex.v1.WatchResponse
-	(*RenewLinkRequest)(nil),           // 59: downex.v1.RenewLinkRequest
-	(*RenewLinkResponse)(nil),          // 60: downex.v1.RenewLinkResponse
-	(*RescueRequest)(nil),              // 61: downex.v1.RescueRequest
-	(*RescueResponse)(nil),             // 62: downex.v1.RescueResponse
-	(*SetDownloadOptionsRequest)(nil),  // 63: downex.v1.SetDownloadOptionsRequest
-	(*SetDownloadOptionsResponse)(nil), // 64: downex.v1.SetDownloadOptionsResponse
-	(*Category)(nil),                   // 65: downex.v1.Category
-	(*Settings)(nil),                   // 66: downex.v1.Settings
-	(*StatusRequest)(nil),              // 67: downex.v1.StatusRequest
-	(*StatusResponse)(nil),             // 68: downex.v1.StatusResponse
-	(*GetSettingsRequest)(nil),         // 69: downex.v1.GetSettingsRequest
-	(*GetSettingsResponse)(nil),        // 70: downex.v1.GetSettingsResponse
-	(*UpdateSettingsRequest)(nil),      // 71: downex.v1.UpdateSettingsRequest
-	(*UpdateSettingsResponse)(nil),     // 72: downex.v1.UpdateSettingsResponse
-	(*ShutdownRequest)(nil),            // 73: downex.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),           // 74: downex.v1.ShutdownResponse
-	(*Schedule)(nil),                   // 75: downex.v1.Schedule
-	(*Queue)(nil),                      // 76: downex.v1.Queue
-	(*PostActionPending)(nil),          // 77: downex.v1.PostActionPending
-	(*ListQueuesRequest)(nil),          // 78: downex.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),         // 79: downex.v1.ListQueuesResponse
-	(*CreateQueueRequest)(nil),         // 80: downex.v1.CreateQueueRequest
-	(*CreateQueueResponse)(nil),        // 81: downex.v1.CreateQueueResponse
-	(*UpdateQueueRequest)(nil),         // 82: downex.v1.UpdateQueueRequest
-	(*UpdateQueueResponse)(nil),        // 83: downex.v1.UpdateQueueResponse
-	(*DeleteQueueRequest)(nil),         // 84: downex.v1.DeleteQueueRequest
-	(*DeleteQueueResponse)(nil),        // 85: downex.v1.DeleteQueueResponse
-	(*StartQueueRequest)(nil),          // 86: downex.v1.StartQueueRequest
-	(*StartQueueResponse)(nil),         // 87: downex.v1.StartQueueResponse
-	(*StopQueueRequest)(nil),           // 88: downex.v1.StopQueueRequest
-	(*StopQueueResponse)(nil),          // 89: downex.v1.StopQueueResponse
-	(*MoveDownloadsRequest)(nil),       // 90: downex.v1.MoveDownloadsRequest
-	(*MoveDownloadsResponse)(nil),      // 91: downex.v1.MoveDownloadsResponse
-	(*ProxySettings)(nil),              // 92: downex.v1.ProxySettings
-	(*HostRule)(nil),                   // 93: downex.v1.HostRule
-	(*SiteLogin)(nil),                  // 94: downex.v1.SiteLogin
-	(*SetSecretRequest)(nil),           // 95: downex.v1.SetSecretRequest
-	(*SetSecretResponse)(nil),          // 96: downex.v1.SetSecretResponse
-	(*ClearSecretRequest)(nil),         // 97: downex.v1.ClearSecretRequest
-	(*ClearSecretResponse)(nil),        // 98: downex.v1.ClearSecretResponse
-	(*UpdateInfo)(nil),                 // 99: downex.v1.UpdateInfo
-	(*CheckForUpdateRequest)(nil),      // 100: downex.v1.CheckForUpdateRequest
-	(*CheckForUpdateResponse)(nil),     // 101: downex.v1.CheckForUpdateResponse
-	(*InstallUpdateRequest)(nil),       // 102: downex.v1.InstallUpdateRequest
-	(*InstallUpdateResponse)(nil),      // 103: downex.v1.InstallUpdateResponse
-	(*CancelPostActionRequest)(nil),    // 104: downex.v1.CancelPostActionRequest
-	(*CancelPostActionResponse)(nil),   // 105: downex.v1.CancelPostActionResponse
-	(*ToolInfo)(nil),                   // 106: downex.v1.ToolInfo
-	(*ToolsStatus)(nil),                // 107: downex.v1.ToolsStatus
-	(*GetToolsRequest)(nil),            // 108: downex.v1.GetToolsRequest
-	(*GetToolsResponse)(nil),           // 109: downex.v1.GetToolsResponse
-	(*InstallToolsRequest)(nil),        // 110: downex.v1.InstallToolsRequest
-	(*InstallToolsResponse)(nil),       // 111: downex.v1.InstallToolsResponse
-	(*timestamppb.Timestamp)(nil),      // 112: google.protobuf.Timestamp
+	(UpdateInstallStage)(0),            // 13: downex.v1.UpdateInstallStage
+	(ToolState)(0),                     // 14: downex.v1.ToolState
+	(*PlayedResource)(nil),             // 15: downex.v1.PlayedResource
+	(*PlayedSource)(nil),               // 16: downex.v1.PlayedSource
+	(*MediaTrack)(nil),                 // 17: downex.v1.MediaTrack
+	(*MediaInfo)(nil),                  // 18: downex.v1.MediaInfo
+	(*MediaItem)(nil),                  // 19: downex.v1.MediaItem
+	(*Chapter)(nil),                    // 20: downex.v1.Chapter
+	(*MediaClip)(nil),                  // 21: downex.v1.MediaClip
+	(*Header)(nil),                     // 22: downex.v1.Header
+	(*Segment)(nil),                    // 23: downex.v1.Segment
+	(*Download)(nil),                   // 24: downex.v1.Download
+	(*RenewOffer)(nil),                 // 25: downex.v1.RenewOffer
+	(*FileCheck)(nil),                  // 26: downex.v1.FileCheck
+	(*ConnectionInfo)(nil),             // 27: downex.v1.ConnectionInfo
+	(*AddRequest)(nil),                 // 28: downex.v1.AddRequest
+	(*ConfirmRequest)(nil),             // 29: downex.v1.ConfirmRequest
+	(*AddMediaRequest)(nil),            // 30: downex.v1.AddMediaRequest
+	(*AddMediaResponse)(nil),           // 31: downex.v1.AddMediaResponse
+	(*TakeBrowserFetchRequest)(nil),    // 32: downex.v1.TakeBrowserFetchRequest
+	(*TakeBrowserFetchResponse)(nil),   // 33: downex.v1.TakeBrowserFetchResponse
+	(*BrowserFetch)(nil),               // 34: downex.v1.BrowserFetch
+	(*PutBrowserFetchRequest)(nil),     // 35: downex.v1.PutBrowserFetchRequest
+	(*BrowserFetchHead)(nil),           // 36: downex.v1.BrowserFetchHead
+	(*PutBrowserFetchResponse)(nil),    // 37: downex.v1.PutBrowserFetchResponse
+	(*ProbeMediaRequest)(nil),          // 38: downex.v1.ProbeMediaRequest
+	(*ProbeMediaResponse)(nil),         // 39: downex.v1.ProbeMediaResponse
+	(*ConfirmResponse)(nil),            // 40: downex.v1.ConfirmResponse
+	(*PauseAllRequest)(nil),            // 41: downex.v1.PauseAllRequest
+	(*PauseAllResponse)(nil),           // 42: downex.v1.PauseAllResponse
+	(*ResumeAllRequest)(nil),           // 43: downex.v1.ResumeAllRequest
+	(*ResumeAllResponse)(nil),          // 44: downex.v1.ResumeAllResponse
+	(*AddResponse)(nil),                // 45: downex.v1.AddResponse
+	(*ListRequest)(nil),                // 46: downex.v1.ListRequest
+	(*ListResponse)(nil),               // 47: downex.v1.ListResponse
+	(*GetRequest)(nil),                 // 48: downex.v1.GetRequest
+	(*GetResponse)(nil),                // 49: downex.v1.GetResponse
+	(*PauseRequest)(nil),               // 50: downex.v1.PauseRequest
+	(*PauseResponse)(nil),              // 51: downex.v1.PauseResponse
+	(*ResumeRequest)(nil),              // 52: downex.v1.ResumeRequest
+	(*ResumeResponse)(nil),             // 53: downex.v1.ResumeResponse
+	(*RemoveRequest)(nil),              // 54: downex.v1.RemoveRequest
+	(*RemoveResponse)(nil),             // 55: downex.v1.RemoveResponse
+	(*WatchRequest)(nil),               // 56: downex.v1.WatchRequest
+	(*Event)(nil),                      // 57: downex.v1.Event
+	(*PoliteStatus)(nil),               // 58: downex.v1.PoliteStatus
+	(*WatchResponse)(nil),              // 59: downex.v1.WatchResponse
+	(*RenewLinkRequest)(nil),           // 60: downex.v1.RenewLinkRequest
+	(*RenewLinkResponse)(nil),          // 61: downex.v1.RenewLinkResponse
+	(*RescueRequest)(nil),              // 62: downex.v1.RescueRequest
+	(*RescueResponse)(nil),             // 63: downex.v1.RescueResponse
+	(*SetDownloadOptionsRequest)(nil),  // 64: downex.v1.SetDownloadOptionsRequest
+	(*SetDownloadOptionsResponse)(nil), // 65: downex.v1.SetDownloadOptionsResponse
+	(*Category)(nil),                   // 66: downex.v1.Category
+	(*Settings)(nil),                   // 67: downex.v1.Settings
+	(*StatusRequest)(nil),              // 68: downex.v1.StatusRequest
+	(*StatusResponse)(nil),             // 69: downex.v1.StatusResponse
+	(*GetSettingsRequest)(nil),         // 70: downex.v1.GetSettingsRequest
+	(*GetSettingsResponse)(nil),        // 71: downex.v1.GetSettingsResponse
+	(*UpdateSettingsRequest)(nil),      // 72: downex.v1.UpdateSettingsRequest
+	(*UpdateSettingsResponse)(nil),     // 73: downex.v1.UpdateSettingsResponse
+	(*ShutdownRequest)(nil),            // 74: downex.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),           // 75: downex.v1.ShutdownResponse
+	(*Schedule)(nil),                   // 76: downex.v1.Schedule
+	(*Queue)(nil),                      // 77: downex.v1.Queue
+	(*PostActionPending)(nil),          // 78: downex.v1.PostActionPending
+	(*ListQueuesRequest)(nil),          // 79: downex.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),         // 80: downex.v1.ListQueuesResponse
+	(*CreateQueueRequest)(nil),         // 81: downex.v1.CreateQueueRequest
+	(*CreateQueueResponse)(nil),        // 82: downex.v1.CreateQueueResponse
+	(*UpdateQueueRequest)(nil),         // 83: downex.v1.UpdateQueueRequest
+	(*UpdateQueueResponse)(nil),        // 84: downex.v1.UpdateQueueResponse
+	(*DeleteQueueRequest)(nil),         // 85: downex.v1.DeleteQueueRequest
+	(*DeleteQueueResponse)(nil),        // 86: downex.v1.DeleteQueueResponse
+	(*StartQueueRequest)(nil),          // 87: downex.v1.StartQueueRequest
+	(*StartQueueResponse)(nil),         // 88: downex.v1.StartQueueResponse
+	(*StopQueueRequest)(nil),           // 89: downex.v1.StopQueueRequest
+	(*StopQueueResponse)(nil),          // 90: downex.v1.StopQueueResponse
+	(*MoveDownloadsRequest)(nil),       // 91: downex.v1.MoveDownloadsRequest
+	(*MoveDownloadsResponse)(nil),      // 92: downex.v1.MoveDownloadsResponse
+	(*ProxySettings)(nil),              // 93: downex.v1.ProxySettings
+	(*HostRule)(nil),                   // 94: downex.v1.HostRule
+	(*SiteLogin)(nil),                  // 95: downex.v1.SiteLogin
+	(*SetSecretRequest)(nil),           // 96: downex.v1.SetSecretRequest
+	(*SetSecretResponse)(nil),          // 97: downex.v1.SetSecretResponse
+	(*ClearSecretRequest)(nil),         // 98: downex.v1.ClearSecretRequest
+	(*ClearSecretResponse)(nil),        // 99: downex.v1.ClearSecretResponse
+	(*UpdateInfo)(nil),                 // 100: downex.v1.UpdateInfo
+	(*CheckForUpdateRequest)(nil),      // 101: downex.v1.CheckForUpdateRequest
+	(*CheckForUpdateResponse)(nil),     // 102: downex.v1.CheckForUpdateResponse
+	(*InstallUpdateRequest)(nil),       // 103: downex.v1.InstallUpdateRequest
+	(*InstallUpdateResponse)(nil),      // 104: downex.v1.InstallUpdateResponse
+	(*CancelPostActionRequest)(nil),    // 105: downex.v1.CancelPostActionRequest
+	(*CancelPostActionResponse)(nil),   // 106: downex.v1.CancelPostActionResponse
+	(*ToolInfo)(nil),                   // 107: downex.v1.ToolInfo
+	(*ToolsStatus)(nil),                // 108: downex.v1.ToolsStatus
+	(*GetToolsRequest)(nil),            // 109: downex.v1.GetToolsRequest
+	(*GetToolsResponse)(nil),           // 110: downex.v1.GetToolsResponse
+	(*InstallToolsRequest)(nil),        // 111: downex.v1.InstallToolsRequest
+	(*InstallToolsResponse)(nil),       // 112: downex.v1.InstallToolsResponse
+	(*timestamppb.Timestamp)(nil),      // 113: google.protobuf.Timestamp
 }
 var file_downex_v1_downex_proto_depIdxs = []int32{
-	14,  // 0: downex.v1.PlayedSource.resources:type_name -> downex.v1.PlayedResource
-	16,  // 1: downex.v1.MediaInfo.tracks:type_name -> downex.v1.MediaTrack
+	15,  // 0: downex.v1.PlayedSource.resources:type_name -> downex.v1.PlayedResource
+	17,  // 1: downex.v1.MediaInfo.tracks:type_name -> downex.v1.MediaTrack
 	2,   // 2: downex.v1.MediaInfo.origin:type_name -> downex.v1.MediaOrigin
-	19,  // 3: downex.v1.MediaInfo.chapters:type_name -> downex.v1.Chapter
-	20,  // 4: downex.v1.MediaInfo.clip:type_name -> downex.v1.MediaClip
-	18,  // 5: downex.v1.MediaInfo.items:type_name -> downex.v1.MediaItem
+	20,  // 3: downex.v1.MediaInfo.chapters:type_name -> downex.v1.Chapter
+	21,  // 4: downex.v1.MediaInfo.clip:type_name -> downex.v1.MediaClip
+	19,  // 5: downex.v1.MediaInfo.items:type_name -> downex.v1.MediaItem
 	0,   // 6: downex.v1.Download.state:type_name -> downex.v1.DownloadState
 	4,   // 7: downex.v1.Download.mode:type_name -> downex.v1.Mode
-	112, // 8: downex.v1.Download.created_at:type_name -> google.protobuf.Timestamp
-	112, // 9: downex.v1.Download.updated_at:type_name -> google.protobuf.Timestamp
-	112, // 10: downex.v1.Download.completed_at:type_name -> google.protobuf.Timestamp
-	22,  // 11: downex.v1.Download.segments:type_name -> downex.v1.Segment
+	113, // 8: downex.v1.Download.created_at:type_name -> google.protobuf.Timestamp
+	113, // 9: downex.v1.Download.updated_at:type_name -> google.protobuf.Timestamp
+	113, // 10: downex.v1.Download.completed_at:type_name -> google.protobuf.Timestamp
+	23,  // 11: downex.v1.Download.segments:type_name -> downex.v1.Segment
 	3,   // 12: downex.v1.Download.source:type_name -> downex.v1.AddSource
 	1,   // 13: downex.v1.Download.kind:type_name -> downex.v1.DownloadKind
-	17,  // 14: downex.v1.Download.media:type_name -> downex.v1.MediaInfo
-	26,  // 15: downex.v1.Download.connection_info:type_name -> downex.v1.ConnectionInfo
-	112, // 16: downex.v1.Download.started_at:type_name -> google.protobuf.Timestamp
-	25,  // 17: downex.v1.Download.file_check:type_name -> downex.v1.FileCheck
-	24,  // 18: downex.v1.Download.renew_offer:type_name -> downex.v1.RenewOffer
+	18,  // 14: downex.v1.Download.media:type_name -> downex.v1.MediaInfo
+	27,  // 15: downex.v1.Download.connection_info:type_name -> downex.v1.ConnectionInfo
+	113, // 16: downex.v1.Download.started_at:type_name -> google.protobuf.Timestamp
+	26,  // 17: downex.v1.Download.file_check:type_name -> downex.v1.FileCheck
+	25,  // 18: downex.v1.Download.renew_offer:type_name -> downex.v1.RenewOffer
 	5,   // 19: downex.v1.FileCheck.level:type_name -> downex.v1.FileCheckLevel
 	6,   // 20: downex.v1.FileCheck.stage:type_name -> downex.v1.FileCheckStage
 	7,   // 21: downex.v1.ConnectionInfo.state:type_name -> downex.v1.ConnectionState
-	21,  // 22: downex.v1.AddRequest.headers:type_name -> downex.v1.Header
+	22,  // 22: downex.v1.AddRequest.headers:type_name -> downex.v1.Header
 	3,   // 23: downex.v1.AddRequest.source:type_name -> downex.v1.AddSource
-	20,  // 24: downex.v1.ConfirmRequest.clip:type_name -> downex.v1.MediaClip
-	21,  // 25: downex.v1.AddMediaRequest.headers:type_name -> downex.v1.Header
+	21,  // 24: downex.v1.ConfirmRequest.clip:type_name -> downex.v1.MediaClip
+	22,  // 25: downex.v1.AddMediaRequest.headers:type_name -> downex.v1.Header
 	3,   // 26: downex.v1.AddMediaRequest.source:type_name -> downex.v1.AddSource
 	2,   // 27: downex.v1.AddMediaRequest.origin:type_name -> downex.v1.MediaOrigin
-	20,  // 28: downex.v1.AddMediaRequest.clip:type_name -> downex.v1.MediaClip
-	15,  // 29: downex.v1.AddMediaRequest.played:type_name -> downex.v1.PlayedSource
-	23,  // 30: downex.v1.AddMediaResponse.download:type_name -> downex.v1.Download
-	33,  // 31: downex.v1.TakeBrowserFetchResponse.fetch:type_name -> downex.v1.BrowserFetch
-	35,  // 32: downex.v1.PutBrowserFetchRequest.head:type_name -> downex.v1.BrowserFetchHead
-	21,  // 33: downex.v1.ProbeMediaRequest.headers:type_name -> downex.v1.Header
+	21,  // 28: downex.v1.AddMediaRequest.clip:type_name -> downex.v1.MediaClip
+	16,  // 29: downex.v1.AddMediaRequest.played:type_name -> downex.v1.PlayedSource
+	24,  // 30: downex.v1.AddMediaResponse.download:type_name -> downex.v1.Download
+	34,  // 31: downex.v1.TakeBrowserFetchResponse.fetch:type_name -> downex.v1.BrowserFetch
+	36,  // 32: downex.v1.PutBrowserFetchRequest.head:type_name -> downex.v1.BrowserFetchHead
+	22,  // 33: downex.v1.ProbeMediaRequest.headers:type_name -> downex.v1.Header
 	2,   // 34: downex.v1.ProbeMediaRequest.origin:type_name -> downex.v1.MediaOrigin
-	15,  // 35: downex.v1.ProbeMediaRequest.played:type_name -> downex.v1.PlayedSource
-	17,  // 36: downex.v1.ProbeMediaResponse.media:type_name -> downex.v1.MediaInfo
-	23,  // 37: downex.v1.ConfirmResponse.download:type_name -> downex.v1.Download
-	23,  // 38: downex.v1.AddResponse.download:type_name -> downex.v1.Download
-	23,  // 39: downex.v1.ListResponse.downloads:type_name -> downex.v1.Download
-	23,  // 40: downex.v1.GetResponse.download:type_name -> downex.v1.Download
-	23,  // 41: downex.v1.PauseResponse.download:type_name -> downex.v1.Download
+	16,  // 35: downex.v1.ProbeMediaRequest.played:type_name -> downex.v1.PlayedSource
+	18,  // 36: downex.v1.ProbeMediaResponse.media:type_name -> downex.v1.MediaInfo
+	24,  // 37: downex.v1.ConfirmResponse.download:type_name -> downex.v1.Download
+	24,  // 38: downex.v1.AddResponse.download:type_name -> downex.v1.Download
+	24,  // 39: downex.v1.ListResponse.downloads:type_name -> downex.v1.Download
+	24,  // 40: downex.v1.GetResponse.download:type_name -> downex.v1.Download
+	24,  // 41: downex.v1.PauseResponse.download:type_name -> downex.v1.Download
 	8,   // 42: downex.v1.ResumeRequest.existing_file:type_name -> downex.v1.ExistingFile
-	23,  // 43: downex.v1.ResumeResponse.download:type_name -> downex.v1.Download
-	23,  // 44: downex.v1.Event.snapshot:type_name -> downex.v1.Download
-	23,  // 45: downex.v1.Event.updated:type_name -> downex.v1.Download
-	76,  // 46: downex.v1.Event.queue_updated:type_name -> downex.v1.Queue
-	77,  // 47: downex.v1.Event.post_action:type_name -> downex.v1.PostActionPending
-	107, // 48: downex.v1.Event.tools:type_name -> downex.v1.ToolsStatus
-	99,  // 49: downex.v1.Event.update:type_name -> downex.v1.UpdateInfo
-	57,  // 50: downex.v1.Event.polite:type_name -> downex.v1.PoliteStatus
+	24,  // 43: downex.v1.ResumeResponse.download:type_name -> downex.v1.Download
+	24,  // 44: downex.v1.Event.snapshot:type_name -> downex.v1.Download
+	24,  // 45: downex.v1.Event.updated:type_name -> downex.v1.Download
+	77,  // 46: downex.v1.Event.queue_updated:type_name -> downex.v1.Queue
+	78,  // 47: downex.v1.Event.post_action:type_name -> downex.v1.PostActionPending
+	108, // 48: downex.v1.Event.tools:type_name -> downex.v1.ToolsStatus
+	100, // 49: downex.v1.Event.update:type_name -> downex.v1.UpdateInfo
+	58,  // 50: downex.v1.Event.polite:type_name -> downex.v1.PoliteStatus
 	9,   // 51: downex.v1.PoliteStatus.state:type_name -> downex.v1.PoliteState
-	112, // 52: downex.v1.PoliteStatus.since:type_name -> google.protobuf.Timestamp
-	56,  // 53: downex.v1.WatchResponse.events:type_name -> downex.v1.Event
-	21,  // 54: downex.v1.RenewLinkRequest.headers:type_name -> downex.v1.Header
-	23,  // 55: downex.v1.RenewLinkResponse.download:type_name -> downex.v1.Download
-	21,  // 56: downex.v1.RescueRequest.headers:type_name -> downex.v1.Header
+	113, // 52: downex.v1.PoliteStatus.since:type_name -> google.protobuf.Timestamp
+	57,  // 53: downex.v1.WatchResponse.events:type_name -> downex.v1.Event
+	22,  // 54: downex.v1.RenewLinkRequest.headers:type_name -> downex.v1.Header
+	24,  // 55: downex.v1.RenewLinkResponse.download:type_name -> downex.v1.Download
+	22,  // 56: downex.v1.RescueRequest.headers:type_name -> downex.v1.Header
 	3,   // 57: downex.v1.RescueRequest.source:type_name -> downex.v1.AddSource
-	23,  // 58: downex.v1.RescueResponse.download:type_name -> downex.v1.Download
-	23,  // 59: downex.v1.SetDownloadOptionsResponse.download:type_name -> downex.v1.Download
-	65,  // 60: downex.v1.Settings.categories:type_name -> downex.v1.Category
-	92,  // 61: downex.v1.Settings.proxy:type_name -> downex.v1.ProxySettings
-	93,  // 62: downex.v1.Settings.host_rules:type_name -> downex.v1.HostRule
-	94,  // 63: downex.v1.Settings.site_logins:type_name -> downex.v1.SiteLogin
+	24,  // 58: downex.v1.RescueResponse.download:type_name -> downex.v1.Download
+	24,  // 59: downex.v1.SetDownloadOptionsResponse.download:type_name -> downex.v1.Download
+	66,  // 60: downex.v1.Settings.categories:type_name -> downex.v1.Category
+	93,  // 61: downex.v1.Settings.proxy:type_name -> downex.v1.ProxySettings
+	94,  // 62: downex.v1.Settings.host_rules:type_name -> downex.v1.HostRule
+	95,  // 63: downex.v1.Settings.site_logins:type_name -> downex.v1.SiteLogin
 	10,  // 64: downex.v1.Settings.renew_links:type_name -> downex.v1.RenewLinks
-	112, // 65: downex.v1.StatusResponse.started_at:type_name -> google.protobuf.Timestamp
-	57,  // 66: downex.v1.StatusResponse.polite:type_name -> downex.v1.PoliteStatus
-	66,  // 67: downex.v1.GetSettingsResponse.settings:type_name -> downex.v1.Settings
-	66,  // 68: downex.v1.UpdateSettingsRequest.settings:type_name -> downex.v1.Settings
-	66,  // 69: downex.v1.UpdateSettingsResponse.settings:type_name -> downex.v1.Settings
-	75,  // 70: downex.v1.Queue.schedule:type_name -> downex.v1.Schedule
+	113, // 65: downex.v1.StatusResponse.started_at:type_name -> google.protobuf.Timestamp
+	58,  // 66: downex.v1.StatusResponse.polite:type_name -> downex.v1.PoliteStatus
+	67,  // 67: downex.v1.GetSettingsResponse.settings:type_name -> downex.v1.Settings
+	67,  // 68: downex.v1.UpdateSettingsRequest.settings:type_name -> downex.v1.Settings
+	67,  // 69: downex.v1.UpdateSettingsResponse.settings:type_name -> downex.v1.Settings
+	76,  // 70: downex.v1.Queue.schedule:type_name -> downex.v1.Schedule
 	11,  // 71: downex.v1.Queue.post_action:type_name -> downex.v1.PostAction
 	11,  // 72: downex.v1.PostActionPending.action:type_name -> downex.v1.PostAction
-	112, // 73: downex.v1.PostActionPending.deadline:type_name -> google.protobuf.Timestamp
-	76,  // 74: downex.v1.ListQueuesResponse.queues:type_name -> downex.v1.Queue
-	76,  // 75: downex.v1.CreateQueueRequest.queue:type_name -> downex.v1.Queue
-	76,  // 76: downex.v1.CreateQueueResponse.queue:type_name -> downex.v1.Queue
-	76,  // 77: downex.v1.UpdateQueueRequest.queue:type_name -> downex.v1.Queue
-	76,  // 78: downex.v1.UpdateQueueResponse.queue:type_name -> downex.v1.Queue
-	76,  // 79: downex.v1.StartQueueResponse.queue:type_name -> downex.v1.Queue
-	76,  // 80: downex.v1.StopQueueResponse.queue:type_name -> downex.v1.Queue
-	76,  // 81: downex.v1.MoveDownloadsResponse.queue:type_name -> downex.v1.Queue
+	113, // 73: downex.v1.PostActionPending.deadline:type_name -> google.protobuf.Timestamp
+	77,  // 74: downex.v1.ListQueuesResponse.queues:type_name -> downex.v1.Queue
+	77,  // 75: downex.v1.CreateQueueRequest.queue:type_name -> downex.v1.Queue
+	77,  // 76: downex.v1.CreateQueueResponse.queue:type_name -> downex.v1.Queue
+	77,  // 77: downex.v1.UpdateQueueRequest.queue:type_name -> downex.v1.Queue
+	77,  // 78: downex.v1.UpdateQueueResponse.queue:type_name -> downex.v1.Queue
+	77,  // 79: downex.v1.StartQueueResponse.queue:type_name -> downex.v1.Queue
+	77,  // 80: downex.v1.StopQueueResponse.queue:type_name -> downex.v1.Queue
+	77,  // 81: downex.v1.MoveDownloadsResponse.queue:type_name -> downex.v1.Queue
 	12,  // 82: downex.v1.ProxySettings.mode:type_name -> downex.v1.ProxyMode
-	112, // 83: downex.v1.UpdateInfo.published_at:type_name -> google.protobuf.Timestamp
-	112, // 84: downex.v1.UpdateInfo.checked_at:type_name -> google.protobuf.Timestamp
-	99,  // 85: downex.v1.CheckForUpdateResponse.info:type_name -> downex.v1.UpdateInfo
-	99,  // 86: downex.v1.InstallUpdateResponse.info:type_name -> downex.v1.UpdateInfo
-	13,  // 87: downex.v1.ToolInfo.state:type_name -> downex.v1.ToolState
-	112, // 88: downex.v1.ToolInfo.checked_at:type_name -> google.protobuf.Timestamp
-	106, // 89: downex.v1.ToolsStatus.tools:type_name -> downex.v1.ToolInfo
-	107, // 90: downex.v1.GetToolsResponse.status:type_name -> downex.v1.ToolsStatus
-	107, // 91: downex.v1.InstallToolsResponse.status:type_name -> downex.v1.ToolsStatus
-	27,  // 92: downex.v1.DownloadService.Add:input_type -> downex.v1.AddRequest
-	45,  // 93: downex.v1.DownloadService.List:input_type -> downex.v1.ListRequest
-	47,  // 94: downex.v1.DownloadService.Get:input_type -> downex.v1.GetRequest
-	49,  // 95: downex.v1.DownloadService.Pause:input_type -> downex.v1.PauseRequest
-	51,  // 96: downex.v1.DownloadService.Resume:input_type -> downex.v1.ResumeRequest
-	53,  // 97: downex.v1.DownloadService.Remove:input_type -> downex.v1.RemoveRequest
-	55,  // 98: downex.v1.DownloadService.Watch:input_type -> downex.v1.WatchRequest
-	28,  // 99: downex.v1.DownloadService.Confirm:input_type -> downex.v1.ConfirmRequest
-	40,  // 100: downex.v1.DownloadService.PauseAll:input_type -> downex.v1.PauseAllRequest
-	42,  // 101: downex.v1.DownloadService.ResumeAll:input_type -> downex.v1.ResumeAllRequest
-	29,  // 102: downex.v1.DownloadService.AddMedia:input_type -> downex.v1.AddMediaRequest
-	37,  // 103: downex.v1.DownloadService.ProbeMedia:input_type -> downex.v1.ProbeMediaRequest
-	63,  // 104: downex.v1.DownloadService.SetDownloadOptions:input_type -> downex.v1.SetDownloadOptionsRequest
-	59,  // 105: downex.v1.DownloadService.RenewLink:input_type -> downex.v1.RenewLinkRequest
-	61,  // 106: downex.v1.DownloadService.Rescue:input_type -> downex.v1.RescueRequest
-	31,  // 107: downex.v1.DownloadService.TakeBrowserFetch:input_type -> downex.v1.TakeBrowserFetchRequest
-	34,  // 108: downex.v1.DownloadService.PutBrowserFetch:input_type -> downex.v1.PutBrowserFetchRequest
-	67,  // 109: downex.v1.DaemonService.Status:input_type -> downex.v1.StatusRequest
-	69,  // 110: downex.v1.DaemonService.GetSettings:input_type -> downex.v1.GetSettingsRequest
-	71,  // 111: downex.v1.DaemonService.UpdateSettings:input_type -> downex.v1.UpdateSettingsRequest
-	73,  // 112: downex.v1.DaemonService.Shutdown:input_type -> downex.v1.ShutdownRequest
-	95,  // 113: downex.v1.DaemonService.SetSecret:input_type -> downex.v1.SetSecretRequest
-	97,  // 114: downex.v1.DaemonService.ClearSecret:input_type -> downex.v1.ClearSecretRequest
-	100, // 115: downex.v1.DaemonService.CheckForUpdate:input_type -> downex.v1.CheckForUpdateRequest
-	102, // 116: downex.v1.DaemonService.InstallUpdate:input_type -> downex.v1.InstallUpdateRequest
-	104, // 117: downex.v1.DaemonService.CancelPostAction:input_type -> downex.v1.CancelPostActionRequest
-	108, // 118: downex.v1.DaemonService.GetTools:input_type -> downex.v1.GetToolsRequest
-	110, // 119: downex.v1.DaemonService.InstallTools:input_type -> downex.v1.InstallToolsRequest
-	78,  // 120: downex.v1.QueueService.ListQueues:input_type -> downex.v1.ListQueuesRequest
-	80,  // 121: downex.v1.QueueService.CreateQueue:input_type -> downex.v1.CreateQueueRequest
-	82,  // 122: downex.v1.QueueService.UpdateQueue:input_type -> downex.v1.UpdateQueueRequest
-	84,  // 123: downex.v1.QueueService.DeleteQueue:input_type -> downex.v1.DeleteQueueRequest
-	86,  // 124: downex.v1.QueueService.StartQueue:input_type -> downex.v1.StartQueueRequest
-	88,  // 125: downex.v1.QueueService.StopQueue:input_type -> downex.v1.StopQueueRequest
-	90,  // 126: downex.v1.QueueService.MoveDownloads:input_type -> downex.v1.MoveDownloadsRequest
-	44,  // 127: downex.v1.DownloadService.Add:output_type -> downex.v1.AddResponse
-	46,  // 128: downex.v1.DownloadService.List:output_type -> downex.v1.ListResponse
-	48,  // 129: downex.v1.DownloadService.Get:output_type -> downex.v1.GetResponse
-	50,  // 130: downex.v1.DownloadService.Pause:output_type -> downex.v1.PauseResponse
-	52,  // 131: downex.v1.DownloadService.Resume:output_type -> downex.v1.ResumeResponse
-	54,  // 132: downex.v1.DownloadService.Remove:output_type -> downex.v1.RemoveResponse
-	58,  // 133: downex.v1.DownloadService.Watch:output_type -> downex.v1.WatchResponse
-	39,  // 134: downex.v1.DownloadService.Confirm:output_type -> downex.v1.ConfirmResponse
-	41,  // 135: downex.v1.DownloadService.PauseAll:output_type -> downex.v1.PauseAllResponse
-	43,  // 136: downex.v1.DownloadService.ResumeAll:output_type -> downex.v1.ResumeAllResponse
-	30,  // 137: downex.v1.DownloadService.AddMedia:output_type -> downex.v1.AddMediaResponse
-	38,  // 138: downex.v1.DownloadService.ProbeMedia:output_type -> downex.v1.ProbeMediaResponse
-	64,  // 139: downex.v1.DownloadService.SetDownloadOptions:output_type -> downex.v1.SetDownloadOptionsResponse
-	60,  // 140: downex.v1.DownloadService.RenewLink:output_type -> downex.v1.RenewLinkResponse
-	62,  // 141: downex.v1.DownloadService.Rescue:output_type -> downex.v1.RescueResponse
-	32,  // 142: downex.v1.DownloadService.TakeBrowserFetch:output_type -> downex.v1.TakeBrowserFetchResponse
-	36,  // 143: downex.v1.DownloadService.PutBrowserFetch:output_type -> downex.v1.PutBrowserFetchResponse
-	68,  // 144: downex.v1.DaemonService.Status:output_type -> downex.v1.StatusResponse
-	70,  // 145: downex.v1.DaemonService.GetSettings:output_type -> downex.v1.GetSettingsResponse
-	72,  // 146: downex.v1.DaemonService.UpdateSettings:output_type -> downex.v1.UpdateSettingsResponse
-	74,  // 147: downex.v1.DaemonService.Shutdown:output_type -> downex.v1.ShutdownResponse
-	96,  // 148: downex.v1.DaemonService.SetSecret:output_type -> downex.v1.SetSecretResponse
-	98,  // 149: downex.v1.DaemonService.ClearSecret:output_type -> downex.v1.ClearSecretResponse
-	101, // 150: downex.v1.DaemonService.CheckForUpdate:output_type -> downex.v1.CheckForUpdateResponse
-	103, // 151: downex.v1.DaemonService.InstallUpdate:output_type -> downex.v1.InstallUpdateResponse
-	105, // 152: downex.v1.DaemonService.CancelPostAction:output_type -> downex.v1.CancelPostActionResponse
-	109, // 153: downex.v1.DaemonService.GetTools:output_type -> downex.v1.GetToolsResponse
-	111, // 154: downex.v1.DaemonService.InstallTools:output_type -> downex.v1.InstallToolsResponse
-	79,  // 155: downex.v1.QueueService.ListQueues:output_type -> downex.v1.ListQueuesResponse
-	81,  // 156: downex.v1.QueueService.CreateQueue:output_type -> downex.v1.CreateQueueResponse
-	83,  // 157: downex.v1.QueueService.UpdateQueue:output_type -> downex.v1.UpdateQueueResponse
-	85,  // 158: downex.v1.QueueService.DeleteQueue:output_type -> downex.v1.DeleteQueueResponse
-	87,  // 159: downex.v1.QueueService.StartQueue:output_type -> downex.v1.StartQueueResponse
-	89,  // 160: downex.v1.QueueService.StopQueue:output_type -> downex.v1.StopQueueResponse
-	91,  // 161: downex.v1.QueueService.MoveDownloads:output_type -> downex.v1.MoveDownloadsResponse
-	127, // [127:162] is the sub-list for method output_type
-	92,  // [92:127] is the sub-list for method input_type
-	92,  // [92:92] is the sub-list for extension type_name
-	92,  // [92:92] is the sub-list for extension extendee
-	0,   // [0:92] is the sub-list for field type_name
+	113, // 83: downex.v1.UpdateInfo.published_at:type_name -> google.protobuf.Timestamp
+	113, // 84: downex.v1.UpdateInfo.checked_at:type_name -> google.protobuf.Timestamp
+	13,  // 85: downex.v1.UpdateInfo.install_stage:type_name -> downex.v1.UpdateInstallStage
+	100, // 86: downex.v1.CheckForUpdateResponse.info:type_name -> downex.v1.UpdateInfo
+	100, // 87: downex.v1.InstallUpdateResponse.info:type_name -> downex.v1.UpdateInfo
+	14,  // 88: downex.v1.ToolInfo.state:type_name -> downex.v1.ToolState
+	113, // 89: downex.v1.ToolInfo.checked_at:type_name -> google.protobuf.Timestamp
+	107, // 90: downex.v1.ToolsStatus.tools:type_name -> downex.v1.ToolInfo
+	108, // 91: downex.v1.GetToolsResponse.status:type_name -> downex.v1.ToolsStatus
+	108, // 92: downex.v1.InstallToolsResponse.status:type_name -> downex.v1.ToolsStatus
+	28,  // 93: downex.v1.DownloadService.Add:input_type -> downex.v1.AddRequest
+	46,  // 94: downex.v1.DownloadService.List:input_type -> downex.v1.ListRequest
+	48,  // 95: downex.v1.DownloadService.Get:input_type -> downex.v1.GetRequest
+	50,  // 96: downex.v1.DownloadService.Pause:input_type -> downex.v1.PauseRequest
+	52,  // 97: downex.v1.DownloadService.Resume:input_type -> downex.v1.ResumeRequest
+	54,  // 98: downex.v1.DownloadService.Remove:input_type -> downex.v1.RemoveRequest
+	56,  // 99: downex.v1.DownloadService.Watch:input_type -> downex.v1.WatchRequest
+	29,  // 100: downex.v1.DownloadService.Confirm:input_type -> downex.v1.ConfirmRequest
+	41,  // 101: downex.v1.DownloadService.PauseAll:input_type -> downex.v1.PauseAllRequest
+	43,  // 102: downex.v1.DownloadService.ResumeAll:input_type -> downex.v1.ResumeAllRequest
+	30,  // 103: downex.v1.DownloadService.AddMedia:input_type -> downex.v1.AddMediaRequest
+	38,  // 104: downex.v1.DownloadService.ProbeMedia:input_type -> downex.v1.ProbeMediaRequest
+	64,  // 105: downex.v1.DownloadService.SetDownloadOptions:input_type -> downex.v1.SetDownloadOptionsRequest
+	60,  // 106: downex.v1.DownloadService.RenewLink:input_type -> downex.v1.RenewLinkRequest
+	62,  // 107: downex.v1.DownloadService.Rescue:input_type -> downex.v1.RescueRequest
+	32,  // 108: downex.v1.DownloadService.TakeBrowserFetch:input_type -> downex.v1.TakeBrowserFetchRequest
+	35,  // 109: downex.v1.DownloadService.PutBrowserFetch:input_type -> downex.v1.PutBrowserFetchRequest
+	68,  // 110: downex.v1.DaemonService.Status:input_type -> downex.v1.StatusRequest
+	70,  // 111: downex.v1.DaemonService.GetSettings:input_type -> downex.v1.GetSettingsRequest
+	72,  // 112: downex.v1.DaemonService.UpdateSettings:input_type -> downex.v1.UpdateSettingsRequest
+	74,  // 113: downex.v1.DaemonService.Shutdown:input_type -> downex.v1.ShutdownRequest
+	96,  // 114: downex.v1.DaemonService.SetSecret:input_type -> downex.v1.SetSecretRequest
+	98,  // 115: downex.v1.DaemonService.ClearSecret:input_type -> downex.v1.ClearSecretRequest
+	101, // 116: downex.v1.DaemonService.CheckForUpdate:input_type -> downex.v1.CheckForUpdateRequest
+	103, // 117: downex.v1.DaemonService.InstallUpdate:input_type -> downex.v1.InstallUpdateRequest
+	105, // 118: downex.v1.DaemonService.CancelPostAction:input_type -> downex.v1.CancelPostActionRequest
+	109, // 119: downex.v1.DaemonService.GetTools:input_type -> downex.v1.GetToolsRequest
+	111, // 120: downex.v1.DaemonService.InstallTools:input_type -> downex.v1.InstallToolsRequest
+	79,  // 121: downex.v1.QueueService.ListQueues:input_type -> downex.v1.ListQueuesRequest
+	81,  // 122: downex.v1.QueueService.CreateQueue:input_type -> downex.v1.CreateQueueRequest
+	83,  // 123: downex.v1.QueueService.UpdateQueue:input_type -> downex.v1.UpdateQueueRequest
+	85,  // 124: downex.v1.QueueService.DeleteQueue:input_type -> downex.v1.DeleteQueueRequest
+	87,  // 125: downex.v1.QueueService.StartQueue:input_type -> downex.v1.StartQueueRequest
+	89,  // 126: downex.v1.QueueService.StopQueue:input_type -> downex.v1.StopQueueRequest
+	91,  // 127: downex.v1.QueueService.MoveDownloads:input_type -> downex.v1.MoveDownloadsRequest
+	45,  // 128: downex.v1.DownloadService.Add:output_type -> downex.v1.AddResponse
+	47,  // 129: downex.v1.DownloadService.List:output_type -> downex.v1.ListResponse
+	49,  // 130: downex.v1.DownloadService.Get:output_type -> downex.v1.GetResponse
+	51,  // 131: downex.v1.DownloadService.Pause:output_type -> downex.v1.PauseResponse
+	53,  // 132: downex.v1.DownloadService.Resume:output_type -> downex.v1.ResumeResponse
+	55,  // 133: downex.v1.DownloadService.Remove:output_type -> downex.v1.RemoveResponse
+	59,  // 134: downex.v1.DownloadService.Watch:output_type -> downex.v1.WatchResponse
+	40,  // 135: downex.v1.DownloadService.Confirm:output_type -> downex.v1.ConfirmResponse
+	42,  // 136: downex.v1.DownloadService.PauseAll:output_type -> downex.v1.PauseAllResponse
+	44,  // 137: downex.v1.DownloadService.ResumeAll:output_type -> downex.v1.ResumeAllResponse
+	31,  // 138: downex.v1.DownloadService.AddMedia:output_type -> downex.v1.AddMediaResponse
+	39,  // 139: downex.v1.DownloadService.ProbeMedia:output_type -> downex.v1.ProbeMediaResponse
+	65,  // 140: downex.v1.DownloadService.SetDownloadOptions:output_type -> downex.v1.SetDownloadOptionsResponse
+	61,  // 141: downex.v1.DownloadService.RenewLink:output_type -> downex.v1.RenewLinkResponse
+	63,  // 142: downex.v1.DownloadService.Rescue:output_type -> downex.v1.RescueResponse
+	33,  // 143: downex.v1.DownloadService.TakeBrowserFetch:output_type -> downex.v1.TakeBrowserFetchResponse
+	37,  // 144: downex.v1.DownloadService.PutBrowserFetch:output_type -> downex.v1.PutBrowserFetchResponse
+	69,  // 145: downex.v1.DaemonService.Status:output_type -> downex.v1.StatusResponse
+	71,  // 146: downex.v1.DaemonService.GetSettings:output_type -> downex.v1.GetSettingsResponse
+	73,  // 147: downex.v1.DaemonService.UpdateSettings:output_type -> downex.v1.UpdateSettingsResponse
+	75,  // 148: downex.v1.DaemonService.Shutdown:output_type -> downex.v1.ShutdownResponse
+	97,  // 149: downex.v1.DaemonService.SetSecret:output_type -> downex.v1.SetSecretResponse
+	99,  // 150: downex.v1.DaemonService.ClearSecret:output_type -> downex.v1.ClearSecretResponse
+	102, // 151: downex.v1.DaemonService.CheckForUpdate:output_type -> downex.v1.CheckForUpdateResponse
+	104, // 152: downex.v1.DaemonService.InstallUpdate:output_type -> downex.v1.InstallUpdateResponse
+	106, // 153: downex.v1.DaemonService.CancelPostAction:output_type -> downex.v1.CancelPostActionResponse
+	110, // 154: downex.v1.DaemonService.GetTools:output_type -> downex.v1.GetToolsResponse
+	112, // 155: downex.v1.DaemonService.InstallTools:output_type -> downex.v1.InstallToolsResponse
+	80,  // 156: downex.v1.QueueService.ListQueues:output_type -> downex.v1.ListQueuesResponse
+	82,  // 157: downex.v1.QueueService.CreateQueue:output_type -> downex.v1.CreateQueueResponse
+	84,  // 158: downex.v1.QueueService.UpdateQueue:output_type -> downex.v1.UpdateQueueResponse
+	86,  // 159: downex.v1.QueueService.DeleteQueue:output_type -> downex.v1.DeleteQueueResponse
+	88,  // 160: downex.v1.QueueService.StartQueue:output_type -> downex.v1.StartQueueResponse
+	90,  // 161: downex.v1.QueueService.StopQueue:output_type -> downex.v1.StopQueueResponse
+	92,  // 162: downex.v1.QueueService.MoveDownloads:output_type -> downex.v1.MoveDownloadsResponse
+	128, // [128:163] is the sub-list for method output_type
+	93,  // [93:128] is the sub-list for method input_type
+	93,  // [93:93] is the sub-list for extension type_name
+	93,  // [93:93] is the sub-list for extension extendee
+	0,   // [0:93] is the sub-list for field type_name
 }
 
 func init() { file_downex_v1_downex_proto_init() }
@@ -8769,6 +8904,7 @@ func file_downex_v1_downex_proto_init() {
 		(*Event_Tools)(nil),
 		(*Event_Update)(nil),
 		(*Event_Polite)(nil),
+		(*Event_Quit)(nil),
 	}
 	file_downex_v1_downex_proto_msgTypes[45].OneofWrappers = []any{
 		(*RenewLinkRequest_Url)(nil),
@@ -8780,7 +8916,7 @@ func file_downex_v1_downex_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_downex_v1_downex_proto_rawDesc), len(file_downex_v1_downex_proto_rawDesc)),
-			NumEnums:      14,
+			NumEnums:      15,
 			NumMessages:   98,
 			NumExtensions: 0,
 			NumServices:   3,

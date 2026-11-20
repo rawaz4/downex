@@ -266,7 +266,11 @@ type run struct {
 	// Guarded by Manager.mu.
 	intent     intent
 	finalizing bool
-	stopped    time.Time // when the run stopped (set with finalizing): the end of its active time
+	// windowed: a progress window shows this run (downexd opened it, the confirming window
+	// does, or it marked the download meanwhile). Its outcome then shows in that window,
+	// brought above the browser for a browser download, and the tray stays quiet about it.
+	windowed bool
+	stopped  time.Time // when the run stopped (set with finalizing): the end of its active time
 }
 
 func (r *run) setIntent(i intent) {
@@ -812,6 +816,10 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 	// The download complete dialog (docs/DESKTOP-SPEC.md §8): once per completion or
 	// failure of a download whose progress window the user opened.
 	dialog := ended && rec.CompletionDialog && m.settings.ShowCompleteDialog && m.cfg.OpenProgress != nil && !m.closed
+	// A run that a progress window shows (r.windowed) has its outcome there: the window comes
+	// above the browser for a browser download and the tray shows no notification for it.
+	inWindow := dialog && r.windowed
+	var outcome Notice // the notification left to the window (sent after all if it cannot open)
 	if dialog {
 		m.wg.Add(1)
 	}
@@ -821,7 +829,8 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 		switch rec.State {
 		case model.StateCompleted:
 			pd := m.protoLocked(e)
-			m.notify(Notice{Kind: NoticeCompleted, Download: pd})
+			outcome = Notice{Kind: NoticeCompleted, Download: pd}
+			m.notify(Notice{Kind: NoticeCompleted, Download: pd, InWindow: inWindow})
 			if text, ok := post.FileCheckNotice(notify.DisplayName(pd), m.settings.NotifyOnComplete); ok {
 				m.notify(Notice{Kind: NoticeFileCheck, Download: pd, Text: text, Level: post.Check.Level})
 			}
@@ -829,7 +838,9 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 				m.notify(Notice{Kind: NoticeScanProblem, Download: pd, Text: post.NotificationText(notify.DisplayName(pd))})
 			}
 		case model.StateFailed:
-			m.notify(Notice{Kind: NoticeFailed, Download: m.protoLocked(e)})
+			pd := m.protoLocked(e)
+			outcome = Notice{Kind: NoticeFailed, Download: pd}
+			m.notify(Notice{Kind: NoticeFailed, Download: pd, InWindow: inWindow})
 		}
 	}
 	if ended { // a pause, removal or requeue never finishes a queue
@@ -845,10 +856,18 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 	}
 	m.hub.publish(e.id, kindUpdated)
 	if dialog {
+		src := rec.Source
 		go func() {
 			defer m.wg.Done()
-			if err := m.cfg.OpenProgress(int64(e.id)); err != nil {
+			open := func() error { return m.cfg.OpenProgress(int64(e.id)) }
+			if inWindow {
+				open = func() error { return m.openProgressFor(int64(e.id), src) }
+			}
+			if err := open(); err != nil {
 				m.log.Warn("cannot open the download complete dialog", "download", int64(e.id), "err", err)
+				if inWindow && outcome.Download != nil {
+					m.notify(outcome) // the outcome is not lost: the tray tells it
+				}
 			}
 		}()
 	}

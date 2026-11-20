@@ -63,6 +63,8 @@ type backend struct {
 	mainStarted func()
 	// asked is when the window was asked for: its first-frame time is measured from it.
 	asked time.Time
+	// post runs a function on the window's UI thread (set by each window once it exists).
+	post func(func()) error
 	// gw is the host's window (nil in a fixture run): the main window and the standalone
 	// Confirm download window keep each other's confirmations apart through it.
 	gw *glue.Window
@@ -96,7 +98,8 @@ func productBackend(gw *glue.Window, o options) *backend {
 	hp := &views.HostPlatform{Session: gw.Session}
 	hub := &state.Hub{}
 	st := gw.Session.Startup()
-	b := &backend{
+	var b *backend
+	b = &backend{
 		view: gw.View, daemon: gw.Session.Daemon(), events: hub, files: gw.Session.Files(), platform: hp,
 		storage: storage, theme: theme, caps: st.Capabilities, build: st.Build, call: gw.Session.CallContext,
 		log: gw.Log,
@@ -109,7 +112,16 @@ func productBackend(gw *glue.Window, o options) *backend {
 			hp.Pickers = g.Pickers()
 			return g
 		},
-		start:        func() { gw.Session.Start(hub.Emit) },
+		start: func() {
+			gw.Session.Start(func(msg *downexv1.WatchResponse) {
+				for _, ev := range msg.GetEvents() {
+					if ev.GetQuit() && b.post != nil {
+						_ = b.post(gw.QuitApp) // the user quit Downex: every window closes
+					}
+				}
+				hub.Emit(msg)
+			})
+		},
 		confirm:      gw.Session.Confirmations().Ready,
 		renew:        gw.Session.Confirmations().ReadyRenew,
 		shown:        gw.FirstFrame,

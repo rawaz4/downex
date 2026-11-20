@@ -103,6 +103,11 @@ type Dialog struct {
 	leaving bool
 	shown   float32 // 0 hidden, 1 shown: the open and close motion
 	tween   *kit.Tween
+
+	// naturalW is the width natural was measured at; measureW a width the next layout
+	// measures the card at too (MeasureAt), and measured what it measured there.
+	naturalW, measureW kit.DIP
+	measured           kit.Size
 }
 
 // NewDialog makes a dialog; Show puts it in a window.
@@ -140,7 +145,9 @@ func NewDialog(o DialogOptions) *Dialog {
 	d.close.Tooltip = "Close (Esc)"
 	d.close.Style.Margin = kit.Edges{Start: kit.Auto}
 	if o.Fill {
+		// No close button at the end of the header: it ends where the body's fields do.
 		d.close.Style.Hidden = true
+		d.head.Style.Padding.End = tokens.Sp8
 		c.Style.Border, c.Style.Radius = kit.Edges{}, kit.Corners{}
 	}
 	d.titleRow = box(kit.Style{Display: kit.DisplayFlex, AlignItems: kit.AlignCenter, ColumnGap: tokens.Sp6, MinWidth: kit.Px(0)})
@@ -259,6 +266,9 @@ func (d *Dialog) SetFooter(start kit.Widget, buttons ...kit.Widget) {
 	d.foot.Style = kit.Style{
 		Display: kit.DisplayFlex, AlignItems: kit.AlignCenter, Justify: kit.JustifyEnd, ColumnGap: tokens.Sp4, Flex: kit.FlexNone,
 		Padding: kit.Edges{Top: tokens.Sp6, Bottom: tokens.Sp6, Start: tokens.Sp8, End: tokens.Sp7}, Border: kit.Edges{Top: kit.Px(1)},
+	}
+	if d.o.Fill {
+		d.foot.Style.Padding.End = tokens.Sp8 // the last button ends where the body's fields do
 	}
 	if start != nil {
 		s := box(kit.Style{MinWidth: kit.Px(0), Margin: kit.Edges{End: kit.Auto}, Flex: kit.FlexOf(0, 1, kit.Length{})}, start)
@@ -431,7 +441,12 @@ func (d *Dialog) ContentHeight(*kit.LayoutContext, kit.DIP) kit.DIP { return 0 }
 func (d *Dialog) LayoutContent(ctx *kit.LayoutContext, box kit.Rect) {
 	s := box.Size()
 	if d.o.Fill {
-		d.natural = ctx.HeightFor(d.card, s.W, s.W)
+		d.measured = kit.Size{} // what an earlier layout measured may not hold any more
+		if mw := d.measureW; mw > 0 {
+			d.measureW = 0
+			d.measured = kit.Size{W: mw, H: ctx.HeightFor(d.card, mw, mw)}
+		}
+		d.natural, d.naturalW = ctx.HeightFor(d.card, s.W, s.W), s.W
 		ctx.Place(d.card, box, s.W)
 		return
 	}
@@ -463,6 +478,29 @@ func (d *Dialog) Filled() bool { return d.o.Fill }
 // NaturalHeight is the height a Fill dialog's content asks for at the window's width, as the
 // last layout measured it (0 before one): the window fits it.
 func (d *Dialog) NaturalHeight() kit.DIP { return d.natural }
+
+// MeasureAt asks the next layout of a Fill dialog to measure the height its content asks for
+// at width w too (NaturalHeightAt reads it): a window about to take another width fits its
+// height in one resize. It measures once: the layout measures one width per element.
+func (d *Dialog) MeasureAt(w kit.DIP) {
+	if !d.o.Fill || !(w > 0) || w == d.naturalW || (d.measured.W == w && d.measured.H > 0) {
+		return
+	}
+	d.measureW = w
+	d.Relayout()
+}
+
+// NaturalHeightAt is the height a Fill dialog's content asks for at width w, as the last
+// layout measured it (the window's width, or MeasureAt's); false when none measured w.
+func (d *Dialog) NaturalHeightAt(w kit.DIP) (kit.DIP, bool) {
+	switch {
+	case d.natural > 0 && d.naturalW == w:
+		return d.natural, true
+	case d.measured.H > 0 && d.measured.W == w:
+		return d.measured.H, true
+	}
+	return 0, false
+}
 
 // PreferredWidth is the width the dialog has in a window wider than it (DialogOptions.Width,
 // else its Size's), at scale s: a Fill dialog's window opens that wide.

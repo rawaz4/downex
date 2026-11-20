@@ -312,6 +312,11 @@ message ConfirmRequest {
   // SITE media of a page with several videos (SITE-MEDIA-SPEC §3.12): "" = keep the item; another
   // item's id resolves the page again for it (its tracks, title and part replace the old ones).
   string entry_id = 11;
+  // The caller opens the download's progress window when it starts now (the Confirm download
+  // window and the main window's dialog do, with show_progress_window on): downexd marks the
+  // download for the download complete dialog at once, so its outcome shows in that window,
+  // raised above the browser, instead of a tray notification.
+  bool progress_window = 12;
 }
 
 // AddMedia adds a streaming-media download for an HLS (.m3u8) or DASH (.mpd) manifest.
@@ -517,6 +522,9 @@ message Event {
     // Polite mode (docs/POLITE-SPEC.md §7): Watch without ids only; the first batch ends with
     // one, later batches carry one when the status changed. Fields 9-19 are left to other features.
     PoliteStatus polite = 20;
+    // The user quit Downex (the tray's Quit, the menu-bar icon's Quit, macOS ⌘Q): every window
+    // closes; downexd stops right after. Sent to every Watch stream, with ids or without.
+    bool quit = 21;
   }
 }
 
@@ -739,7 +747,10 @@ message UpdateSettingsResponse {
   Settings settings = 1;
 }
 
-message ShutdownRequest {}
+message ShutdownRequest {
+  // Also close every window of Downex (macOS ⌘Q in the window): a Watch quit event.
+  bool quit_app = 1;
+}
 
 message ShutdownResponse {}
 
@@ -921,6 +932,20 @@ message UpdateInfo {
   string notes = 4;
   google.protobuf.Timestamp published_at = 5;
   google.protobuf.Timestamp checked_at = 6;
+  // Set while an InstallUpdate runs (update events of Watch, at most a few a second): what it
+  // does and how much of the package has arrived (download_total 0: not known yet).
+  UpdateInstallStage install_stage = 7;
+  int64 download_done = 8;
+  int64 download_total = 9;
+}
+
+// What a running InstallUpdate does.
+enum UpdateInstallStage {
+  UPDATE_INSTALL_STAGE_UNSPECIFIED = 0; // no install runs
+  UPDATE_INSTALL_STAGE_DOWNLOADING = 1;
+  UPDATE_INSTALL_STAGE_VERIFYING = 2;
+  UPDATE_INSTALL_STAGE_INSTALLING = 3; // downexd pauses the downloads and starts the installer; it exits next
+  UPDATE_INSTALL_STAGE_FAILED = 4; // the install failed; downexd keeps running (InstallUpdate says why)
 }
 
 message CheckForUpdateRequest {}

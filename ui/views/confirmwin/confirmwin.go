@@ -2,8 +2,10 @@
 // download the user just started in the browser, with confirm_browser_downloads on, is
 // confirmed in a compact window of its own, as a download manager's dialog is, and the main
 // window is not shown. The window holds the Confirm download dialog of ui/views/add filling it
-// (add.ConfirmOptions.Window), one download at a time, oldest first; it fits its height to the
-// dialog and closes once nothing is left to confirm, or when the user closes it.
+// (add.ConfirmOptions.Window), one download at a time, oldest first; it fits itself to each
+// dialog (once the user resized it, it keeps the user's size for that dialog), never grows
+// past what the dialog can use, and closes once nothing is left to confirm, or when the user
+// closes it.
 package confirmwin
 
 import (
@@ -13,7 +15,9 @@ import (
 
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/confirm"
+	"downex/ui/host"
 	"downex/ui/kit"
+	"downex/ui/kit/tokens"
 	"downex/ui/views"
 	"downex/ui/views/add"
 )
@@ -21,13 +25,26 @@ import (
 // Title is the window's title.
 const Title = "Confirm download"
 
-// The window's sizes in DIPs: it opens Width × Height (the dialog of a file, before it is
-// measured) and fits the dialog shown; the user cannot make it smaller than MinWidth × MinHeight.
-const (
-	Width     = 704 // the dialog's 44rem
-	Height    = 420
-	MinWidth  = 480
-	MinHeight = 300
+// The window opens host.ConfirmWidth × host.ConfirmHeight (the dialog of a file) and fits the
+// dialog shown; the user cannot make it smaller than host.ConfirmMinWidth × ConfirmMinHeight,
+// nor wider than maxWidthRatio times the dialog's width or taller than its content.
+const maxWidthRatio = 1.25
+
+// CaptionFrame is the window's frame in theme t: a system caption as the progress windows'
+// (tokens' CaptionFrame), on --raised, the ground of the dialog that fills the window, so that
+// the caption and the dialog are one surface.
+func CaptionFrame(t *tokens.Theme) kit.FrameColors {
+	f := t.CaptionFrame()
+	f.Background, f.Caption = t.Raised, t.Raised
+	return f
+}
+
+// The host's window can do more than kit.Host's Resize (ui/win's window): resize about its
+// centre, and keep the user from making it larger than a size. Hosts without them (the mac
+// host, tests) resize keeping the top-left corner and have no largest size.
+type (
+	centredResizer interface{ ResizeCentered(kit.Size) }
+	maxSizer       interface{ SetMaxSize(kit.Size) }
 )
 
 // Options are the window's parts beside its App (whose Main must be set: the downloads, the
@@ -40,8 +57,12 @@ type Options struct {
 	// OnShow is told each download whose confirmation the window shows (the host keeps the
 	// main window from showing it too); nil: nobody.
 	OnShow func(id int64)
-	// Resize asks for the window's client size in DIPs (nil: the kit window's host's Resize).
+	// Resize asks for the window's client size in DIPs (nil: the kit window's host's
+	// ResizeCentered when it has one and the user has not resized the window, else its Resize).
 	Resize func(kit.Size)
+	// MaxSize sets the largest client size the user can resize the window to, in DIPs, a side
+	// of 0 having none (nil: the kit window's host's SetMaxSize, when it has one).
+	MaxSize func(kit.Size)
 }
 
 // Screen is the window's content: the dialog of the download being confirmed.
@@ -67,10 +88,15 @@ type Screen struct {
 	loading  bool
 	closed   bool
 	disposed bool
-	// fitted is the dialog the window was last fitted to, and the height it was given.
-	fitted       *add.Confirm
-	fittedHeight kit.DIP
-	unwatch      []func()
+	// fitted is the dialog the window was last fitted to and natural the height its content
+	// asked for then; asked is the size the window was asked for, from the size it had then.
+	fitted        *add.Confirm
+	natural       kit.DIP
+	asked, from   kit.Size
+	userSized     bool     // the user resized the window since the dialog was fitted: it is not fitted again
+	everUserSized bool     // since the window opened: fits keep its top-left corner, not its centre
+	maxSize       kit.Size // the largest size set (0 × 0: none)
+	unwatch       []func()
 }
 
 // New makes the window's content in app (shown with app's window). Nothing is shown until the
@@ -198,6 +224,9 @@ func (s *Screen) show(d *downexv1.Download, waiting int) {
 	})
 	s.current, s.currentID = c, id
 	s.app.Dialogs.Show(c)
+	// The first layout measures the dialog at the width the window takes for it too: the
+	// window fits it in one resize (LaidOut).
+	c.MeasureAt(c.PreferredWidth(s.app.Window.Environment().Scale))
 	if s.o.OnShow != nil {
 		s.o.OnShow(id)
 	}
@@ -250,8 +279,18 @@ func (s *Screen) finish() {
 	s.app.Window.Close()
 }
 
-// LaidOut is kit.LayoutFollower's: the window fits the dialog shown, its width when another
-// dialog shows, its height whenever what the dialog needs changes.
+// Paint is kit.Painter's: the dialog's --raised ground, under the dialog and before it shows
+// (the list and the settings are read first), so that the window never shows another colour.
+func (s *Screen) Paint(p *kit.PaintContext) {
+	p.Canvas.FillRect(p.Scale.SnapRect(kit.RectAt(p.Origin, p.Size())), views.TokensOf(&s.Element).Raised)
+}
+
+// LaidOut is kit.LayoutFollower's: the window fits the dialog shown, in one resize, when
+// another dialog shows (its width, and its height at that width), and its height when what
+// the dialog needs changes at the width the window was given (a note, another video). Once
+// the user resized the window, it keeps the user's size until the next dialog. The window
+// never grows past maxWidthRatio of the dialog's width nor past what its content needs at the
+// window's width (the footer stays put and the body scrolls in a shorter window).
 func (s *Screen) LaidOut() {
 	c := s.current
 	if c == nil || s.disposed {
@@ -262,25 +301,75 @@ func (s *Screen) LaidOut() {
 		return
 	}
 	size := w.Size()
+	pw := c.PreferredWidth(w.Environment().Scale)
+	if pw <= 0 {
+		pw = size.W
+	}
+	if c != s.fitted {
+		h, ok := c.NaturalHeightAt(pw)
+		if !ok {
+			c.MeasureAt(pw) // the next layout measures it
+			return
+		}
+		s.fitted, s.userSized = c, false
+		s.fit(kit.Size{W: pw, H: ceil(h)}, h, pw)
+		return
+	}
 	natural := c.NaturalHeight()
 	if natural <= 0 {
 		return
 	}
-	want := size
-	if c != s.fitted {
-		if pw := c.PreferredWidth(w.Environment().Scale); pw > 0 {
-			want.W = pw
+	switch {
+	case s.userSized:
+	case near(size.W, s.asked.W):
+		if math.Abs(float64(natural-s.natural)) >= 0.5 {
+			s.fit(kit.Size{W: s.asked.W, H: ceil(natural)}, natural, pw)
+			return
 		}
+	case near(size.W, s.from.W):
+		return // the size asked for has not come yet
+	default:
+		// The window is not as wide as it was asked to be: the user resized it.
+		s.userSized, s.everUserSized = true, true
 	}
-	if c == s.fitted && math.Abs(float64(natural-s.fittedHeight)) < 0.5 {
+	s.limit(pw, natural)
+}
+
+// fit asks for size want, whose content asks for height natural, for a dialog pw wide.
+func (s *Screen) fit(want kit.Size, natural, pw kit.DIP) {
+	size := s.Window().Size()
+	// Kept before the resize: its size may come back (and lay out) before Resize returns.
+	s.natural, s.asked, s.from = natural, want, size
+	if !near(want.W, size.W) || math.Abs(float64(want.H-size.H)) >= 0.5 {
+		// The largest size holds a growing window back (a system clamps its own resizes to
+		// it as well): set again once the resize is asked for.
+		s.setMaxSize(kit.Size{})
+		s.resize(want)
+	}
+	s.limit(pw, natural)
+}
+
+// limit keeps the user from making the window wider than maxWidthRatio of the dialog's width
+// pw or taller than its content's height natural, never under the least size.
+func (s *Screen) limit(pw, natural kit.DIP) {
+	s.setMaxSize(kit.Size{
+		W: max(ceil(pw*maxWidthRatio), host.ConfirmMinWidth),
+		H: max(ceil(natural), host.ConfirmMinHeight),
+	})
+}
+
+func (s *Screen) setMaxSize(sz kit.Size) {
+	if sz == s.maxSize {
 		return
 	}
-	want.H = kit.DIP(math.Ceil(float64(natural)))
-	s.fitted, s.fittedHeight = c, natural
-	if math.Abs(float64(want.W-size.W)) < 0.5 && math.Abs(float64(want.H-size.H)) < 0.5 {
+	s.maxSize = sz
+	if s.o.MaxSize != nil {
+		s.o.MaxSize(sz)
 		return
 	}
-	s.resize(want)
+	if m, ok := s.app.Window.Host().(maxSizer); ok {
+		m.SetMaxSize(sz)
+	}
 }
 
 func (s *Screen) resize(sz kit.Size) {
@@ -288,10 +377,21 @@ func (s *Screen) resize(sz kit.Size) {
 		s.o.Resize(sz)
 		return
 	}
-	if h := s.app.Window.Host(); h != nil {
-		h.Resize(sz)
+	h := s.app.Window.Host()
+	if h == nil {
+		return
 	}
+	if r, ok := h.(centredResizer); ok && !s.everUserSized {
+		r.ResizeCentered(sz)
+		return
+	}
+	h.Resize(sz)
 }
+
+// near reports two widths the same but for the rounding to device pixels.
+func near(a, b kit.DIP) bool { return math.Abs(float64(a-b)) <= 1 }
+
+func ceil(v kit.DIP) kit.DIP { return kit.DIP(math.Ceil(float64(v))) }
 
 // Dispose stops following the list and takes the dialog away.
 func (s *Screen) Dispose() {

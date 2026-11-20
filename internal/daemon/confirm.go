@@ -246,6 +246,11 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 		m.enqueueLocked(e.id)
 	}
 	m.scheduleLocked()
+	// The confirming window opens the progress window of a download that starts now: it is
+	// marked at once, so the outcome never depends on that window's own mark arriving first.
+	if r.GetProgressWindow() && e.run != nil && !m.closed && m.settings.ShowProgressWindow {
+		m.markWindowedLocked(e)
+	}
 	pd := m.protoLocked(e)
 	m.mu.Unlock()
 	m.hub.publish(e.id, kindUpdated)

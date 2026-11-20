@@ -5,6 +5,39 @@ All notable changes to Downex are listed here, newest first. Versions follow
 
 ## Unreleased
 
+## 1.1.1 - 2026-11-20
+
+A bug-fix release: smoother updates, a cleaner Confirm download window, and Quit that closes all
+of Downex.
+
+### Fixed
+
+- **Updates offer themselves.** Downex checks for a new version a few seconds after it starts,
+  every 4 hours after that, and when you open its window, so the update pop-up appears by
+  itself; no need to check in Settings.
+- **Smooth in-app updates.** The update downloads in the background, with its progress in the
+  pop-up and as a thin line across the top of the window. Closing the window no longer stops it,
+  and pressing Update now a second time joins the running update instead of failing.
+- **Quit closes all of Downex.** Quit in the tray (Windows) or the menu-bar icon (macOS), and
+  ⌘Q in the window on macOS, now close every Downex window and stop Downex.
+- **No more "Move to Trash" on macOS.** Once you have opened Downex, it removes the macOS
+  quarantine flag from its own app and helpers, so browsers and the login item start them
+  without asking again.
+- **yt-dlp and Deno set themselves up silently.** Downex downloads and updates them in the
+  background right after it starts, with no toast or notice.
+- **The Confirm download window looks right.** It opens at its size, centred, with no empty
+  frame first; it keeps the size you give it, cannot be stretched into an empty band, and in dark
+  mode its title bar matches its body. A long video address is shortened in the middle, so the
+  video's id stays visible.
+- **The finish window always shows.** A download you start from the Confirm download window
+  always gets its download complete window, also when it finishes in a moment; it comes above
+  the browser.
+- **A server that does not answer shows in the progress window.** When a download you watch fails,
+  its progress window comes above the browser with the error and Retry, instead of a tray
+  notification.
+- **Browser extension:** the Chrome Web Store copy of the extension can talk to Downex, and the
+  extension draws its icons without HTML markup (store review).
+
 ## 1.1.0 - 2026-11-20
 
 ### What's new

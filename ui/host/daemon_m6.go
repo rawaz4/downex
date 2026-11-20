@@ -82,6 +82,15 @@ func (d *ClientDaemon) InstallUpdate(ctx context.Context) (*downexv1.InstallUpda
 	})
 }
 
+// QuitApp asks downexd to quit all of Downex (macOS ⌘Q): its windows get the quit event and
+// close, then downexd stops.
+func (d *ClientDaemon) QuitApp(ctx context.Context) error {
+	_, err := unary(ctx, d, &downexv1.ShutdownRequest{QuitApp: true}, func(c *client.Client) rpc[downexv1.ShutdownRequest, downexv1.ShutdownResponse] {
+		return c.Daemon.Shutdown
+	})
+	return err
+}
+
 func (d *ClientDaemon) CancelPostAction(ctx context.Context, req *downexv1.CancelPostActionRequest) (*downexv1.CancelPostActionResponse, error) {
 	return unary(ctx, d, req, func(c *client.Client) rpc[downexv1.CancelPostActionRequest, downexv1.CancelPostActionResponse] {
 		return c.Daemon.CancelPostAction

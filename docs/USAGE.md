@@ -57,8 +57,8 @@ Remove the extension in the browser yourself.
 **Silent use** (NSIS conventions; `/D` must come last and is not quoted, even with spaces):
 
 ```powershell
-Downex-Setup-1.1.0.exe /S                                   # install or upgrade, default folder
-Downex-Setup-1.1.0.exe /S /D=C:\Users\me\Apps\Downex        # install into a folder
+Downex-Setup-1.1.1.exe /S                                   # install or upgrade, default folder
+Downex-Setup-1.1.1.exe /S /D=C:\Users\me\Apps\Downex        # install into a folder
 & "$env:LOCALAPPDATA\Programs\Downex\uninstall.exe" /S       # uninstall, keeping your data
 ```
 
@@ -70,7 +70,7 @@ with 0 on success and 2 when it was cancelled, for example because a file stayed
 `PATH` or in its default folder) into `bin\Downex-Setup-<version>.exe` (or `-Out`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.0 -Installer
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.1 -Installer
 ```
 
 `-Installer` cannot be combined with `-SkipExtension` or `-SkipUI`. The version is passed to

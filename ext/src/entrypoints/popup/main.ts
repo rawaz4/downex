@@ -62,6 +62,7 @@ import {
   videoSubline,
 } from './popup-view';
 import { SelectMenu } from './select-menu';
+import { setSvgMarkup } from '../../lib/svg-markup';
 
 function byId<T extends HTMLElement>(id: string, type: new () => T): T {
   const el = document.getElementById(id);
@@ -150,7 +151,7 @@ function glyph(name: GlyphName, className = ''): SVGSVGElement {
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('class', `icon ${className}`.trim());
   svg.setAttribute('aria-hidden', 'true');
-  svg.innerHTML = GLYPHS[name];
+  setSvgMarkup(svg, GLYPHS[name]);
   return svg;
 }
 
@@ -166,7 +167,7 @@ function fileTile(kind: TileKind, size = 22): SVGSVGElement {
   svg.dataset.kind = kind;
   svg.style.setProperty('--hue', `var(--c-${kind})`);
   svg.style.setProperty('--deep', `var(--c-${kind}-deep)`);
-  svg.innerHTML = kind === 'audio' && size <= SMALL_TILE_PX ? FILE_TILE_AUDIO_SMALL : FILE_TILES[kind];
+  setSvgMarkup(svg, kind === 'audio' && size <= SMALL_TILE_PX ? FILE_TILE_AUDIO_SMALL : FILE_TILES[kind]);
   return svg;
 }
 

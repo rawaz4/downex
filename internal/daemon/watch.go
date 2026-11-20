@@ -53,6 +53,9 @@ func (m *Manager) Watch(ctx context.Context, ids []int64, send func(*downexv1.Wa
 		return errShuttingDown()
 	}
 	defer m.hub.unsubscribe(sub)
+	if filter == nil {
+		m.windowOpened()
+	}
 
 	snap, err := m.snapshot(ctx, filter)
 	if err != nil {
@@ -214,6 +217,9 @@ func (m *Manager) batchEvents(b pendingBatch) []*downexv1.Event {
 	}
 	if b.polite {
 		out = append(out, m.politeEvent())
+	}
+	if b.quit {
+		out = append(out, &downexv1.Event{Kind: &downexv1.Event_Quit{Quit: true}})
 	}
 	return out
 }

@@ -130,7 +130,7 @@ func TestWindowFrameAndBackground(t *testing.T) {
 		}
 	}
 	// The window opens in its page's ground: --chrome for the main window, --surface for a
-	// progress window (docs/DESIGN-SYSTEM.md §2.1).
+	// progress window, --raised for the Confirm download window (docs/DESIGN-SYSTEM.md §2.1).
 	for _, tc := range []struct {
 		v           View
 		dark        bool
@@ -141,6 +141,8 @@ func TestWindowFrameAndBackground(t *testing.T) {
 		{View{}, true, RGB{0x0a, 0x0e, 0x0c}, "main, dark"},
 		{View{Progress: 9}, false, RGB{0xff, 0xff, 0xff}, "progress, light"},
 		{View{Progress: 9}, true, RGB{0x17, 0x1e, 0x1b}, "progress, dark"},
+		{View{Confirm: 9}, false, RGB{0xff, 0xff, 0xff}, "confirm, light"},
+		{View{Confirm: 9}, true, RGB{0x21, 0x2a, 0x26}, "confirm, dark"},
 	} {
 		if got := tc.v.Window().Background(tc.dark); got != tc.want {
 			t.Errorf("%s: background = %+v, want %+v", tc.description, got, tc.want)

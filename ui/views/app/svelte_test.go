@@ -623,7 +623,7 @@ func TestAppVideoPages(t *testing.T) {
 			t.Errorf("dialog %v", f.h.App.Dialogs.Kind())
 		}
 	})
-	t.Run("shows the first download of yt-dlp and Deno in a toast, and offers the settings when it fails", func(t *testing.T) {
+	t.Run("keeps the first download of yt-dlp and Deno and its failure out of sight", func(t *testing.T) {
 		f := lanes(t, setup{daemon: func(d *statetest.Daemon) { d.SetTools(statetest.Tools(nil)) }}, dl(1, state.StateCompleted, nil))
 		installing := statetest.Tools(func(s *downexv1.ToolsStatus) {
 			s.Ready = false
@@ -636,15 +636,8 @@ func TestAppVideoPages(t *testing.T) {
 		})
 		f.d.Emit(statetest.ToolsEvent(installing))
 		f.h.Settle()
-		if !f.m.Shell.ToolsShown() {
-			t.Fatal("no tools toast")
-		}
-		tt := f.m.Shell.ToolsToast()
-		if n, ok := f.find(kit.RoleProgressBar, "Downloading yt-dlp and Deno"); !ok || !n.Range.Valid || n.Range.Value != 25 {
-			t.Errorf("progress %+v", n.Range)
-		}
-		if !strings.Contains(tt.Detail(), "Downloading yt-dlp and Deno…") || strings.Contains(tt.Detail(), "Deno: 25%") {
-			t.Errorf("detail %q", tt.Detail())
+		if f.m.Shell.ToolsShown() {
+			t.Fatal("a tools toast")
 		}
 		failed := statetest.Tools(func(s *downexv1.ToolsStatus) {
 			s.Ready = false
@@ -656,18 +649,8 @@ func TestAppVideoPages(t *testing.T) {
 		})
 		f.d.Emit(statetest.ToolsEvent(failed))
 		f.h.Settle()
-		if f.m.Shell.ToolsShown() {
-			t.Error("the tools toast stays")
-		}
-		n, ok := f.notice("Downex could not set up yt-dlp/Deno")
-		if !ok || !strings.Contains(n.Detail, "could not download yt-dlp (network)") {
-			t.Fatalf("notice %+v", n)
-		}
-		n.Actions[0].Run()
-		f.h.Settle()
-		sd, ok := f.h.App.Dialogs.Dialog().(*settings.Dialog)
-		if !ok || sd.Page() != validate.PageVideo {
-			t.Errorf("dialog %T", f.h.App.Dialogs.Dialog())
+		if _, ok := f.notice("Downex could not set up yt-dlp/Deno"); ok {
+			t.Error("a notice about yt-dlp and Deno")
 		}
 	})
 	t.Run("shows no toast while ready copies are updated", func(t *testing.T) {

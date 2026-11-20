@@ -338,8 +338,16 @@ func TestBrowserHandOffWithoutConfirmation(t *testing.T) {
 		t.Fatalf("window started with %q on endpoint %q, want [--progress %d --raise] on %q (earlier downloads: %d, %d)",
 			call.Args, call.Endpoint, wid, h.endpoint, id, cid)
 	}
-	if calls := inst.uiCalls(t); len(calls) != 1 {
-		t.Errorf("the window was started %d times: %+v", len(calls), calls)
+	// downexd marked the hand-off when it opened its window: its completion opens the download
+	// complete dialog too, above the browser (DESKTOP-SPEC §8), and nothing else.
+	deadline := time.Now().Add(10 * time.Second)
+	for len(inst.uiCalls(t)) < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	calls := inst.uiCalls(t)
+	if len(calls) != 2 || !slices.Equal(calls[1].Args, []string{"--progress", idArg(wid), "--raise"}) {
+		t.Errorf("the window was started %d times: %+v, want the progress window then its complete dialog", len(calls), calls)
 	}
 	h.stop(d)
 }

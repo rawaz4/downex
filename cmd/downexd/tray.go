@@ -229,9 +229,13 @@ func (r *trayRunner) run() {
 			now := time.Now()
 			switch n.Kind {
 			case daemon.NoticeCompleted:
-				show(center.Completed(now, n.Download))
+				if !n.InWindow { // its progress window shows the completion
+					show(center.Completed(now, n.Download))
+				}
 			case daemon.NoticeFailed:
-				show(center.Failed(now, n.Download))
+				if !n.InWindow { // its progress window shows the failure and Retry
+					show(center.Failed(now, n.Download))
+				}
 			case daemon.NoticeLinkRenewed:
 				show(center.Renewed(now, n.Download))
 			case daemon.NoticeAwaiting:

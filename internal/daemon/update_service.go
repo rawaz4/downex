@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	downexv1 "downex/internal/rpc/downex/v1"
@@ -25,10 +26,18 @@ import (
 // Update timings.
 const (
 	// updateFirstDelay is how long after StartUpdates (and after the settings turn
-	// automatic checks on) the first automatic check runs.
-	updateFirstDelay = 60 * time.Second
+	// automatic checks on) the first automatic check runs: soon, so that the window offers a
+	// new version right after Downex starts.
+	updateFirstDelay = 10 * time.Second
 	// updateInterval is the time between automatic checks.
-	updateInterval = 24 * time.Hour
+	updateInterval = 4 * time.Hour
+	// updateRetry is the wait after an automatic check that failed (offline at the start).
+	updateRetry = 20 * time.Minute
+	// updateWindowRecheck is how old the last automatic check must be for a window that opens
+	// to have it run again at once.
+	updateWindowRecheck = 30 * time.Minute
+	// updateProgressEvery bounds how often a running install publishes its download's progress.
+	updateProgressEvery = 200 * time.Millisecond
 	// updateMaxWait bounds one timer of the automatic check: the wall clock is looked at
 	// again at least this often, so that sleep and clock changes delay a check by at
 	// most this much.
@@ -98,9 +107,16 @@ type updateService struct {
 	// the first batch of a Watch of every download carries it (Manager.updateEvent).
 	found atomic.Pointer[downexv1.UpdateInfo]
 
-	installing atomic.Bool // an InstallUpdate is in progress (stays set once committed)
+	// job is the running InstallUpdate (kept once it committed): later calls join it.
+	jobMu sync.Mutex
+	job   *installJob
+	// progress is the running install's latest update event (nil while none runs): a Watch
+	// that starts meanwhile gets it in its first batch.
+	progress atomic.Pointer[downexv1.UpdateInfo]
+	lastPub  time.Time // the last progress event published (the job's goroutine only)
 
 	tick     chan struct{} // the automatic check's timer fired
+	poke     chan struct{} // a window opened: check now unless a check ran lately
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{} // the goroutine has ended
@@ -181,7 +197,7 @@ func newUpdateService(m *Manager, cfg UpdatesConfig) *updateService {
 	log := m.log.With("component", "update")
 	u := &updateService{
 		m: m, cfg: cfg, log: log, client: cfg.HTTPClient, installer: cfg.Installer,
-		tick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+		tick: make(chan struct{}, 1), poke: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	if u.client == nil {
 		var rt http.RoundTripper // the proxy from the environment
@@ -273,6 +289,7 @@ func (u *updateService) run(notices <-chan Notice, unsubscribe func()) {
 	cur := u.m.Settings().Update
 	next := u.cfg.now().Add(u.cfg.firstDelay)
 	arm(next)
+	var last time.Time // the last automatic check
 	for {
 		select {
 		case n, ok := <-notices:
@@ -293,21 +310,46 @@ func (u *updateService) run(notices <-chan Notice, unsubscribe func()) {
 				arm(next)
 				continue
 			}
-			u.autoCheck(ctx)
-			next = u.cfg.now().Add(u.cfg.interval)
+			last = u.cfg.now()
+			wait := u.cfg.interval
+			if !u.autoCheck(ctx) {
+				wait = min(wait, updateRetry)
+			}
+			next = u.cfg.now().Add(wait)
 			arm(next)
+		case <-u.poke:
+			// A window opened: an update published since the last check is offered now.
+			if !last.IsZero() && u.cfg.now().Sub(last) >= updateWindowRecheck && next.After(u.cfg.now()) {
+				next = u.cfg.now()
+				arm(next)
+			}
 		case <-u.stop:
 			return
 		}
 	}
 }
 
+// windowOpened is called when a window starts watching every download: the automatic check
+// runs now when the last one is older than updateWindowRecheck.
+func (m *Manager) windowOpened() {
+	updateServices.mu.Lock()
+	u := updateServices.m[m]
+	updateServices.mu.Unlock()
+	if u == nil {
+		return
+	}
+	select {
+	case u.poke <- struct{}{}:
+	default:
+	}
+}
+
 // autoCheck runs one automatic check (when the settings ask for it), hands its result to
 // the Watch streams and notifies about an available version. A check that fails (no feed
 // published yet, offline) is only logged: the user hears nothing of it.
-func (u *updateService) autoCheck(ctx context.Context) {
+func (u *updateService) autoCheck(ctx context.Context) (ok bool) {
 	if !u.m.Settings().Update.autoChecks() {
-		return
+		return true
 	}
 	u.mu.Lock()
 	info, res, err := u.checkLocked(ctx)
@@ -320,20 +362,23 @@ func (u *updateService) autoCheck(ctx context.Context) {
 		default:
 			u.log.Warn("automatic update check failed", "err", err)
 		}
-		return
+		return errors.Is(err, update.ErrNotPublished)
 	}
 	u.log.Info("checked for updates", "current", info.GetCurrentVersion(), "latest", info.GetLatestVersion(),
 		"available", info.GetAvailable())
 	u.found.Store(info)
-	u.m.hub.publishUpdate(info)
+	if u.progress.Load() == nil {
+		u.m.hub.publishUpdate(info)
+	}
 	if !res.Available {
-		return
+		return true
 	}
 	if u.cfg.Notify != nil {
 		u.cfg.Notify(info)
 	}
 	// The tray and the menu-bar icon show it (cmd/downexd tray.go).
 	u.m.notify(Notice{Kind: NoticeUpdateAvailable, Update: info})
+	return true
 }
 
 // check is CheckForUpdate (also InstallUpdate's fresh check). Its result is the caller's
@@ -354,7 +399,10 @@ func (m *Manager) updateEvent() *downexv1.Event {
 	if u == nil {
 		return nil
 	}
-	info := u.found.Load()
+	info := u.progress.Load()
+	if info == nil {
+		info = u.found.Load()
+	}
 	if info == nil {
 		return nil
 	}
@@ -405,19 +453,87 @@ func (u *updateService) checkLocked(ctx context.Context) (*downexv1.UpdateInfo, 
 
 func (u *updateService) userAgent() string { return "Downex/" + u.cfg.version }
 
-// install is InstallUpdate. Everything that can fail while the daemon keeps running
-// comes first: the installer's Prepare, a fresh check, the download (size and SHA-256)
-// and the installer's Stage. Then every download is paused (Manager.Shutdown), the
-// staged package is committed and shutdown (the daemon's graceful exit) is called,
-// whatever Commit returned.
+// installJob is one InstallUpdate run. It runs on its own goroutine, apart from the call
+// that started it: closing the window does not stop it, and a second Update now (the
+// pop-up, Settings) joins it instead of failing.
+type installJob struct {
+	done chan struct{}
+	info *downexv1.UpdateInfo
+	err  error
+}
+
+// install is InstallUpdate: it starts the install or joins the running one and waits for it
+// (at ctx's end it returns while the install goes on; its progress reaches the windows as
+// update events of Watch).
 func (u *updateService) install(ctx context.Context, shutdown func()) (*downexv1.UpdateInfo, error) {
-	if !u.installing.CompareAndSwap(false, true) {
-		return nil, connect.NewError(connect.CodeAborted, errors.New("an update is already being installed"))
+	u.jobMu.Lock()
+	j := u.job
+	if j == nil {
+		j = &installJob{done: make(chan struct{})}
+		u.job = j
+		go func() {
+			info, err := u.runInstall(shutdown)
+			j.info, j.err = info, err
+			if err != nil {
+				u.jobMu.Lock()
+				if u.job == j {
+					u.job = nil
+				}
+				u.jobMu.Unlock()
+			}
+			close(j.done)
+		}()
 	}
-	committed := false
+	u.jobMu.Unlock()
+	select {
+	case <-j.done:
+		return j.info, j.err
+	case <-ctx.Done():
+		return nil, connect.NewError(connect.CodeDeadlineExceeded, errors.New("the update is still being installed"))
+	}
+}
+
+// publishProgress publishes the running install's state to the windows (Watch update
+// events). Downloading events are published at most every updateProgressEvery, and always
+// at the download's start and end.
+func (u *updateService) publishProgress(base *downexv1.UpdateInfo, stage downexv1.UpdateInstallStage, done, total int64) {
+	now := time.Now()
+	if stage == downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_DOWNLOADING && done != total && done != 0 &&
+		now.Sub(u.lastPub) < updateProgressEvery {
+		return
+	}
+	u.lastPub = now
+	p := proto.Clone(base).(*downexv1.UpdateInfo)
+	p.InstallStage, p.DownloadDone, p.DownloadTotal = stage, done, total
+	if stage == downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_FAILED {
+		u.progress.Store(nil)
+	} else {
+		u.progress.Store(p)
+	}
+	u.m.hub.publishUpdate(p)
+}
+
+// runInstall is the install. Everything that can fail while the daemon keeps running comes
+// first: the installer's Prepare, a fresh check, the download (size and SHA-256) and the
+// installer's Stage. Then every download is paused (Manager.Shutdown), the staged package
+// is committed and shutdown (the daemon's graceful exit) is called, whatever Commit returned.
+// It stops when the update component stops, not when a caller gives up waiting.
+func (u *updateService) runInstall(shutdown func()) (_ *downexv1.UpdateInfo, err error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-u.stop:
+		case <-u.done:
+		case <-ctx.Done():
+			return
+		}
+		cancel()
+	}()
+	var base *downexv1.UpdateInfo
 	defer func() {
-		if !committed {
-			u.installing.Store(false)
+		if err != nil && base != nil {
+			u.publishProgress(base, downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_FAILED, 0, 0)
 		}
 	}()
 	if u.cfg.DataDir == "" {
@@ -436,11 +552,21 @@ func (u *updateService) install(ctx context.Context, shutdown func()) (*downexv1
 		}
 		return nil, errPrecondition("Downex %s is up to date (the latest version is %s)", u.cfg.version, res.Latest)
 	}
+	// The windows know the automatic check's offer (its key): progress events keep it.
+	base = info
+	if f := u.found.Load(); f != nil && f.GetLatestVersion() == info.GetLatestVersion() {
+		base = f
+	}
+	u.publishProgress(base, downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_DOWNLOADING, 0, res.Asset.Size)
 	dir := filepath.Join(u.cfg.DataDir, updatesDirName)
-	pkg, err := update.Download(ctx, u.client, u.userAgent(), res.Asset, dir, u.installer.FileName(res.Latest))
+	pkg, err := update.DownloadProgress(ctx, u.client, u.userAgent(), res.Asset, dir, u.installer.FileName(res.Latest),
+		func(done, total int64) {
+			u.publishProgress(base, downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_DOWNLOADING, done, total)
+		})
 	if err != nil {
 		return nil, updateError(err)
 	}
+	u.publishProgress(base, downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_VERIFYING, res.Asset.Size, res.Asset.Size)
 	staged, err := u.installer.Stage(ctx, pkg, res.Latest)
 	if err != nil {
 		_ = os.Remove(pkg)
@@ -453,7 +579,7 @@ func (u *updateService) install(ctx context.Context, shutdown func()) (*downexv1
 		}
 		return nil, errShuttingDown()
 	}
-	committed = true
+	u.publishProgress(base, downexv1.UpdateInstallStage_UPDATE_INSTALL_STAGE_INSTALLING, res.Asset.Size, res.Asset.Size)
 	u.log.Info("installing an update; downexd stops", "from", u.cfg.version, "to", res.Latest.String())
 	if err := u.m.Shutdown(context.WithoutCancel(ctx)); err != nil {
 		u.log.Warn("not every download paused in time; they are requeued on the next start", "err", err)

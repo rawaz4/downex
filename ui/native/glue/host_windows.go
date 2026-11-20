@@ -293,6 +293,15 @@ func (h *Host) panicked(ww *win.Window, err error) {
 	}
 }
 
+// QuitApp closes every window of the process: the user quit Downex (the tray's Quit, the
+// menu-bar icon's Quit, ⌘Q), which downexd announced. For the UI thread.
+func (w *Window) QuitApp() {
+	if w.h != nil {
+		w.h.Log.Info("Downex quits: closing every window")
+		w.h.CloseAll()
+	}
+}
+
 // CloseAll closes every window as its own close does (the main window stores its size),
 // so that the process ends: the answer to a WM_CLOSE another program sends (an installer's
 // CloseMainWindow reaches one window of the process; the hand-off window's). For the UI

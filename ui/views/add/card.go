@@ -360,7 +360,7 @@ type addressText struct {
 }
 
 func newAddressText(value, name string) *addressText {
-	t := views.NewText(value, views.FontMono, views.InkInk2, kit.TextOptions{Truncate: kit.TruncateEnd, Direction: kit.DirLTR})
+	t := views.NewText(value, views.FontMono, views.InkInk2, kit.TextOptions{Truncate: kit.TruncateMiddle, Direction: kit.DirLTR})
 	a := &addressText{Text: t}
 	a.Tooltip = value
 	a.Focus = kit.FocusTab
@@ -438,7 +438,8 @@ func (a *addressText) HoverChanged(bool) { a.Invalidate() }
 
 // FocusChanged is kit.FocusHandler's. Focused from the keyboard, the field selects its
 // whole value; a press has placed the caret already. Focused, the line is drawn whole (no
-// ellipsis); unfocused, the selection is not shown and the line starts at its start again.
+// ellipsis); unfocused, the selection is not shown and the line starts at its start again,
+// shortened in its middle (the end of an address, a video's id, stays).
 func (a *addressText) FocusChanged(focused bool) {
 	o := a.Options()
 	if focused {
@@ -447,7 +448,7 @@ func (a *addressText) FocusChanged(focused bool) {
 			a.anchor, a.caret = 0, len(a.Value())
 		}
 	} else {
-		o.Truncate = kit.TruncateEnd
+		o.Truncate = kit.TruncateMiddle
 		a.anchor, a.caret, a.scroll, a.dragging = 0, 0, 0, false
 	}
 	a.SetOptions(o)

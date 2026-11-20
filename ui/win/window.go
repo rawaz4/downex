@@ -40,6 +40,8 @@ type Window struct {
 	px       w32.Point
 	state    kit.WindowState
 	minSize  kit.Size
+	maxSize  kit.Size // the largest client size the user can resize to; a side of 0 has none
+	resizing bool     // the window's own Resize runs, which the largest size does not hold back
 	cursor   kit.Cursor
 	colors   kit.FrameColors
 	active   bool
@@ -573,14 +575,25 @@ func (w *Window) proc(msg uint32, wp, lp uintptr) (ret uintptr) {
 		w.onSize(wp)
 		return 0
 	case w32.WM_GETMINMAXINFO:
+		mmi := (*w32.MINMAXINFO)(com.Addr(lp))
 		if w.minSize.W > 0 || w.minSize.H > 0 {
-			mmi := (*w32.MINMAXINFO)(com.Addr(lp))
 			ow, oh := w.outerSize(w.pixels(w.minSize.W), w.pixels(w.minSize.H), w.sysDPI())
 			if w.minSize.W > 0 {
 				mmi.MinTrackSize.X = ow
 			}
 			if w.minSize.H > 0 {
 				mmi.MinTrackSize.Y = oh
+			}
+		}
+		// The largest size holds the user's resizing back, not the window's own Resize
+		// (DefWindowProc clamps SetWindowPos to it too), and never below the least.
+		if (w.maxSize.W > 0 || w.maxSize.H > 0) && !w.resizing {
+			ow, oh := w.outerSize(w.pixels(w.maxSize.W), w.pixels(w.maxSize.H), w.sysDPI())
+			if w.maxSize.W > 0 {
+				mmi.MaxTrackSize.X = max(ow, mmi.MinTrackSize.X)
+			}
+			if w.maxSize.H > 0 {
+				mmi.MaxTrackSize.Y = max(oh, mmi.MinTrackSize.Y)
 			}
 		}
 		return 0
@@ -924,8 +937,25 @@ func (w *Window) SetMinSize(s kit.Size) {
 	w.minSize = kit.Size{W: max(s.W, 0), H: max(s.H, 0)}
 }
 
+// SetMaxSize sets the largest client size, in DIPs, that the user can resize the window to
+// (it follows DPI changes, and is never below the smallest); a side of 0 has no maximum. The
+// window's own Resize and ResizeCentered are not held back by it.
+func (w *Window) SetMaxSize(s kit.Size) {
+	if w.closed || !finite(s.W) || !finite(s.H) {
+		return
+	}
+	w.maxSize = kit.Size{W: max(s.W, 0), H: max(s.H, 0)}
+}
+
 // Resize implements kit.Host.
-func (w *Window) Resize(s kit.Size) {
+func (w *Window) Resize(s kit.Size) { w.resize(s, false) }
+
+// ResizeCentered is Resize keeping the window's centre where it is instead of its top-left
+// corner (a window that fits its content: it grows or shrinks about where the user sees it),
+// fitted into its monitor's work area as Resize fits it.
+func (w *Window) ResizeCentered(s kit.Size) { w.resize(s, true) }
+
+func (w *Window) resize(s kit.Size, centred bool) {
 	if w.closed || !(s.W > 0) || !(s.H > 0) || !finite(s.W) || !finite(s.H) {
 		return
 	}
@@ -935,6 +965,7 @@ func (w *Window) Resize(s kit.Size) {
 		err := w32.GetWindowPlacement(w.hwnd, &w.placement)
 		if err == nil {
 			n := &w.placement.NormalPosition
+			n.Left, n.Top = resizedOrigin(*n, ww, wh, centred)
 			n.Right, n.Bottom = n.Left+ww, n.Top+wh
 			w.placement.ShowCmd = w32.SW_SHOWNA
 			err = w32.SetWindowPlacement(w.hwnd, &w.placement)
@@ -945,14 +976,26 @@ func (w *Window) Resize(s kit.Size) {
 		return
 	}
 	wr := w32.GetWindowRect(w.hwnd)
-	x, y := wr.Left, wr.Top
+	x, y := resizedOrigin(wr, ww, wh, centred)
 	if mi, ok := w32.GetMonitorInfo(w32.MonitorFromWindow(w.hwnd, w32.MONITOR_DEFAULTTONEAREST)); ok {
 		work := mi.Work
 		ww, wh = min(ww, work.Right-work.Left), min(wh, work.Bottom-work.Top)
+		x, y = resizedOrigin(wr, ww, wh, centred)
 		x = max(min(x, work.Right-ww), work.Left)
 		y = max(min(y, work.Bottom-wh), work.Top)
 	}
+	w.resizing = true
 	w32.SetWindowPos(w.hwnd, x, y, ww, wh, w32.SWP_NOZORDER|w32.SWP_NOACTIVATE)
+	w.resizing = false
+}
+
+// resizedOrigin is the top-left corner of r resized to ww × wh: r's own, or (centred) the one
+// that keeps r's centre.
+func resizedOrigin(r w32.Rect, ww, wh int32, centred bool) (x, y int32) {
+	if !centred {
+		return r.Left, r.Top
+	}
+	return r.Left + (r.Right-r.Left-ww)/2, r.Top + (r.Bottom-r.Top-wh)/2
 }
 
 // SetFrameColors implements kit.Host.

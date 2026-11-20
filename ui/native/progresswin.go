@@ -46,6 +46,7 @@ func openProgress(a *osApp, b *backend, o options) (*osWindow, error) {
 	if b.attach != nil {
 		b.attach(w, pw.Kit) // the pickers, the risky-file box, later starts, the theme followed
 	}
+	b.post = pw.Kit.Post
 	if b.start != nil {
 		b.start()
 	}

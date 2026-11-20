@@ -12,5 +12,6 @@ dlgpbdafcmciojddbbjikgeeefipejcn
 # Chrome Web Store: add the ID its dashboard shows after the first upload on a line of
 # its own here (not needed when the store's public key is adopted in keys/public-key.txt,
 # which makes the store ID the one above).
+llnofffhagcfejjcephcilcbndnhnbeg
 
 # Edge Add-ons: Partner Center always gives its own ID; add it on a line of its own here.

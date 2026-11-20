@@ -191,6 +191,12 @@ const partSuffix = ".part"
 // attribute (unlike a user's download, internal/filemark): its manifest vouches for it, and
 // a quarantined Downex.app would not start after an ad-hoc signed update.
 func Download(ctx context.Context, c *http.Client, userAgent string, a Asset, dir, name string) (string, error) {
+	return DownloadProgress(ctx, c, userAgent, a, dir, name, nil)
+}
+
+// DownloadProgress is Download that reports the bytes received so far and the package's
+// size to progress (nil: none) as they arrive, on the downloading goroutine.
+func DownloadProgress(ctx context.Context, c *http.Client, userAgent string, a Asset, dir, name string, progress func(done, total int64)) (string, error) {
 	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, `/\:`) {
 		return "", fmt.Errorf("update: invalid package name %q", name)
 	}
@@ -227,7 +233,12 @@ func Download(ctx context.Context, c *http.Client, userAgent string, a Asset, di
 		}
 	}()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, a.Size+1))
+	var w io.Writer = io.MultiWriter(f, h)
+	if progress != nil {
+		progress(0, a.Size)
+		w = &progressWriter{w: w, total: a.Size, report: progress}
+	}
+	n, err := io.Copy(w, io.LimitReader(resp.Body, a.Size+1))
 	if err != nil {
 		var pe *os.PathError
 		if errors.As(err, &pe) {
@@ -276,4 +287,19 @@ func CleanDir(dir string) {
 			_ = os.Remove(filepath.Join(dir, n))
 		}
 	}
+}
+
+// progressWriter counts what passes through it for DownloadProgress.
+type progressWriter struct {
+	w      io.Writer
+	done   int64
+	total  int64
+	report func(done, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.done += int64(n)
+	p.report(p.done, p.total)
+	return n, err
 }

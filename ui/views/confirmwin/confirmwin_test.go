@@ -2,6 +2,7 @@ package confirmwin_test
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,9 +10,12 @@ import (
 	"time"
 
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/ui/host"
 	"downex/ui/kit"
+	"downex/ui/kit/tokens"
 	"downex/ui/state/scene"
 	"downex/ui/views"
+	"downex/ui/views/add"
 	"downex/ui/views/confirmwin"
 	"downex/ui/views/viewstest"
 
@@ -19,6 +23,7 @@ import (
 )
 
 // rig is the standalone window over the harness: its resizes applied, its close recorded.
+// sizes are the sizes asked for, maxes the largest sizes set and log both, in order.
 type rig struct {
 	h      *viewstest.Harness
 	opened []int64 // the progress windows opened
@@ -27,12 +32,14 @@ type rig struct {
 	// openedAtClose is how many progress windows were asked for when the window closed.
 	openedAtClose int
 	sizes         []kit.Size
+	maxes         []kit.Size
+	log           []string
 }
 
 func newRig(t *testing.T, o viewstest.Options, ids func(*viewstest.Harness) []int64) *rig {
 	t.Helper()
 	if o.Width == 0 {
-		o.Width, o.Height = confirmwin.Width, confirmwin.Height
+		o.Width, o.Height = host.ConfirmWidth, host.ConfirmHeight
 	}
 	no := false
 	o.Frameless = &no
@@ -44,14 +51,37 @@ func newRig(t *testing.T, o viewstest.Options, ids func(*viewstest.Harness) []in
 		Close: func() { r.closed++; r.openedAtClose = len(r.opened) },
 		Resize: func(s kit.Size) {
 			r.sizes = append(r.sizes, s)
+			r.log = append(r.log, fmt.Sprint("resize ", s))
 			r.h.Host.Host.SizeV = s
 			r.h.Window.Event(kit.SizeEvent{Size: s})
+		},
+		MaxSize: func(s kit.Size) {
+			r.maxes = append(r.maxes, s)
+			r.log = append(r.log, fmt.Sprint("max ", s))
 		},
 	})
 	t.Cleanup(r.s.Dispose)
 	r.h.Show(r.s)
 	r.settle()
 	return r
+}
+
+// userResize is the user dragging the window's frame to size s.
+func (r *rig) userResize(s kit.Size) {
+	r.h.Host.Host.SizeV = s
+	r.h.Window.Event(kit.SizeEvent{Size: s})
+	r.settle()
+}
+
+// fitSize is the size the window fits dialog c to: its preferred width, the height its
+// content asks for at that width.
+func (r *rig) fitSize(c *add.Confirm) kit.Size {
+	pw := c.PreferredWidth(r.h.Window.Environment().Scale)
+	h, ok := c.NaturalHeightAt(pw)
+	if !ok {
+		r.h.T.Fatalf("the dialog was not measured at %v", pw)
+	}
+	return kit.Size{W: pw, H: kit.DIP(math.Ceil(float64(h)))}
 }
 
 func (r *rig) settle() {
@@ -86,12 +116,16 @@ func TestTheWindowIsTheDialog(t *testing.T) {
 	if !c.CloseButton().Style.Hidden {
 		t.Fatal("the dialog shows a close button of its own: the title bar closes the window")
 	}
-	if len(r.sizes) == 0 {
-		t.Fatal("the window was not fitted to the dialog")
-	}
 	got := r.h.Window.Size()
+	if pw := c.PreferredWidth(r.h.Window.Environment().Scale); got.W != pw {
+		t.Fatalf("window width %v for a dialog %v wide", got.W, pw)
+	}
 	if n := c.NaturalHeight(); got.H+0.5 < n || got.H > n+1 {
 		t.Fatalf("window height %v for a dialog of %v", got.H, n)
+	}
+	// The window opens as large as the dialog of a file asks (no resize after it shows).
+	if len(r.sizes) > 0 {
+		t.Errorf("the window opened at %v×%v and was resized to %v", host.ConfirmWidth, host.ConfirmHeight, r.sizes)
 	}
 	if b := c.Card().WindowBounds(); b.Min.X != 0 || b.Min.Y != 0 || b.Max.X != got.W {
 		t.Fatalf("the dialog %v does not fill the window %v", b, got)
@@ -100,6 +134,141 @@ func TestTheWindowIsTheDialog(t *testing.T) {
 		if !hasButton(c.Card(), e) {
 			t.Fatalf("no %q button", e)
 		}
+	}
+}
+
+// A dialog shown is fitted in one resize, at its width and the height its content asks for
+// at that width, wherever the window started; the largest size is let go before the resize
+// and set after it: a quarter wider than the dialog, as high as its content.
+func TestTheWindowFitsANewDialogInOneResize(t *testing.T) {
+	for _, start := range []kit.Size{{W: 1000, H: 300}, {W: 500, H: 700}} {
+		t.Run(fmt.Sprint(start), func(t *testing.T) {
+			r := newRig(t, viewstest.Options{Fixture: "confirm-video-3", Width: int(start.W), Height: int(start.H)}, oldest)
+			c := r.s.Current()
+			want := r.fitSize(c)
+			if len(r.sizes) != 1 || r.sizes[0] != want {
+				t.Fatalf("resizes %v, want one to %v", r.sizes, want)
+			}
+			if got := r.h.Window.Size(); got != want {
+				t.Fatalf("window %v, want %v", got, want)
+			}
+			if n := c.NaturalHeight(); math.Ceil(float64(n)) != float64(want.H) {
+				t.Fatalf("the content asks for %v at the window's width, the window is %v high", n, want.H)
+			}
+			max := kit.Size{W: kit.DIP(math.Ceil(float64(want.W * 1.25))), H: want.H}
+			if len(r.maxes) == 0 || r.maxes[len(r.maxes)-1] != max {
+				t.Fatalf("largest sizes %v, want %v last", r.maxes, max)
+			}
+			if i := slices.Index(r.log, fmt.Sprint("resize ", want)); i != 0 {
+				t.Fatalf("a largest size was set before the resize: %v", r.log)
+			}
+		})
+	}
+}
+
+// The user's size is kept: a width that rewraps the dialog does not snap its height, and the
+// largest height follows what the content needs at the user's width. Content that changes
+// then does not resize the window either; the next dialog of the burst is fitted again.
+func TestTheUserSizeIsKept(t *testing.T) {
+	r := newRig(t, viewstest.Options{Fixture: "confirm-file-waiting"}, oldest)
+	c := r.s.Current()
+	fitted := len(r.sizes)
+	for _, user := range []kit.Size{{W: 820, H: 520}, {W: 560, H: 400}} {
+		r.userResize(user)
+		if len(r.sizes) != fitted {
+			t.Fatalf("user size %v: the window was resized to %v", user, r.sizes[fitted:])
+		}
+		if got := r.h.Window.Size(); got != user {
+			t.Fatalf("window %v, want the user's %v", got, user)
+		}
+		n := c.NaturalHeight()
+		if m := r.maxes[len(r.maxes)-1]; m.H != max(kit.DIP(math.Ceil(float64(n))), host.ConfirmMinHeight) {
+			t.Fatalf("user size %v: largest %v for content %v high", user, m, n)
+		}
+	}
+	grow(r, c, 48)
+	if len(r.sizes) != fitted {
+		t.Fatalf("content grown at the user's size: resized to %v", r.sizes[fitted:])
+	}
+
+	press(t, c.Card(), "Download later")
+	r.settle()
+	next := r.s.Current()
+	if next == nil || next == c {
+		t.Fatal("the next download is not shown")
+	}
+	want := r.fitSize(next)
+	if len(r.sizes) != fitted+1 || r.sizes[fitted] != want {
+		t.Fatalf("the next dialog: resizes %v, want one to %v", r.sizes[fitted:], want)
+	}
+}
+
+// Content that grows (a note, another video) at the width the window was given fits the
+// window's height again, past the largest height set before.
+func TestContentChangeRefits(t *testing.T) {
+	r := newRig(t, viewstest.Options{Fixture: "confirm-file"}, oldest)
+	c := r.s.Current()
+	before := r.h.Window.Size()
+	n := len(r.sizes)
+	r.log = nil
+	grow(r, c, 48)
+	if len(r.sizes) != n+1 {
+		t.Fatalf("resizes %v after the content grew", r.sizes[n:])
+	}
+	got := r.sizes[n]
+	if got.W != before.W || got.H < before.H+48 || got.H != kit.DIP(math.Ceil(float64(c.NaturalHeight()))) {
+		t.Fatalf("resized from %v to %v for content %v high", before, got, c.NaturalHeight())
+	}
+	if m := r.maxes[len(r.maxes)-1]; m.H != got.H {
+		t.Fatalf("largest %v after the window grew to %v", m, got)
+	}
+	// The largest size, which would hold the growth back, is let go first.
+	if i := slices.Index(r.log, fmt.Sprint("resize ", got)); i < 1 || r.log[i-1] != fmt.Sprint("max ", kit.Size{}) {
+		t.Fatalf("the largest size was not let go before the resize: %v", r.log)
+	}
+}
+
+// grow adds a block h high to the dialog's body (what a note or another video adds).
+func grow(r *rig, c *add.Confirm, h float32) {
+	b := &kit.Element{Style: kit.Style{Display: kit.DisplayBlock, Height: kit.Px(h)}}
+	c.Body.Add(b)
+	c.Body.Relayout()
+	r.settle()
+}
+
+// Before the dialog shows (the list and the settings are read first) the window paints the
+// dialog's ground, not the kit window's --chrome; its caption is that ground too.
+func TestTheWindowPaintsTheDialogGround(t *testing.T) {
+	for _, tc := range []struct {
+		theme string
+		t     *tokens.Theme
+		host  host.RGB
+	}{{"light", &tokens.Light, host.RaisedLight}, {"dark", &tokens.Dark, host.RaisedDark}} {
+		if f := confirmwin.CaptionFrame(tc.t); f.Background != tc.t.Raised || f.Caption != tc.t.Raised || f.Text != tc.t.Ink {
+			t.Errorf("%s: caption frame %+v", tc.theme, f)
+		}
+		if got := kit.RGB(uint32(tc.host.R)<<16 | uint32(tc.host.G)<<8 | uint32(tc.host.B)); got != tc.t.Raised {
+			t.Errorf("%s: the window opens in %+v, the dialog is %+v", tc.theme, tc.host, tc.t.Raised)
+		}
+		if got := (host.View{Confirm: 3}).Window().Background(tc.theme == "dark"); got != tc.host {
+			t.Errorf("%s: the window's spec opens in %+v", tc.theme, got)
+		}
+	}
+	if err := viewstest.CanRender(); err != nil {
+		t.Skip(err)
+	}
+	r := newRig(t, viewstest.Options{Fixture: "confirm-file", Theme: "dark", Real: true}, func(*viewstest.Harness) []int64 { return nil })
+	if r.s.Current() != nil {
+		t.Fatal("a dialog shown before anything was asked for")
+	}
+	img, err := r.h.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	got := img.RGBAAt(b.Dx()/2, b.Dy()/2)
+	if want := host.RaisedDark; got.R != want.R || got.G != want.G || got.B != want.B {
+		t.Fatalf("the empty window paints %v, want %+v", got, want)
 	}
 }
 
@@ -245,20 +414,39 @@ func TestRenderShots(t *testing.T) {
 						t.Fatal("no dialog")
 					}
 					r.h.Window.Blur()
-					img, err := r.h.Render()
-					if err != nil {
-						t.Fatal(err)
+					shot(t, r, dir, fmt.Sprintf("confirmwin-%s-%s-%v.png", fx, theme, scale*100))
+				})
+			}
+			// The user's sizes: as wide as the window lets them, and narrow.
+			for _, user := range []kit.Size{{W: 880, H: 600}, {W: host.ConfirmMinWidth, H: host.ConfirmMinHeight}} {
+				t.Run(fmt.Sprintf("%s-%s-%v", fx, theme, user), func(t *testing.T) {
+					r := newRig(t, viewstest.Options{Fixture: fx, Theme: theme, Scale: 1, Real: true}, oldest)
+					if r.s.Current() == nil {
+						t.Fatal("no dialog")
 					}
-					if dir == "" {
-						return
+					if m := r.maxes[len(r.maxes)-1]; user.W > m.W || user.H > m.H {
+						user = kit.Size{W: min(user.W, m.W), H: min(user.H, m.H)} // the system holds the drag back
 					}
-					name := filepath.Join(dir, fmt.Sprintf("confirmwin-%s-%s-%v.png", fx, theme, scale*100))
-					if err := viewstest.WritePNG(name, img); err != nil {
-						t.Fatal(err)
-					}
+					r.userResize(user)
+					r.h.Window.Blur()
+					shot(t, r, dir, fmt.Sprintf("confirmwin-%s-%s-%vx%v.png", fx, theme, user.W, user.H))
 				})
 			}
 		}
+	}
+}
+
+func shot(t *testing.T, r *rig, dir, name string) {
+	t.Helper()
+	img, err := r.h.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir == "" {
+		return
+	}
+	if err := viewstest.WritePNG(filepath.Join(dir, name), img); err != nil {
+		t.Fatal(err)
 	}
 }
 

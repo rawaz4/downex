@@ -189,7 +189,10 @@ func (s daemonService) UpdateSettings(ctx context.Context, req *connect.Request[
 // the process to exit. The pause is not cut short when the client goes away. A pause
 // that does not finish in time is reported as DeadlineExceeded; the daemon exits anyway
 // and the next start requeues those downloads.
-func (s daemonService) Shutdown(ctx context.Context, _ *connect.Request[downexv1.ShutdownRequest]) (*connect.Response[downexv1.ShutdownResponse], error) {
+func (s daemonService) Shutdown(ctx context.Context, req *connect.Request[downexv1.ShutdownRequest]) (*connect.Response[downexv1.ShutdownResponse], error) {
+	if req.Msg.GetQuitApp() {
+		s.m.AnnounceQuit()
+	}
 	err := s.m.Shutdown(context.WithoutCancel(ctx))
 	s.onShutdown()
 	if err != nil {

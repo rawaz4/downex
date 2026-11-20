@@ -56,7 +56,10 @@ type Notice struct {
 	Kind       NoticeKind
 	Download   *downexv1.Download // NoticeCompleted, NoticeFailed, NoticeAwaiting, NoticeLinkRenewed: the download then
 	UILaunched bool               // NoticeAwaiting
-	Settings   Settings           // NoticeSettings (a copy)
+	// InWindow (NoticeCompleted, NoticeFailed): the download's progress window shows the
+	// outcome (the download complete dialog); the tray shows no notification for it.
+	InWindow bool
+	Settings Settings // NoticeSettings (a copy)
 	// NoticePostAction: the countdown (or its cancellation).
 	PostAction *downexv1.PostActionPending
 	// NoticeScanProblem, NoticeFileCheck: the notification text.

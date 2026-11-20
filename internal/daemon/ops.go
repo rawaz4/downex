@@ -136,12 +136,15 @@ func (m *Manager) indexAdded(d *model.Download, awaiting bool, candidates []mode
 		m.enqueueLocked(d.ID)
 	}
 	m.scheduleLocked()
-	pd := m.protoLocked(e)
 	ask := awaiting && !m.closed && !held
 	// A hand-off that starts at once shows its progress window (§7); one that waits in
 	// the queue does not (it starts later).
 	show := !awaiting && !held && handOff(d.Source) && e.run != nil && !m.closed &&
 		m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil
+	if show {
+		m.markWindowedLocked(e)
+	}
+	pd := m.protoLocked(e)
 	// A browser add that opens neither shows nothing: never the main window (§7 "Above
 	// the browser").
 	if ask || show {
@@ -613,6 +616,9 @@ func (m *Manager) SetDownloadOptions(ctx context.Context, r *downexv1.SetDownloa
 		}
 		if dialog != nil {
 			e.pendDialog = dialog
+			if *dialog { // its progress window is open: the run's outcome shows there
+				run.windowed = true
+			}
 		}
 		pd := m.protoLocked(e)
 		m.mu.Unlock()

@@ -99,6 +99,7 @@ func openMain(a *osApp, b *backend, o options) (*osWindow, error) {
 		},
 	})
 	quit = func() { _ = kw.Post(kw.Close) }
+	b.post = kw.Post
 	va, m, err = composeMain(holder, views.Options{
 		Window: kw, Daemon: b.daemon, Platform: b.platform, Main: stores, Theme: b.theme, Density: density,
 		Storage: b.storage, Clock: state.SystemClock, Caps: b.caps, Build: b.build, Demo: b.demo, Call: b.call,

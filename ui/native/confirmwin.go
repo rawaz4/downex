@@ -14,7 +14,8 @@ import (
 
 // openConfirm opens the standalone Confirm download window (docs/DESKTOP-SPEC.md §1) on a: a
 // download the user just started in the browser is confirmed in a compact window of its own,
-// with the system's frame and caption in the app's theme, and the main window is not shown.
+// with the system's frame and caption in the app's theme (on the dialog's --raised ground,
+// confirmwin.CaptionFrame), and the main window is not shown.
 // It holds the downloads' stores (the dialog's queues, categories and settings) and shows the
 // "--confirm <id>" requests one at a time, oldest first, then closes. What it holds is let go
 // by b.later's functions once it has closed.
@@ -35,7 +36,7 @@ func openConfirm(a *osApp, b *backend, o options) (*osWindow, error) {
 		Title:       spec.Title,
 		MinSize:     minSize,
 		Palette:     theme.Palette,
-		FrameColors: theme.CaptionFrame,
+		FrameColors: func(env kit.Environment) kit.FrameColors { return confirmwin.CaptionFrame(theme.Tokens(env)) },
 	})
 	va, err := views.NewApp(views.Options{
 		Window: kw, Daemon: b.daemon, Platform: b.platform, Main: stores, Storage: b.storage,
@@ -66,7 +67,7 @@ func openConfirm(a *osApp, b *backend, o options) (*osWindow, error) {
 			t := va.Tokens()
 			kw.SetPalette(t.Palette())
 			if h := kw.Host(); h != nil {
-				h.SetFrameColors(t.CaptionFrame())
+				h.SetFrameColors(confirmwin.CaptionFrame(t))
 			}
 			kw.InvalidateRect(kit.RectAt(kit.Point{}, kw.Size()))
 		})

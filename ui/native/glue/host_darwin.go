@@ -3,6 +3,7 @@
 package glue
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -316,11 +317,44 @@ func (h *Host) menuCommand(c mac.MenuCommand, ww *mac.Window) {
 		if w := h.main; w != nil && w.menu != nil {
 			w.menu("settings")
 		}
-	case mac.MenuQuit, mac.MenuCloseWindow:
+	case mac.MenuQuit:
+		// ⌘Q quits all of Downex, as Quit in the menu-bar icon does: downexd stops and every
+		// window closes (also when downexd cannot be reached).
+		h.quitDaemon()
+	case mac.MenuCloseWindow:
 		for _, w := range menuCloseTargets(c, h.windowOf(ww), h.main, h.windows) {
 			w.command(kit.WindowClose)
 		}
 	}
+}
+
+// quitDaemon asks downexd to quit, off the UI thread: downexd's quit event then closes every
+// window (backend.go). Whatever downexd answers, the windows close next, so that ⌘Q never
+// leaves them open when downexd cannot be reached.
+func (h *Host) quitDaemon() {
+	var q interface{ QuitApp(context.Context) error }
+	for _, w := range h.windows {
+		if w.Session == nil {
+			continue
+		}
+		if d, ok := w.Session.Daemon().(interface{ QuitApp(context.Context) error }); ok {
+			q = d
+			break
+		}
+	}
+	a := h.app
+	go func() {
+		if q != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := q.QuitApp(ctx); err != nil {
+				h.Log.Info("downexd did not take the quit", "error", err)
+			}
+			cancel()
+		}
+		if a != nil {
+			a.Post(h.CloseAll)
+		}
+	}()
 }
 
 // menuCloseTargets are the windows Quit or Close Window (c) closes: the key window key,
@@ -373,6 +407,15 @@ func (h *Host) terminate(reply func(ok bool)) {
 		}
 		reply(true)
 	}()
+}
+
+// QuitApp closes every window of the process: the user quit Downex (the tray's Quit, the
+// menu-bar icon's Quit, ⌘Q), which downexd announced. For the UI thread.
+func (w *Window) QuitApp() {
+	if w.h != nil {
+		w.h.Log.Info("Downex quits: closing every window")
+		w.h.CloseAll()
+	}
 }
 
 // CloseAll closes every window as its own close does (the main window stores its size).

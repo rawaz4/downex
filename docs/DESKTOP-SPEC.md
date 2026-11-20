@@ -149,6 +149,10 @@
   notification balloon (Windows 10/11 present it as a toast). Title "Download complete" / "Download
   failed"; text = file name (bidi/control characters stripped) and, for failures, the short error.
 - Coalesce bursts: more than 3 within 5 s become one "N downloads completed" message.
+- No balloon for a completion or failure that a progress window shows: a run whose progress window
+  downexd opened, the confirming window opened (`ConfirmRequest.progress_window`), or that window
+  marked while it ran, gets the download complete dialog (§8) instead. When that window cannot be
+  opened, the balloon is shown after all.
 - The final file check of a completed download (§9.7) produces "Check this download": "<name> is not
   what its name says." for DANGER (always, error style) and "<name> may not be the file you wanted."
   for CAUTION (only while `notify_on_complete` is on); a NOTE produces none.
@@ -220,8 +224,9 @@ its progress window while `show_progress_window` is on and it starts at once, it
 download window (§1) while `confirm_browser_downloads` is on. Otherwise (both off, or the add waits in its
 queue) nothing shows: the main window is never shown, restored or brought forward for a browser add.
 downexd starts these with `--raise` (`downex-ui --progress <id> --raise`, `--confirm <id> --raise`);
-only such a start raises a window. A clipboard add, a CLI or window add, and the download complete dialog
-(§8) never do: they open as before, and Windows only flashes their taskbar button when the user is busy
+only such a start raises a window, and so does the download complete dialog (§8) of a browser download
+whose progress window showed that run. A clipboard add, a CLI or window add, and the complete dialog of
+any other run never do: they open as before, and Windows only flashes their taskbar button when the user is busy
 in another app. The native-messaging host, started by the browser, hands the foreground right on
 (`AllowSetForegroundWindow(ASFW_ANY)`) before it relays an add or a rescue; when Windows still refuses
 the foreground, the `--raise` window is restored and placed at the top of the normal windows without
@@ -308,7 +313,9 @@ The completion view of §7, extended so it also appears when the progress window
 
 - **Who gets it:** downloads the user started interactively — any download whose progress window was
   opened at least once (the UI marks it via `SetDownloadOptions{completion_dialog: true}`; persisted
-  as `Download.completion_dialog`). Queue/scheduled/CLI downloads only get the tray notification.
+  as `Download.completion_dialog`). downexd marks it itself, at the start of the run, when it opens
+  the progress window (§7) or when a confirmation says its window opens it
+  (`ConfirmRequest.progress_window`), so a quick download or failure never outruns the window's mark. Queue/scheduled/CLI downloads only get the tray notification.
   Nothing pops up while `Settings.show_complete_dialog` is off.
 - **Closing the progress window (X) only closes the window**: the download keeps running in the daemon.
   **Cancel** still means pause + close.
