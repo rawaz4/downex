@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -56,6 +57,7 @@ type fakeSite struct {
 	runErr     error // returned by Run at once (after startGate)
 	probes     []SiteSelection
 	runs       []fakeSiteRun
+	onRun      func(opts MediaRunOptions) // called as a run starts (a run going on through the browser)
 }
 
 type fakeSiteRun struct {
@@ -107,6 +109,16 @@ func (f *fakeSite) Probe(ctx context.Context, tf transport.Factory, sel SiteSele
 		return nil, probeErr
 	}
 	p.Tracks = slices.Clone(p.Tracks)
+	if len(p.Items) > 0 {
+		// A page with several videos: the item named (the first by default), titled by it.
+		p.Items = slices.Clone(p.Items)
+		p.EntryID = cmp.Or(sel.EntryID, p.Items[0].ID)
+		i := slices.IndexFunc(p.Items, func(it model.MediaItem) bool { return it.ID == p.EntryID })
+		if i < 0 {
+			return nil, sitemedia.ErrItemGone
+		}
+		p.Title = p.Items[i].Title
+	}
 	if sel.VideoTrack != "" {
 		p.DefaultVideo = sel.VideoTrack
 	}
@@ -120,8 +132,11 @@ func (f *fakeSite) Run(ctx context.Context, opts MediaRunOptions, sel SiteSelect
 	onProgress func(MediaProgress), onCheckpoint func(model.MediaCheckpoint) error) (string, error) {
 	f.mu.Lock()
 	f.runs = append(f.runs, fakeSiteRun{opts: opts, sel: sel, resume: resume.Clone()})
-	gate, total, runErr := f.startGate, f.bytesTotal, f.runErr
+	gate, total, runErr, onRun := f.startGate, f.bytesTotal, f.runErr, f.onRun
 	f.mu.Unlock()
+	if onRun != nil {
+		onRun(opts)
+	}
 	if gate != nil {
 		select {
 		case <-gate:
@@ -335,6 +350,7 @@ type siteHarnessOptions struct {
 	site      SiteMedia
 	tools     Tools
 	hostRules engine.HostRules // Config.Engine.HostRules
+	played    PlayedMedia      // Config.Played
 }
 
 // newSiteHarness is newHarness with Config.Site, Config.Tools and the engine's host
@@ -358,7 +374,7 @@ func newSiteHarness(t *testing.T, o harnessOptions, so siteHarnessOptions) *harn
 		Store: o.st, Transport: tf, SettingsPath: o.settingsPath,
 		DownloadsDir: func() (string, error) { return o.dir, nil },
 		Logger:       testLogger(t), Version: "test-version", Endpoint: "test-endpoint",
-		Media: o.media, Network: o.network, Site: so.site, Tools: so.tools,
+		Media: o.media, Network: o.network, Site: so.site, Tools: so.tools, Played: so.played,
 		Engine: engine.Options{HostRules: so.hostRules},
 	})
 	if err != nil {

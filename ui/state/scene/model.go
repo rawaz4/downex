@@ -67,6 +67,11 @@ type dl struct {
 	completionDialog                  bool
 	activeMs, startedAt               float64
 	queueID                           int64
+	fileCheck                         *downexv1.FileCheck // the file check (DESKTOP-SPEC §9)
+	// Expired links (DESKTOP-SPEC §10).
+	pageURL    string
+	renewCheck bool
+	renewOffer *downexv1.RenewOffer
 }
 
 func stamp(ms float64) *timestamppb.Timestamp {
@@ -87,6 +92,15 @@ func (d *dl) clone() *downexv1.Download {
 		SpeedBps: d.speedBps, Connections: int32(d.connections), QueuePosition: int32(d.queuePosition),
 		Source: d.source, ExpectedSize: int64(d.expectedSize), Mime: d.mime, Category: d.category, Kind: d.kind,
 		CompletionDialog: d.completionDialog, ActiveMs: int64(d.activeMs), StartedAt: stamp(d.startedAt), QueueId: d.queueID,
+		PageUrl: d.pageURL, RenewCheck: d.renewCheck,
+	}
+	if d.renewOffer != nil {
+		out.RenewOffer = proto.CloneOf(d.renewOffer)
+	}
+	// A completed download shows its final check only (filecheck.Shown).
+	if d.fileCheck != nil && (d.state != downexv1.DownloadState_DOWNLOAD_STATE_COMPLETED ||
+		d.fileCheck.GetStage() == downexv1.FileCheckStage_FILE_CHECK_STAGE_FINAL) {
+		out.FileCheck = proto.CloneOf(d.fileCheck)
 	}
 	for _, s := range d.segments {
 		out.Segments = append(out.Segments, &downexv1.Segment{Start: int64(s.start), End: int64(s.end), Received: int64(s.received)})

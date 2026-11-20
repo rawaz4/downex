@@ -220,6 +220,27 @@ func (f *fakeDaemon) InstallTools(_ context.Context, req *downexv1.InstallToolsR
 	return &downexv1.InstallToolsResponse{Status: proto.CloneOf(f.tools)}, nil
 }
 
+func (f *fakeDaemon) Rescue(_ context.Context, req *downexv1.RescueRequest) (*downexv1.RescueResponse, error) {
+	if err := f.record(req); err != nil {
+		return nil, err
+	}
+	return &downexv1.RescueResponse{Download: &downexv1.Download{
+		Id: 98, Url: req.GetUrl(), Size: 100, Received: 40, RescuedBytes: 40,
+		State: downexv1.DownloadState_DOWNLOAD_STATE_QUEUED,
+	}, RescuedBytes: 40}, nil
+}
+
+func (f *fakeDaemon) RenewLink(_ context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
+	if err := f.record(req); err != nil {
+		return nil, err
+	}
+	d, err := f.lookup(req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return &downexv1.RenewLinkResponse{Download: d}, nil
+}
+
 func (f *fakeDaemon) SetDownloadOptions(_ context.Context, req *downexv1.SetDownloadOptionsRequest) (*downexv1.SetDownloadOptionsResponse, error) {
 	if err := f.record(req); err != nil {
 		return nil, err

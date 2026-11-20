@@ -266,3 +266,26 @@ func TestConfirmBurstIsSeparate(t *testing.T) {
 	second, _ := c.Deadline()
 	expect(t, "then confirmations", c.Flush(second), "Confirm downloads|5 downloads are waiting for confirmation")
 }
+
+// TestExpiredLinkTexts: docs/DESKTOP-SPEC.md §10 (notifications).
+func TestExpiredLinkTexts(t *testing.T) {
+	clk := newClock()
+	c := NewCenter(all)
+	d := dl(5)
+	d.ErrorCode, d.Error, d.Received = "link_expired", "bytes 0-9: HTTP 403 Forbidden: engine: link expired", 4096
+	expect(t, "expired", c.Failed(clk.now, d),
+		"Link expired|file5.bin\nGive it a new link in Downex. The data received so far is kept.")
+	d.Received = 0
+	expect(t, "expired, nothing kept", c.Failed(clk.advance(time.Minute), d), "Link expired|file5.bin\nGive it a new link in Downex.")
+	got := c.Renewed(clk.advance(time.Minute), dl(6))
+	expect(t, "renewed", got, "Download continues|file6.bin\nIt continues with the new link.")
+	if got[0].Kind != KindRenewed || got[0].Error {
+		t.Errorf("renewed = %+v", got[0])
+	}
+	if got := NewCenter(Policy{OnFailure: true}).Renewed(clk.now, dl(7)); got != nil {
+		t.Errorf("renewed with completion notifications off = %v", got)
+	}
+	if s := ShortError("link_expired", "x"); s != "The link stopped working." {
+		t.Errorf("ShortError = %q", s)
+	}
+}

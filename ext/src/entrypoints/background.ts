@@ -2,6 +2,7 @@
 // that wake it are delivered (BROWSER-SPEC §3, §4; page videos: SITE-MEDIA-SPEC §3.6, §5.2;
 // videos of every site: VIDEO-DETECT-SPEC §2.4, §2.6, §3.6, §5.3, §5.5).
 
+import type { ClipRange } from '../lib/clip';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import {
@@ -24,7 +25,16 @@ import {
   type HeadersReceivedDetailsLike,
 } from '../lib/capture-firefox';
 import { CaptureTrace, traceUrl, type TraceStep } from '../lib/capture-trace';
-import { RequestContextStore, encodeRequestBody, filterHeaders, findContext, toHeaderPairs } from '../lib/context';
+import {
+  RequestContextStore,
+  buildAddFields,
+  defaultPolicyReferer,
+  encodeRequestBody,
+  filterHeaders,
+  findContext,
+  headerValue,
+  toHeaderPairs,
+} from '../lib/context';
 import { createFileHandOff, type FileSource } from '../lib/file-handoff';
 import {
   FILE_REQUEST_TYPES,
@@ -34,6 +44,8 @@ import {
   RedirectMap,
   RefusedFiles,
   classifyFile,
+  contentLengthSize,
+  contentRangeTotal,
   isMediaTraffic,
   refusedMp4Address,
 } from '../lib/frame-media';
@@ -58,9 +70,12 @@ import {
 import { MediaSends, createMediaHandOff, type MediaSendState, type MediaTracks } from '../lib/media-handoff';
 import {
   isExtensionMessage,
+  isShowPanelResponse,
   type AddMediaResponse,
   type FindPageVideoResponse,
   type FrameMessage,
+  type FailedDownloadsResponse,
+  type FinishDownloadResponse,
   type FrameOffersResponse,
   type LinksBatchResponse,
   type LinksConfirmResponse,
@@ -73,6 +88,7 @@ import {
   type TabMediaResponse,
   type TabStateResponse,
   type VideoAddResponse,
+  type VideoFeaturesResponse,
   type VideoProbeResponse,
   type VideoTaskState,
   type VideoUiResponse,
@@ -97,6 +113,7 @@ import {
 } from '../lib/page-links';
 import {
   FEATURE_PREFETCH,
+  FEATURE_CLIPS,
   FEATURE_STREAMS,
   FEATURE_VIDEO,
   NATIVE_HOST_NAME,
@@ -108,7 +125,26 @@ import {
   type BrowserName,
   type ConnectionStatus,
   type NativePort,
+  type Outcome,
+  type VideoInfoResult,
 } from '../lib/protocol';
+import {
+  BrowserFetchPump,
+  FetchTickets,
+  PLAYED_SWEEP_MS,
+  PlayedLog,
+  hostInScope,
+  httpHost,
+  playedOnly,
+  readLastError,
+  type FetchFrame,
+  type PlayedDetails,
+  type SessionArea,
+  type TicketRecord,
+} from '../lib/browser-fetch';
+import { FETCH_PORT, type FetchCommand, type FetchReport, type PortLike } from '../lib/page-fetch';
+import { backgroundHead, type HeadTry, HEAD_BYTES, mediaAnswer, PLAYED_KEY, PlayedHandoff, playedHeadReader } from '../lib/played-handoff';
+import { isYouTubeHost, looksLikeMp4, playedAddressOk, playedTitle, type PlayedTrace, readUpTo, sameOrigin } from '../lib/played';
 import {
   DEFAULTS_VERSION,
   RULES_STORAGE_KEY,
@@ -122,8 +158,31 @@ import {
 } from '../lib/rules';
 import { createStreamProber } from '../lib/stream-probes';
 import { PausedTabs } from '../lib/tab-pause';
-import { httpAddress, parseSiteVideo } from '../lib/site-video';
-import { STORE_LINK_MESSAGE, storeExcludes, storeExcludesRequest } from '../lib/store-build';
+import {
+  RESCUE_OPTIONS_KEY,
+  RescueContextStore,
+  ValidatorMemory,
+  buildRescueFields,
+  notificationDownload,
+  parseRescueOptions,
+  type RescueItem,
+} from '../lib/rescue';
+import { RescueService } from '../lib/rescue-service';
+import {
+  curatedPage,
+  genericPageUrl,
+  genericVideoKey,
+  httpAddress,
+  NETWORK_ONLY_TEXT,
+  parseSiteVideo,
+  SITE_NAMES,
+  signInScope,
+  siteOfAddress,
+  siteOfHost,
+  ytDlpReads,
+} from '../lib/site-video';
+import { VIDEO_TEXTS } from '../lib/ui-format';
+import { STORE_LINK_MESSAGE, storeBuild, storeExcludes, storeExcludesRequest, youtubeAddress } from '../lib/store-build';
 import {
   PageVideoCounts,
   createVideoHandOff,
@@ -132,6 +191,7 @@ import {
   senderTarget,
   tabTarget,
   tabVideoEntries,
+  videoItemKey,
   type FrameLike,
   type TabLike,
   type VideoTarget,
@@ -148,8 +208,23 @@ import {
 
 const HTTP_URLS = ['http://*/*', 'https://*/*'];
 const MENU_DOWNLOAD = 'downex-download';
+const MENU_VIDEO_LINK = 'downex-video-link';
+const MENU_SHOW_PANEL = 'downex-show-panel';
 const MENU_DOWNLOAD_ALL = 'downex-download-all';
 const PRIVATE_WINDOW_MESSAGE = 'Downloads from private windows stay in the browser.';
+/** "Show Downex download panel" found no right-clicked video in the frame (VIDEO-DETECT-SPEC §5.1). */
+const SHOW_PANEL_NO_VIDEO = 'Right-click the video itself, then choose Show Downex download panel.';
+/** … or no tracker answered there (a page loaded before the extension). */
+const SHOW_PANEL_NO_TRACKER = 'Downex can’t show its panel in this frame. Reload the page, then try again.';
+/** … or a YouTube frame whose own Download button is not shown, where reloading never helps. */
+const SHOW_PANEL_YOUTUBE = 'On YouTube, use the Downex toolbar menu to download this video.';
+/** … the same in the store build, which takes no YouTube video. */
+const SHOW_PANEL_STORE = 'Downex can’t show its panel on this site.';
+/**
+ * How long a frame's "Show Downex download panel" lets it have the overlay UI where buttons are
+ * not allowed (VIDEO-DETECT-SPEC §5.1 "Menu"); the request ends with the frame's answer anyway.
+ */
+const PANEL_REQUEST_MS = 30_000;
 /** Request types whose context is recorded (navigations and download-like fetches). */
 const CONTEXT_TYPES = ['main_frame', 'sub_frame', 'other', 'media', 'object'] as const;
 const BODY_TYPES: ReadonlySet<string> = new Set(['main_frame', 'sub_frame', 'other']);
@@ -278,7 +353,7 @@ export default defineBackground(() => {
         return browser.storage.local.set({ [RULES_STORAGE_KEY]: parseRules(stored) });
       }
       return undefined;
-    });
+    }).catch((e: unknown) => log('storing the default rules failed', e));
     void createMenus().catch((e: unknown) => log('creating context menus failed', e));
   });
 
@@ -427,10 +502,20 @@ export default defineBackground(() => {
   const pendingDocuments = new PendingDocuments<RecordInput>();
   /** Per tab: the documents (`<frameId>\n<documentId>`) the overlay UI was injected into. */
   const injected = new Map<number, Set<string>>();
+  /**
+   * Frames asked for a video's panel from the context menu, while they answer (`<tab>:<frame>` →
+   * when): only the user's menu choice, never a page, lets the overlay UI in where buttons are not
+   * allowed (§5.1 "Menu").
+   */
+  const panelRequests = new Map<string, number>();
+  const panelRequested = (tabId: number, frameId: number) => {
+    const at = panelRequests.get(`${tabId}:${frameId}`);
+    return at !== undefined && Date.now() - at < PANEL_REQUEST_MS;
+  };
   const showTabBadge = (tabId: number) => {
     const count = tabGroupCount({
       items: media.items(tabId),
-      pageVideos: pageVideos.frameKeys(tabId),
+      pageVideos: pageVideos.frameKeys(tabId, reports.playable(tabId)),
       reports: reports.tab(tabId),
       refused: (i) => streamProber.refused(i),
     });
@@ -604,6 +689,248 @@ export default defineBackground(() => {
     ['responseHeaders'],
   );
 
+  // --- Browser-fetched saves (SITE-MEDIA-SPEC §2.8) ----------------------------------------
+  // Observe-only: the media each tab's pages fetched (address, exact size), so that a download
+  // whose video servers answer only browsers is fetched at the address the tab's player used.
+  const session = browser.storage.session as unknown as (SessionArea & { get(keys: null): Promise<Record<string, unknown>> }) | undefined;
+  const fetchArea: SessionArea | undefined = session
+    ? {
+        get: (key) => session.get(key),
+        set: (items) => session.set(items),
+        remove: (key) => session.remove(key),
+        getAll: () => session.get(null),
+      }
+    : undefined;
+  const played = new PlayedLog(fetchArea);
+  // Played addresses leave storage.session once expired, also of tabs that stay open.
+  void played.sweep();
+  setInterval(() => void played.sweep(), PLAYED_SWEEP_MS);
+  // "Watch videos as they play" (SITE-MEDIA-SPEC §2.9): read once and on every change.
+  let watchPlayed = true;
+  void browser.storage.local.get(VIDEO_OPTIONS_KEY).then(
+    (v) => {
+      watchPlayed = parseVideoOptions(v[VIDEO_OPTIONS_KEY]).watchPlayed;
+    },
+    () => undefined,
+  );
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && VIDEO_OPTIONS_KEY in changes) watchPlayed = parseVideoOptions(changes[VIDEO_OPTIONS_KEY]?.newValue).watchPlayed;
+  });
+  browser.webRequest.onResponseStarted.addListener(
+    (d) => {
+      if (!watchPlayed || storeExcludesRequest(d as { url: string; documentUrl?: string; initiator?: string })) return;
+      void played.record(d as unknown as PlayedDetails);
+    },
+    // Players fetch with fetch()/XHR, from workers ('other' in some browsers) and as media.
+    { urls: HTTP_URLS, types: ['xmlhttprequest', 'media', 'other'] },
+    ['responseHeaders'],
+  );
+  browser.tabs.onRemoved.addListener((tabId) => void played.forget(tabId));
+  // Tickets live in storage.local: downexd keeps each with its download, so a resume after the
+  // browser (or downexd) restarted is fetched again from a tab of the site (§2.8, 2026-11-19).
+  const fetchTickets = new FetchTickets(browser.storage.local as unknown as SessionArea);
+  /** The frame a ticket's request is made from: the click's, else the tab's top frame, else a tab of the site. */
+  const fetchFrame = async (rec: TicketRecord): Promise<FetchFrame | undefined> => {
+    const onSite = (url: string | undefined) => hostInScope(httpHost(url), rec.scope);
+    try {
+      const tab = (await browser.tabs.get(rec.tabId)) as TabLike;
+      if (!tab.incognito && (tab.cookieStoreId ?? '') === rec.storeId) {
+        if (rec.frameId !== 0) {
+          const f = await browser.webNavigation.getFrame({ tabId: rec.tabId, frameId: rec.frameId }).catch(() => null);
+          if (f && onSite(f.url)) return { tabId: rec.tabId, frameId: rec.frameId };
+        }
+        if (onSite(tab.url)) return { tabId: rec.tabId, frameId: 0 };
+      }
+    } catch {
+      // the tab closed
+    }
+    const tabs = (await browser.tabs.query({}).catch(() => [])) as TabLike[];
+    const other = tabs.find((t) => t.id !== undefined && !t.incognito && (t.cookieStoreId ?? '') === rec.storeId && onSite(t.url));
+    return other?.id !== undefined ? { tabId: other.id, frameId: 0 } : undefined;
+  };
+  const fetchPump = new BrowserFetchPump({
+    client,
+    tickets: fetchTickets,
+    played,
+    frameFor: fetchFrame,
+    connect: (f) => browser.tabs.connect(f.tabId, { frameId: f.frameId, name: FETCH_PORT }) as unknown as PortLike,
+    signInOn: async () => (await readVideoOptions()).useSignInForVideos,
+    onError: (e) => log('browser fetch failed', errorMessage(e)),
+  });
+  // Kept tickets outlive the background's and the browser's restarts.
+  fetchPump.start();
+
+  // --- Save what's playing (SITE-MEDIA-SPEC §2.9) ---------------------------------------
+  /** A file's head read by the background itself (backgroundHead): no credentials, redirects checked. */
+  const headFromBackground = (url: string): Promise<HeadTry> => backgroundHead((u, init) => fetch(u, init), url);
+  /** A file's head read in the tab's frame (the page's own network stack, §2.8), as the player read it. */
+  const headFromPage = (frame: FetchFrame, url: string, credentials: 'include' | 'omit'): Promise<HeadTry> =>
+    new Promise((resolve) => {
+      let port: PortLike;
+      try {
+        port = browser.tabs.connect(frame.tabId, { frameId: frame.frameId, name: FETCH_PORT }) as unknown as PortLike;
+      } catch {
+        resolve(undefined);
+        return;
+      }
+      played.ignore(url);
+      const chunks: Uint8Array[] = [];
+      let got = 0;
+      let total = 0;
+      let done = false;
+      const make = (): HeadTry => {
+        const head = new Uint8Array(got);
+        let off = 0;
+        for (const c of chunks) {
+          head.set(c, off);
+          off += c.length;
+        }
+        return looksLikeMp4(head) ? { head: head.subarray(0, HEAD_BYTES), total, browser: true, include: credentials === 'include' } : undefined;
+      };
+      const finish = (r: HeadTry) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        played.unignore(url);
+        try {
+          port.disconnect();
+        } catch {
+          // gone
+        }
+        resolve(r);
+      };
+      const timer = setTimeout(() => finish(got > 0 ? make() : undefined), 10_000);
+      port.onMessage.addListener((raw) => {
+        const r = raw as FetchReport;
+        if (done) return;
+        if (r?.type === 'head') {
+          if (r.status !== 200 && r.status !== 206) return finish(undefined);
+          if (!mediaAnswer(r.contentType)) return finish('not-media');
+          total = r.status === 206 ? (contentRangeTotal(r.contentRange) ?? 0) : Math.max(r.contentLength, 0);
+          port.postMessage({ type: 'more' } satisfies FetchCommand);
+        } else if (r?.type === 'data') {
+          if (r.data) {
+            const bin = atob(r.data);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            chunks.push(bytes);
+            got += bytes.length;
+          }
+          if (r.end || got >= HEAD_BYTES) finish(make());
+          else port.postMessage({ type: 'more' } satisfies FetchCommand);
+        } else finish(undefined);
+      });
+      port.onDisconnect.addListener(() => {
+        readLastError(); // no content script in that frame, or the tab closed: expected
+        finish(got > 0 ? make() : undefined);
+      });
+      port.postMessage({ type: 'start', url, start: 0, end: HEAD_BYTES - 1, credentials } satisfies FetchCommand);
+    });
+  /** A played file's head (§2.9 "The flow" 4, playedHeadReader). */
+  const readPlayedHead = playedHeadReader({
+    background: headFromBackground,
+    page: (tabId, frameId, url, credentials) => headFromPage({ tabId, frameId }, url, credentials),
+    onSite: async (tabId, url) => {
+      let pageUrl: string | undefined;
+      try {
+        pageUrl = ((await browser.tabs.get(tabId)) as TabLike).url;
+      } catch {
+        return false;
+      }
+      const scope = pageUrl ? signInScope(`page:${pageUrl}`, pageUrl) : undefined;
+      return scope !== undefined && hostInScope(httpHost(url), scope);
+    },
+  });
+  const playedSaves = new PlayedHandoff({
+    client,
+    resources: (tabId) => played.resources(tabId),
+    readHead: readPlayedHead,
+    onError: (e) => log('played video probe failed', errorMessage(e)),
+  });
+  /** The Played source of a click (§2.9): never on YouTube, in Firefox, or with the option off. */
+  const playedClick = (f: SenderFrame, mse: boolean, src: string, trace: PlayedTrace | undefined) => {
+    if (!trace || !mse || src !== '' || isFirefox || !watchPlayed) return undefined;
+    const page = f.frameUrl ?? f.tab.url ?? '';
+    if (parseSiteVideo(page)?.site === 'youtube' || parseSiteVideo(f.tab.url)?.site === 'youtube' || isYouTubeHost(httpHost(page))) return undefined;
+    return { tabId: f.tabId, frameId: f.frameId, pageUrl: page, trace };
+  };
+  /** The played video's title (playedTitle): its post's name, else its own page's tab title. */
+  const playedClickTitle = async (f: SenderFrame, click: { pageUrl: string; trace: PlayedTrace }): Promise<string> => {
+    const own = parseSiteVideo(click.pageUrl);
+    // In a feed, the clicked post's name; on the video's own page the site's title comes first (the
+    // page's layout can put its menus in the same box as the video).
+    if (!own && click.trace.name.trim() !== '') return playedTitle(click.trace.name, undefined, undefined);
+    // The site's own title of the clicked post, once its probe answered (a title with words: never
+    // the id yt-dlp stands in with), else the tab's title on the video's own page.
+    let site = '';
+    try {
+      const video = frameVideo(f.tab, click.pageUrl, f.frameId, await tabFrames(f.tabId));
+      const probe = video ? (await videoHandOff.probeState())(video.target) : undefined;
+      const title = probe && 'result' in probe && probe.result.ok ? probe.result.value.title.trim() : '';
+      if (/\p{L}{2}/u.test(title)) site = title;
+    } catch {
+      site = '';
+    }
+    return site || playedTitle('', f.tab.title, own ? SITE_NAMES[own.site] : undefined) || playedTitle(click.trace.name, undefined, undefined);
+  };
+  /** The display name of a played video's site: a curated site's name, else its host without "www.". */
+  const playedSiteName = (pageUrl: string): string => {
+    const host = httpHost(pageUrl);
+    const site = siteOfHost(host);
+    return site ? SITE_NAMES[site] : host.replace(/^www\./, '') || 'Web';
+  };
+  /** Adds the clicked video from its played files and keeps its fetch ticket, bound to those files. */
+  const addPlayed = async (f: SenderFrame, trace: PlayedTrace | undefined, pick: { video: string; audio: string }): Promise<Outcome<AddedResult>> => {
+    // An element that became protected (mediaKeys set while its panel was open) is never saved (§2.9 "Never").
+    if (trace?.drm) return failure('rejected', `encrypted: ${VIDEO_TEXTS.encrypted}`, 'encrypted');
+    const click = playedClick(f, true, '', trace);
+    if (!click) return failure('expired', OFFER_GONE_MESSAGE);
+    const { outcome, urls, include } = await playedSaves.add(click, pick, await playedClickTitle(f, click));
+    if (!outcome.ok || !outcome.value.fetchTicket) return outcome;
+    const scope = signInScope(`page:${click.pageUrl}`, click.pageUrl) ?? { domain: httpHost(click.pageUrl), exact: true };
+    if (!scope.domain) return outcome;
+    await fetchPump
+      .bind({
+        ticket: outcome.value.fetchTicket,
+        downloadId: outcome.value.downloadId,
+        tabId: f.tabId,
+        frameId: f.frameId,
+        pageUrl: click.pageUrl,
+        storeId: f.tab.cookieStoreId ?? '',
+        scope,
+        played: { urls, include },
+        at: Date.now(),
+      })
+      .catch((e: unknown) => log('keeping a fetch ticket failed', e));
+    return outcome;
+  };
+  /** Keeps the fetch ticket of an added video with the tab and frame the click came from. */
+  const bindFetch = async (o: Outcome<AddedResult>, target: VideoTarget, tabId: number, frameId: number): Promise<Outcome<AddedResult>> => {
+    if (!o.ok || !o.value.fetchTicket || tabId < 0) return o;
+    const scope = signInScope(target.key, target.pageUrl) ?? { domain: httpHost(target.pageUrl), exact: true };
+    if (!scope.domain) return o;
+    await fetchPump
+      .bind({
+        ticket: o.value.fetchTicket,
+        downloadId: o.value.downloadId,
+        tabId,
+        frameId,
+        pageUrl: target.pageUrl,
+        storeId: target.storeId,
+        scope,
+        // Credentials only for a video whose add needed the sign-in (§2.8, §6.3).
+        signedIn: Boolean(o.value.signedIn),
+        at: Date.now(),
+      })
+      .catch((e: unknown) => log('keeping a fetch ticket failed', e));
+    return o;
+  };
+  /** A probe's answer with only the qualities the tab's player fetched on a browser-only page (playedOnly). */
+  const playedDefault = async <T extends Outcome<VideoInfoResult> | { ok: false }>(o: T, tabId: number | undefined): Promise<T | Outcome<VideoInfoResult>> => {
+    if (!o.ok || !('value' in o) || !o.value.browserFetch) return o;
+    return playedOnly(o.value, tabId === undefined ? [] : await played.sizes(tabId));
+  };
+
   // --- Hand-off --------------------------------------------------------------------------
   const history = new HandoffHistory(sessionArea);
   const handOff = createHandOff({
@@ -615,9 +942,118 @@ export default defineBackground(() => {
     onError: (e) => log('history write failed', e),
   });
 
+  // --- Rescue of downloads that failed in the browser (BROWSER-SPEC §6) -------------------
+  // The request of each download the browser keeps, by download id: storage.session only (its
+  // headers carry cookies), memory where a browser has none.
+  const rescueContexts = new RescueContextStore(browser.storage.session ? sessionArea : undefined);
+  // ETag and Last-Modified of download-like responses, for the request kept at onCreated.
+  const rescueValidators = new ValidatorMemory();
+  browser.webRequest.onHeadersReceived.addListener(
+    (d) => {
+      const info = d as BrowsingContextInfo;
+      if (info.incognito || !classifyResponse(d as unknown as HeadersReceivedDetailsLike)) return undefined;
+      const headers = toHeaderPairs(d.responseHeaders);
+      rescueValidators.record(d.url, info.cookieStoreId, headerValue(headers, 'etag'), headerValue(headers, 'last-modified'));
+      return undefined;
+    },
+    { urls: HTTP_URLS, types: ['main_frame', 'sub_frame'] },
+    ['responseHeaders'],
+  );
+  browser.downloads.onCreated.addListener((item) => {
+    if (item.incognito || item.byExtensionId === ownId || !isHttpUrl(item.url)) return;
+    const target = targetFromDownloadItem(item);
+    const ctx = findContext(contexts, target);
+    const v = rescueValidators.get(item.finalUrl || item.url, target.storeId) ?? rescueValidators.get(item.url, target.storeId);
+    if (!ctx && !v) return;
+    rescueContexts
+      .put(item.id, {
+        url: ctx?.url ?? item.url,
+        method: ctx?.method ?? 'GET',
+        headers: ctx?.headers ?? [],
+        ...(v?.etag ? { etag: v.etag } : {}),
+        ...(v?.lastModified ? { lastModified: v.lastModified } : {}),
+      })
+      .catch((e: unknown) => log('keeping the rescue context failed', e));
+  });
+  const readRescueOptions = () =>
+    browser.storage.local
+      .get(RESCUE_OPTIONS_KEY)
+      .then((got) => parseRescueOptions(got[RESCUE_OPTIONS_KEY]))
+      .catch(() => parseRescueOptions(undefined));
+  const getCookies = (url: string, storeId: string | undefined) => browser.cookies.getAll(storeId ? { url, storeId } : { url });
+  const rescues = new RescueService({
+    isFirefox,
+    isMac: /Mac/i.test(navigator.userAgent),
+    downloads: {
+      search: (q) => browser.downloads.search(q) as Promise<RescueItem[]>,
+      cancel: (id) => browser.downloads.cancel(id),
+      erase: (q) => browser.downloads.erase(q),
+    },
+    interrupted: (limit) =>
+      browser.downloads.search({ state: 'interrupted', orderBy: ['-startTime'], limit }) as Promise<RescueItem[]>,
+    client,
+    features: () => client.status.features ?? [],
+    ...(browser.storage.session ? { session: sessionArea } : {}),
+    history,
+    method: async (item) => (await rescueContexts.get(item.id))?.method,
+    fields: async (item) => buildRescueFields(item, await rescueContexts.get(item.id), { getCookies, userAgent: navigator.userAgent }),
+    addFields: (item) =>
+      buildAddFields(targetFromDownloadItem(item as DownloadItemLike), { contexts, getCookies, userAgent: navigator.userAgent }),
+    options: readRescueOptions,
+    notifications: {
+      permitted: () => browser.permissions.contains({ permissions: ['notifications'] }).catch(() => false),
+      show: async (id, title, message, button) => {
+        if (!browser.notifications) return;
+        await browser.notifications.create(id, {
+          type: 'basic',
+          iconUrl: browser.runtime.getURL('/icon/128.png'),
+          title,
+          message,
+          ...(button ? { buttons: [{ title: 'Finish with Downex' }] } : {}),
+        });
+      },
+    },
+    onError: (e) => log('rescue failed', errorMessage(e)),
+  });
+  browser.downloads.onChanged.addListener((delta) => {
+    if (delta.state?.current === 'interrupted' || (isFirefox && delta.paused?.current === true)) rescues.stopped(delta.id);
+  });
+  browser.downloads.onErased.addListener((id) => {
+    rescues.erased(id);
+    rescueContexts.delete(id).catch((e: unknown) => log('dropping the rescue context failed', e));
+  });
+  // The notifications API exists only while its optional permission is granted: its listeners
+  // are added at start when it is, else once it is granted.
+  let notificationListeners = false;
+  const listenToNotifications = () => {
+    const n = browser.notifications;
+    if (notificationListeners || !n) return;
+    notificationListeners = true;
+    const finishFrom = (notificationId: string) => {
+      const id = notificationDownload(notificationId);
+      if (id === undefined) return;
+      void n.clear(notificationId).catch(() => undefined);
+      void rescues.finish(id, false, true);
+    };
+    n.onClicked.addListener(finishFrom);
+    n.onButtonClicked?.addListener((notificationId) => finishFrom(notificationId));
+  };
+  listenToNotifications();
+  browser.permissions.onAdded.addListener((p) => {
+    if (p.permissions?.includes('notifications')) listenToNotifications();
+  });
+  browser.permissions.onRemoved.addListener((p) => {
+    if (!p.permissions?.includes('notifications')) return;
+    void browser.storage.local.set({ [RESCUE_OPTIONS_KEY]: { rescueNotify: false } }).catch(() => undefined);
+  });
+
+  // The page's credentials go with a panel's or the popup's stream or file only while the sign-in
+  // option is on (SITE-MEDIA-SPEC §6.3; review 2026-11-18): captured browser downloads keep theirs.
+  const signInForMedia = async () => (await readVideoOptions()).useSignInForVideos;
   const mediaHandOff = createMediaHandOff({
     client,
     getCookies: (url, storeId) => browser.cookies.getAll(storeId ? { url, storeId } : { url }),
+    credentials: signInForMedia,
     userAgent: navigator.userAgent,
     history,
     onError: (e) => log('history write failed', e),
@@ -625,6 +1061,7 @@ export default defineBackground(() => {
   // Direct files: only the headers the browser sent, never cookies.getAll (VIDEO-DETECT-SPEC §6.3).
   const fileHandOff = createFileHandOff({
     client,
+    credentials: signInForMedia,
     userAgent: navigator.userAgent,
     history,
     onError: (e) => log('history write failed', e),
@@ -632,6 +1069,7 @@ export default defineBackground(() => {
   const streamProber = createStreamProber({
     client,
     getCookies: (url, storeId) => browser.cookies.getAll(storeId ? { url, storeId } : { url }),
+    credentials: signInForMedia,
     userAgent: navigator.userAgent,
   });
   /** A stream's MP4 qualities (a user's click); a refusal takes it out of the badge. */
@@ -665,8 +1103,8 @@ export default defineBackground(() => {
   };
 
   // --- Page videos (SITE-MEDIA-SPEC §3.5, §5) -------------------------------------------
-  // The options are read from storage.local for every request: the overlay writes the sign-in
-  // option there itself and asks again at once.
+  // The options are read from storage.local for every request: the options page may change them
+  // at any time.
   const readVideoOptions = async (): Promise<VideoOptions> => {
     try {
       return parseVideoOptions((await browser.storage.local.get(VIDEO_OPTIONS_KEY))[VIDEO_OPTIONS_KEY]);
@@ -707,8 +1145,22 @@ export default defineBackground(() => {
   // One add per page video of a tab at a time (a popup opened again joins it); answers are kept
   // for a popup opened again, and forgotten with the tab's document.
   const videoAdds = new MediaSends();
-  const addVideo = (tabId: number, target: VideoTarget, videoTrack: string, audioTrack: string) =>
-    videoAdds.run(tabId, target.key, () => videoHandOff.add(target, videoTrack, audioTrack));
+  const addVideo = (
+    tabId: number,
+    target: VideoTarget,
+    videoTrack: string,
+    audioTrack: string,
+    clip?: ClipRange,
+    entryId?: string,
+    frameId = 0,
+  ) =>
+    // One add per video at a time: another item of the page (SITE-MEDIA-SPEC §3.12) is another video.
+    videoAdds.run(tabId, videoItemKey(target.key, entryId), () =>
+      videoHandOff.add(target, videoTrack, audioTrack, 'video', clip, entryId).then((o) => bindFetch(o, target, tabId, frameId)),
+    );
+  /** The part fields of a validated add message (MEDIA-SPEC §8). */
+  const clipOf = (m: { clipStartMs?: number; clipEndMs?: number }): ClipRange | undefined =>
+    m.clipStartMs === undefined ? undefined : { startMs: m.clipStartMs, endMs: m.clipEndMs ?? 0 };
   const addState = (tabId: number, key: string): VideoTaskState<AddedResult> | undefined => taskState(videoAdds.state(tabId, key));
   /** A tab's frames, as the browser knows them now. */
   const tabFrames = async (tabId: number | undefined): Promise<FrameLike[]> => {
@@ -750,7 +1202,8 @@ export default defineBackground(() => {
   const injectVideoUi = async (f: SenderFrame): Promise<boolean> => {
     const doc = `${f.frameId}\n${f.documentId ?? ''}`;
     if (injected.get(f.tabId)?.has(doc)) return true;
-    if (!buttonAllowed(await readVideoOptions(), siteHost(f.tab.url) ?? '')) return false;
+    // The context menu's request for a video's panel lets it in whatever the button rules say.
+    if (!panelRequested(f.tabId, f.frameId) && !buttonAllowed(await readVideoOptions(), siteHost(f.tab.url) ?? '')) return false;
     let docs = injected.get(f.tabId);
     if (docs?.has(doc)) return true;
     if (!docs) {
@@ -772,15 +1225,24 @@ export default defineBackground(() => {
   };
 
   /** What a frame's panel lists (VIDEO-DETECT-SPEC §2.6), from memory: never a relay call. */
-  const frameOffers = async (f: SenderFrame, src: string, mse: boolean): Promise<FrameOffersResponse> => {
+  const frameOffers = async (
+    f: SenderFrame,
+    src: string,
+    mse: boolean,
+    post: string | undefined,
+    trace: PlayedTrace | undefined,
+  ): Promise<FrameOffersResponse> => {
+    // The frame's address read at the click (a post viewer opened with pushState), on the sender's origin only.
+    if (trace && f.frameUrl && trace.href !== f.frameUrl && sameOrigin(trace.href, f.frameUrl)) f = { ...f, frameUrl: trace.href };
     const items = await media.list(f.tabId);
     const probeState = await videoHandOff.probeState();
-    const video = frameVideo(f.tab, f.frameUrl, f.frameId, await tabFrames(f.tabId));
+    const video = frameVideo(f.tab, f.frameUrl, f.frameId, await tabFrames(f.tabId), post);
     let site: SiteOffer | undefined;
     if (video) {
       const probe = probeState(video.target);
       const found = probe && 'result' in probe && probe.result.ok ? probe.result.value.site : '';
       site = { key: video.target.key, site: (!video.curated && found) || video.site, kind: video.kind, pageUrl: video.target.pageUrl, curated: video.curated };
+      if (video.linked) site.linked = true;
       if (probe) site.probe = probe;
       const add = addState(f.tabId, video.target.key);
       if (add) site.add = add;
@@ -796,13 +1258,33 @@ export default defineBackground(() => {
       items,
       reports: reports.tab(f.tabId),
       ...(site ? { site } : {}),
-      features: { streams: features.includes(FEATURE_STREAMS), video: features.includes(FEATURE_VIDEO) },
+      features: { streams: features.includes(FEATURE_STREAMS), video: features.includes(FEATURE_VIDEO), clips: features.includes(FEATURE_CLIPS) },
       streamProbe: (i) => streamProber.state(i),
       refused: (i) => streamProber.refused(i),
       ...(youtube ? { hideStream: (i: MediaItem) => isPageVideoStream(i.url) } : {}),
       addState: (k) => sendState(f.tabId, k),
       rejected: (u) => refusedFiles.has(f.tabId, f.frameId, u),
+      ...(trace && trace.segments.length > 0 ? { playingDirs: trace.segments } : {}),
     });
+    // A `network` site (VIDEO-DETECT-SPEC §3.8): only the browser's own traffic is offered.
+    const page = curatedPage(f.frameUrl);
+    if (!ytDlpReads(f.frameUrl) || page === 'network') value.networkOnly = true;
+    // The clicked video's files as the tab played them (SITE-MEDIA-SPEC §2.9): never a dead end.
+    const click = playedClick(f, mse, src, trace);
+    if (click && trace?.drm) {
+      // mediaKeys set after the panel opened: the panel says the DRM text, nothing is probed.
+      value.drm = true;
+    } else if (click) {
+      const state = await playedSaves.state(click);
+      value.played = { key: PLAYED_KEY, waitingMs: state.waitingMs };
+      // The panel names the clicked post, never a feed's own title ("… for you | Site"): without a
+      // name, "<Site> video", as the saved file is named.
+      const title = await playedClickTitle(f, click);
+      value.title = title || `${playedSiteName(click.pageUrl)} video`;
+      if (state.probe) value.played.probe = state.probe;
+      const add = sendState(f.tabId, `${PLAYED_KEY}@${f.frameId}`);
+      if (add) value.played.add = add;
+    }
     return { ok: true, value };
   };
 
@@ -967,6 +1449,27 @@ export default defineBackground(() => {
           .then(() => sendResponse({ paused: pausedTabs.isPaused(tabId) } satisfies TabStateResponse));
         return true;
       }
+      case 'downex:failed-downloads':
+        if (!fromExtensionPage) return undefined;
+        void rescues
+          .list()
+          .catch((): FailedDownloadsResponse => ({ available: false, items: [] }))
+          .then(sendResponse);
+        return true;
+      case 'downex:finish-download':
+        if (!fromExtensionPage) return undefined;
+        void rescues
+          .finish(msg.downloadId, msg.fromStart === true)
+          .catch(() => undefined)
+          .then((row) => sendResponse((row ? { row } : {}) satisfies FinishDownloadResponse));
+        return true;
+      case 'downex:hide-failed':
+        if (!fromExtensionPage) return undefined;
+        void rescues
+          .hide(msg.downloadId)
+          .catch((e: unknown) => log('hiding a failed download failed', e))
+          .then(() => sendResponse({}));
+        return true;
       case 'downex:get-state':
         if (!fromExtensionPage) return undefined;
         history
@@ -990,7 +1493,7 @@ export default defineBackground(() => {
             ({ tab, frames }) => {
               host = siteHost(tab.url) ?? '';
               title = tab.title ?? '';
-              return tabVideoEntries(tab, frames, probeState, (key) => addState(tabId, key));
+              return tabVideoEntries(tab, frames, probeState, (key) => addState(tabId, key), reports.playable(tabId));
             },
             () => [],
           );
@@ -1017,7 +1520,7 @@ export default defineBackground(() => {
           .then((item): Promise<StreamProbeResponse> | StreamProbeResponse =>
             item ? probeStream(tabId, item) : failure('expired', STREAM_GONE_MESSAGE),
           )
-          .then(sendResponse);
+          .then(sendResponse, () => sendResponse(failure('expired', STREAM_GONE_MESSAGE)));
         return true;
       }
       case 'downex:add-file': {
@@ -1062,6 +1565,13 @@ export default defineBackground(() => {
         );
         return true;
       }
+      case 'downex:video-features': {
+        // The YouTube overlay: whether its panel offers a part of the video (MEDIA-SPEC §8).
+        if (fromExtensionPage) return undefined;
+        const features = client.status.features ?? [];
+        sendResponse({ clips: features.includes(FEATURE_CLIPS) } satisfies VideoFeaturesResponse);
+        return undefined;
+      }
       case 'downex:frame-offers': {
         if (fromExtensionPage) return undefined;
         const f = senderFrame(sender);
@@ -1069,7 +1579,10 @@ export default defineBackground(() => {
           sendResponse(failure('unsupported_page', NO_TAB_MESSAGE) satisfies FrameOffersResponse);
           return undefined;
         }
-        void frameOffers(f, msg.src, msg.mse).then(sendResponse);
+        void frameOffers(f, msg.src, msg.mse, msg.post, msg.played).then(sendResponse, (e: unknown) => {
+          log('listing the offers of a frame failed', e);
+          sendResponse(failure('unsupported_page', NO_TAB_MESSAGE) satisfies FrameOffersResponse);
+        });
         return true;
       }
       case 'downex:stream-probe': {
@@ -1095,15 +1608,23 @@ export default defineBackground(() => {
         const tracks: MediaTracks = {};
         if (msg.videoTrack) tracks.videoTrack = msg.videoTrack;
         if (msg.audioTrack) tracks.audioTrack = msg.audioTrack;
+        const clip = clipOf(msg);
+        if (clip) tracks.clip = clip;
         void (async (): Promise<OfferAddResponse> => {
+          if (msg.key === PLAYED_KEY) return addPlayed(f, msg.played, { video: msg.videoTrack ?? '', audio: msg.audioTrack ?? '' });
           const r = resolveOfferKey(msg.key, await media.list(f.tabId), reports.tab(f.tabId), f, (u) => refusedFiles.has(f.tabId, f.frameId, u));
           if (!r) return failure('expired', OFFER_GONE_MESSAGE);
           if (r.kind === 'stream') return addStream(f.tabId, r.item, tracks);
-          if (r.kind === 'file') return addFile(f.tabId, itemKey(r.item), fileSource(r.item, f.frameUrl, f.tab.title));
+          if (r.kind === 'file') {
+            const fs = fileSource(r.item, f.frameUrl, f.tab.title);
+            if (f.tab.url) fs.pageUrl = f.tab.url; // the page Downex offers to open (DESKTOP-SPEC §10)
+            return addFile(f.tabId, itemKey(r.item), fs);
+          }
           // The element's own MP4 address: no recorded headers, so no cookies (§6.2).
           const src: FileSource = { url: r.video.src, size: 0 };
           if (f.frameUrl) src.frameUrl = f.frameUrl;
           if (f.tab.title) src.pageTitle = f.tab.title;
+          if (f.tab.url) src.pageUrl = f.tab.url;
           return addFile(f.tabId, r.sendKey, src);
         })().then(sendResponse);
         return true;
@@ -1136,8 +1657,9 @@ export default defineBackground(() => {
         void tabFrames(sender.tab?.id)
           .then((frames): Promise<VideoProbeResponse> | VideoProbeResponse => {
             const target = senderTarget(sender, msg.url, frames);
-            return target.ok ? videoHandOff.probe(target.value) : target;
+            return target.ok ? videoHandOff.probe(target.value, msg.entryId) : target;
           })
+          .then((o) => playedDefault(o, sender.tab?.id))
           .then(sendResponse);
         return true;
       }
@@ -1158,7 +1680,7 @@ export default defineBackground(() => {
           .then((frames): Promise<VideoAddResponse> | VideoAddResponse => {
             const target = senderTarget(sender, msg.url, frames);
             if (!target.ok || tabId === undefined) return target.ok ? failure('unsupported_page', 'No tab.') : target;
-            return addVideo(tabId, target.value, msg.videoTrack, msg.audioTrack);
+            return addVideo(tabId, target.value, msg.videoTrack, msg.audioTrack, clipOf(msg), msg.entryId, sender.frameId ?? 0);
           })
           .then(sendResponse);
         return true;
@@ -1166,15 +1688,18 @@ export default defineBackground(() => {
       case 'downex:tab-video-probe': {
         if (!fromExtensionPage) return undefined;
         void lookUp(msg.tabId, msg.key)
-          .then((t): Promise<VideoProbeResponse> | VideoProbeResponse => (t.ok ? videoHandOff.probe(t.value) : t))
+          .then((t): Promise<VideoProbeResponse> | VideoProbeResponse => (t.ok ? videoHandOff.probe(t.value, msg.entryId) : t))
+          .then((o) => playedDefault(o, msg.tabId))
           .then(sendResponse);
         return true;
       }
       case 'downex:tab-video-add': {
         if (!fromExtensionPage) return undefined;
-        const { tabId, key, videoTrack, audioTrack } = msg;
+        const { tabId, key, videoTrack, audioTrack, entryId } = msg;
         void lookUp(tabId, key)
-          .then((t): Promise<VideoAddResponse> | VideoAddResponse => (t.ok ? addVideo(tabId, t.value, videoTrack, audioTrack) : t))
+          .then((t): Promise<VideoAddResponse> | VideoAddResponse =>
+            t.ok ? addVideo(tabId, t.value, videoTrack, audioTrack, undefined, entryId) : t,
+          )
           .then(sendResponse);
         return true;
       }
@@ -1250,6 +1775,30 @@ export default defineBackground(() => {
       },
       reportError,
     );
+    // Not in the store build: yt-dlp's reader of any page follows a YouTube player that the linked
+    // page may embed, which the store build never hands over (its curated links still go through
+    // "Download with Downex").
+    if (!storeBuild()) {
+      browser.contextMenus.create(
+        {
+          id: MENU_VIDEO_LINK,
+          title: 'Download video from this link with Downex',
+          contexts: ['link'],
+          targetUrlPatterns: HTTP_URLS,
+        },
+        reportError,
+      );
+    }
+    // Match patterns cannot name blob: sources, so it shows on every video of an http(s) page.
+    browser.contextMenus.create(
+      {
+        id: MENU_SHOW_PANEL,
+        title: 'Show Downex download panel',
+        contexts: ['video'],
+        documentUrlPatterns: HTTP_URLS,
+      },
+      reportError,
+    );
     browser.contextMenus.create(
       {
         id: MENU_DOWNLOAD_ALL,
@@ -1264,6 +1813,29 @@ export default defineBackground(() => {
   type MenuInfo = Parameters<Parameters<typeof browser.contextMenus.onClicked.addListener>[0]>[0];
   type MenuTab = Parameters<Parameters<typeof browser.contextMenus.onClicked.addListener>[0]>[1];
 
+  /**
+   * A link to a page the curated table knows (VIDEO-DETECT-SPEC §3.8): its video with Downex's
+   * default pick, never the HTML page; a `network` site's records why not. False for any other link.
+   */
+  const curatedLinkVideo = async (
+    link: string | undefined,
+    page: string | undefined,
+    storeId: string | undefined,
+    tabId?: number,
+  ): Promise<boolean> => {
+    const video = parseSiteVideo(link);
+    if (!video || !link) return false;
+    if (video.resolver === 'network') {
+      recordFailure(link, 'menu', 'unsupported_page', NETWORK_ONLY_TEXT);
+      return true;
+    }
+    const target: VideoTarget = { key: video.key, pageUrl: video.pageUrl, storeId: storeId ?? '', generic: false };
+    const referer = httpAddress(page);
+    if (referer) target.referer = referer;
+    await bindFetch(await videoHandOff.add(target, '', ''), target, tabId ?? -1, 0);
+    return true;
+  };
+
   const onDownloadMenu = async (info: MenuInfo, tab: MenuTab) => {
     const url = [info.linkUrl, info.srcUrl].find(isHttpUrl);
     if (!url) return;
@@ -1272,19 +1844,66 @@ export default defineBackground(() => {
     if (storeExcludes(url)) return recordFailure(url, 'menu', 'unsupported', STORE_LINK_MESSAGE);
     const page = info.frameUrl ?? info.pageUrl ?? tab?.url;
     const storeId = (tab as BrowsingContextInfo | undefined)?.cookieStoreId;
-    // A link to a video page: the video with Downex's default pick, never the HTML page.
-    const video = parseSiteVideo(info.linkUrl);
-    if (video) {
-      const target: VideoTarget = { key: video.key, pageUrl: video.pageUrl, storeId: storeId ?? '', generic: false };
-      const referer = httpAddress(page);
-      if (referer) target.referer = referer;
-      await videoHandOff.add(target, '', '');
-      return;
-    }
+    if (await curatedLinkVideo(info.linkUrl, page, storeId, tab?.id)) return;
+    const top = info.pageUrl ?? tab?.url;
     await handOff(
-      { url, ...(isHttpUrl(page) ? { referrer: page } : {}), ...(storeId ? { storeId } : {}) },
+      {
+        url,
+        ...(isHttpUrl(page) ? { referrer: page } : {}),
+        ...(isHttpUrl(top) ? { pageUrl: top } : {}),
+        ...(storeId ? { storeId } : {}),
+      },
       { source: 'menu' },
     );
+  };
+
+  /**
+   * "Download video from this link with Downex" (BROWSER-SPEC §4): the page a link opens, as a
+   * video. A curated link goes as its site's video; any other as a generic target, user-initiated
+   * and never with cookies, with the Referer the browser's default policy sends for the link.
+   */
+  const onVideoLinkMenu = async (info: MenuInfo, tab: MenuTab) => {
+    const link = isHttpUrl(info.linkUrl) ? info.linkUrl : undefined;
+    if (!link) return;
+    if (tab?.incognito) return recordFailure(link, 'menu', 'unsupported', PRIVATE_WINDOW_MESSAGE);
+    if (storeExcludes(link)) return recordFailure(link, 'menu', 'unsupported', STORE_LINK_MESSAGE);
+    const page = info.frameUrl ?? info.pageUrl ?? tab?.url;
+    const storeId = (tab as BrowsingContextInfo | undefined)?.cookieStoreId;
+    if (await curatedLinkVideo(link, page, storeId, tab?.id)) return;
+    if (storeBuild()) return recordFailure(link, 'menu', 'unsupported', STORE_LINK_MESSAGE);
+    const key = genericVideoKey(link);
+    const pageUrl = key && genericPageUrl(key);
+    if (!key || !pageUrl) return recordFailure(link, 'menu', 'unsupported_page', 'Only web pages (http and https) can be saved as a video.');
+    const target: VideoTarget = { key, pageUrl, storeId: storeId ?? '', generic: true };
+    const from = httpAddress(page);
+    const referer = from && defaultPolicyReferer(from, pageUrl);
+    if (referer) target.referer = referer;
+    await bindFetch(await videoHandOff.add(target, '', ''), target, tab?.id ?? -1, 0);
+  };
+
+  /** "Show Downex download panel" (VIDEO-DETECT-SPEC §5.1 "Menu"): the frame's tracker opens it. */
+  const onShowPanelMenu = async (info: MenuInfo, tab: MenuTab) => {
+    const page = info.frameUrl ?? info.pageUrl ?? tab?.url ?? '';
+    if (tab?.id === undefined || tab.id < 0) return;
+    if (tab.incognito) return recordFailure(page, 'menu', 'unsupported', PRIVATE_WINDOW_MESSAGE);
+    const frameId = info.frameId ?? 0;
+    const message: FrameMessage = { type: 'downex:show-panel' };
+    const request = `${tab.id}:${frameId}`;
+    panelRequests.set(request, Date.now());
+    let answer: unknown;
+    try {
+      answer = await browser.tabs.sendMessage(tab.id, message, { frameId });
+    } catch {
+      answer = undefined; // no tracker in that frame
+    } finally {
+      panelRequests.delete(request);
+    }
+    const shown = isShowPanelResponse(answer) && answer.shown;
+    if (shown) return;
+    // YouTube's frames have their own button (or none in the store build): no reload helps there.
+    const frameAddress = info.frameUrl ?? (frameId === 0 ? (info.pageUrl ?? tab.url) : undefined);
+    if (youtubeAddress(frameAddress)) return recordFailure(page, 'menu', 'unsupported_page', storeBuild() ? SHOW_PANEL_STORE : SHOW_PANEL_YOUTUBE);
+    recordFailure(page, 'menu', 'unsupported_page', isShowPanelResponse(answer) ? SHOW_PANEL_NO_VIDEO : SHOW_PANEL_NO_TRACKER);
   };
 
   const openConfirmation = async (batchId: string, windowId: number | undefined) => {
@@ -1338,12 +1957,14 @@ export default defineBackground(() => {
   };
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
-    const run =
-      info.menuItemId === MENU_DOWNLOAD
-        ? onDownloadMenu
-        : info.menuItemId === MENU_DOWNLOAD_ALL
-          ? onDownloadAllMenu
-          : undefined;
+    const menus: Record<string, (info: MenuInfo, tab: MenuTab) => Promise<void>> = {
+      [MENU_DOWNLOAD]: onDownloadMenu,
+      [MENU_VIDEO_LINK]: onVideoLinkMenu,
+      [MENU_SHOW_PANEL]: onShowPanelMenu,
+      [MENU_DOWNLOAD_ALL]: onDownloadAllMenu,
+    };
+    const id = String(info.menuItemId);
+    const run = Object.hasOwn(menus, id) ? menus[id] : undefined;
     run?.(info, tab).catch((e: unknown) => log('context menu action failed', errorMessage(e)));
   });
 

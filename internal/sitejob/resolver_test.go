@@ -21,6 +21,7 @@ import (
 	"downex/internal/media"
 	"downex/internal/sitemedia"
 	"downex/internal/tools"
+	"downex/internal/validate"
 )
 
 // The test binary doubles as yt-dlp: started with SITEJOB_STANDIN in its environment
@@ -78,6 +79,10 @@ func standIn() int {
 	}
 	switch os.Getenv("SITEJOB_MODE") {
 	case "json":
+		return output()
+	case "json-stderr": // writes stderr.txt, then answers as "json" does
+		e, _ := os.ReadFile(filepath.Join(dir, "stderr.txt"))
+		_, _ = os.Stderr.Write(e)
 		return output()
 	case "manifests": // as yt-dlp: out.json while YouTube's HLS and DASH are skipped, else manifests.json
 		if skipsManifests(rec.Args) {
@@ -359,7 +364,7 @@ func TestResolveRunsYtDlp(t *testing.T) {
 	if !slices.Contains(rec.Args, "youtube:skip=translated_subs,hls,dash") {
 		t.Errorf("arguments %q do not skip YouTube's manifests", rec.Args)
 	}
-	if want := strings.Join(cookieLines(testPage, "SID=abc; PREF=f6=4"), "\n") + "\n"; rec.Cookies != want {
+	if want := strings.Join(cookieLines(testPage, "SID=abc; PREF=f6=4", ""), "\n") + "\n"; rec.Cookies != want {
 		t.Errorf("cookie file %q, want %q", rec.Cookies, want)
 	}
 	if runtime.GOOS != "windows" && rec.CookieMode != 0o600 {
@@ -629,6 +634,19 @@ func TestResolveOutcomes(t *testing.T) {
 		{name: "live", mode: "json", out: `{"id": "x", "extractor_key": "Youtube", "live_status": "is_live"}`,
 			want: media.ErrLive, outcome: tools.OK},
 		{name: "malformed", mode: "json", out: `{"id": "x", "extractor_key"`, want: media.ErrMalformed, outcome: tools.OK},
+		// A post without a video: yt-dlp prints null (amendment 2026-11-18).
+		{name: "nothing found", mode: "json", out: "null\n", want: sitemedia.ErrSiteUnsupported, outcome: tools.OK,
+			text: "yt-dlp found nothing to play in it"},
+		// A claim without a video that the site's reader calls live, and warns is not.
+		{name: "not live", mode: "json-stderr",
+			out:    `{"id": "x", "extractor_key": "LBRY", "is_live": true, "live_status": "is_live", "formats": []}`,
+			stderr: "WARNING: [lbry] x: This stream is not live\nWARNING: No video formats found!\n",
+			want:   sitemedia.ErrSiteUnsupported, outcome: tools.OK, text: "yt-dlp found nothing to play in it"},
+		// A live stream whose manifests were skipped has no format either: still live.
+		{name: "live without formats", mode: "json-stderr",
+			out:    `{"id": "x", "extractor_key": "Youtube", "is_live": true, "live_status": "is_live", "formats": []}`,
+			stderr: "WARNING: [youtube] x: Some formats are skipped\nWARNING: No video formats found!\n",
+			want:   media.ErrLive, outcome: tools.OK},
 		{name: "too much output", mode: "flood", maxOutput: 1024, want: media.ErrTooLarge, outcome: tools.OK},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -792,6 +810,9 @@ func TestResolveRefusals(t *testing.T) {
 		{PageURL: testPage, Proxy: Proxy{URL: "http://proxy.lan"}},
 		{PageURL: testPage, Proxy: Proxy{URL: "http://proxy.lan:3128/path?q=1"}},
 		{PageURL: testPage, Proxy: Proxy{Username: "me", Password: "pw"}},
+		{PageURL: testPage, Cookie: "SID=pw", CookieDomain: "proxy.lan"},
+		{PageURL: testPage, Cookie: "SID=pw", CookieDomain: "com"},
+		{PageURL: testPage, Cookie: "SID=" + strings.Repeat("p", validate.MaxSiteCookieBytes)},
 	} {
 		_, err := r.Resolve(ctx, req)
 		if !errors.Is(err, sitemedia.ErrSiteError) || strings.Contains(err.Error(), "pw") ||
@@ -810,5 +831,72 @@ func TestResolveRefusals(t *testing.T) {
 	}
 	if f.calls != 2 || f.envs != 0 {
 		t.Errorf("Acquire called %d times, %d runs; want 2 and none", f.calls, f.envs)
+	}
+}
+
+// The sign-in's domain (§6.3) scopes the cookie file to that domain and its subdomains;
+// an answer got with it is cached apart from the anonymous one and from one for the
+// page's exact host, and a cancelled run leaves no cookie file behind.
+func TestResolveCookieDomain(t *testing.T) {
+	f := newFakeTools(t, "json")
+	r := newTestResolver(t, f, ResolverConfig{})
+	ctx := testContext(t)
+	for _, req := range []Request{
+		{PageURL: testPage},
+		{PageURL: testPage, Cookie: "SID=abc"},
+		{PageURL: testPage, Cookie: "SID=abc", CookieDomain: "youtube.com"},
+		{PageURL: testPage, Cookie: "SID=abc", CookieDomain: "youtube.com"}, // cached
+	} {
+		if _, err := r.Resolve(ctx, req); err != nil {
+			t.Fatalf("Resolve(%+v) = %v", req, err)
+		}
+	}
+	recs := f.records(t)
+	if len(recs) != 3 {
+		t.Fatalf("%d runs, want 3", len(recs))
+	}
+	if slices.Contains(recs[0].Args, "--cookies") || recs[0].Cookies != "" {
+		t.Errorf("the anonymous run had a cookie file: %q", recs[0].Args)
+	}
+	if want := "# Netscape HTTP Cookie File\nwww.youtube.com\tFALSE\t/\tTRUE\t0\tSID\tabc\n"; recs[1].Cookies != want {
+		t.Errorf("exact-host cookie file %q, want %q", recs[1].Cookies, want)
+	}
+	if want := "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\n"; recs[2].Cookies != want {
+		t.Errorf("domain cookie file %q, want %q", recs[2].Cookies, want)
+	}
+	for _, rec := range recs {
+		if slices.ContainsFunc(rec.Args, func(a string) bool { return strings.Contains(a, "abc") }) {
+			t.Errorf("the cookie is in the arguments: %q", rec.Args)
+		}
+	}
+	if entries, _ := os.ReadDir(f.workRoot()); len(entries) != 0 {
+		t.Errorf("work folders left behind: %d", len(entries))
+	}
+}
+
+// A caller that gives up does not stop the run, but the run's folder and its cookie
+// file go when yt-dlp exits; Close removes them at once.
+func TestResolveCookieFileGoesWithTheRun(t *testing.T) {
+	f := newFakeTools(t, "block")
+	r := NewResolver(ResolverConfig{Tools: f})
+	ctx, cancel := context.WithCancel(testContext(t))
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Resolve(ctx, Request{PageURL: testPage, Cookie: "SID=abc", CookieDomain: "youtube.com"})
+		done <- err
+	}()
+	waitFor(t, "the extraction", func() bool { return len(f.records(t)) == 1 })
+	if m, _ := filepath.Glob(filepath.Join(f.workRoot(), "*", cookieFileName)); len(m) != 1 {
+		t.Fatalf("cookie files while the run lasts: %q", m)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, sitemedia.ErrSiteResolving) {
+		t.Errorf("cancelled caller: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(f.workRoot()); len(entries) != 0 {
+		t.Errorf("the work folder was left behind: %d entries", len(entries))
 	}
 }

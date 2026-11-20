@@ -51,6 +51,7 @@ import (
 	"downex/internal/ipc"
 	"downex/internal/pac"
 	"downex/internal/platform"
+	"downex/internal/polite"
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/internal/rpc/downex/v1/downexv1connect"
 	"downex/internal/store"
@@ -378,6 +379,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if hooks.power != nil {
 		pw.power = hooks.power
 	}
+	// Polite mode (docs/POLITE-SPEC.md): ICMP or TCP probes to the servers downloads use,
+	// no privileges needed.
+	prober := hooks.politeProber
+	if prober == nil {
+		prober = polite.NewSystemProber()
+	}
+	defer prober.Close()
 	shutdownRequested := make(chan struct{})
 	requestShutdown := sync.OnceFunc(func() { close(shutdownRequested) })
 	// Recovery runs to completion even if a signal arrives meanwhile; the signal is
@@ -397,6 +405,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		LaunchAtLogin:    desk.launchAtLogin,
 		OpenConfirmation: desk.openConfirmation,
 		OpenProgress:     desk.openProgress,
+		ShowBrowserAdd:   desk.showBrowserAdd,
 		// Queues (docs/M6-SPEC.md §1): the quit post-queue action stops this daemon like
 		// the Shutdown RPC; power actions, wake timers and keeping the computer awake only
 		// for the user's own daemon.
@@ -407,7 +416,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Clock:     hooks.clock,
 		Network:   network,
 		Site:      siteMedia,
+		Played:    &playedMedia{freeSpace: platform.FreeSpace, publicOnly: true},
 		Tools:     siteTools,
+		// Polite mode probes the addresses the transport's connections reach.
+		PoliteProber:   prober,
+		Peers:          tf.Peers(),
+		PoliteLoopback: hooks.politeLoopback,
 	})
 	if err != nil {
 		return fail("start", err)

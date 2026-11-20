@@ -11,6 +11,7 @@ import (
 
 	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/internal/transport"
 	"downex/internal/validate"
 )
 
@@ -26,6 +27,10 @@ type addInput struct {
 	source       model.Source
 	expectedSize int64  // 0 = unknown
 	mime         string // normalised hint, "" = none
+	// nameControls: the requested name (else the URL's last segment) held hidden
+	// text-direction characters that sanitising removed (docs/DESKTOP-SPEC.md §9.5 N1).
+	nameControls bool
+	pageURL      string // the page the link was found on ("" = unknown; parsePageURL)
 }
 
 // parseAdd validates r (docs/DAEMON-SPEC.md §4: clients are untrusted, the browser
@@ -62,6 +67,11 @@ func parseAdd(r *downexv1.AddRequest, defaultDir string) (addInput, error) {
 	}
 	if in.filename, err = validate.Filename(r.GetFilename()); err != nil {
 		return in, err
+	}
+	if raw := r.GetFilename(); raw != "" {
+		in.nameControls = transport.HiddenControls(raw)
+	} else {
+		in.nameControls = transport.HiddenControls(transport.RawFilenameFromURL(r.GetUrl()))
 	}
 	if in.maxConn, err = checkConnections(r.GetMaxConnections()); err != nil {
 		return in, err

@@ -382,6 +382,49 @@ https.
       attribute (`xattr -lr /Applications/Downex.app`), Downex starts again, and the window shows
       the pop-up (*Update now* / *Later*) after an automatic check finds an update.
 
+## 12e. File check (DESKTOP-SPEC §9)
+
+- [ ] Make a disguised file locally (never download malware): `cp /bin/ls /tmp/movie.mp4`, serve it
+      (`python3 -m http.server` in /tmp) and add `http://localhost:8000/movie.mp4`. While it runs and
+      once complete: the row says "Check file" in red with the alert mark, the details pane shows
+      the red note "This file is not what its name says" ("This file is a Mac program, not an MP4
+      video."), the menu-bar agent's notification "Check this download" appears, and **Open** asks
+      "Open anyway" first. **Record** that the quarantine attribute is still written (`xattr -l`).
+- [ ] A universal app in a ZIP named `photos.mp4` (`ditto -c -k --keepParent /Applications/Calculator.app
+      /tmp/photos.mp4`): "This file is a ZIP archive, not an MP4 video, and it holds a program: …".
+- [ ] `downex check /tmp/movie.mp4` prints the same; `downex check` on ten ordinary files from
+      ~/Downloads prints "Result: no warning" (record any that do not).
+- [ ] Settings → Integration → Safety shows the switch first and still fits the window in light and
+      dark; VoiceOver reads the note as an alert.
+
+## 12f. Rescue of a failed browser download (BROWSER-SPEC §6, DESKTOP-SPEC §11)
+
+- [ ] Start a large download in Chrome from a server you control, stop the server midway: the
+      popup's Downloads tab shows "Failed in the browser" with the saved bytes; start the server again
+      and click **Finish with Downex**: the `.crdownload` is gone from `~/Downloads`, the download
+      continues in Downex from the saved bytes and completes; **Record** the quarantine and WhereFroms
+      attributes on the finished file (`xattr -l`).
+- [ ] The same in Firefox (`<name>.part` beside a 0-byte `<name>`): the placeholder is gone, the file
+      keeps its name.
+- [ ] A partial in `~/Desktop` and in `~/Documents`: **Record** whether macOS asks to allow Downex
+      Agent, and that refusing shows "Downex is not allowed to open the partial file. Allow Downex
+      Agent in System Settings > Privacy & Security > Files and Folders."
+- [ ] Downex → Add ▾ → *Rescue partial file…*: the open panel picks a `.part` file, the hint shows
+      its size, and **Rescue** continues it; the dialog fits in light and dark; VoiceOver reads the
+      error under the field.
+- [ ] Turn on "Offer to finish failed downloads with a notification" in the extension's options:
+      the browser asks for notifications; a failed download shows one, and a click finishes it.
+
+## 12g. Polite mode (POLITE-SPEC)
+
+- [ ] `$H/downex settings --polite on`, start a large download, `$H/downex daemon status`: "Polite
+      mode: on, full speed (line delay +N ms)" (not "can't be measured"): unprivileged ICMP works on
+      this macOS (13, 14, 15; Intel and Apple silicon). **Record** the state and the downexd log's
+      "polite mode" lines.
+- [ ] No Local Network privacy prompt appears for downexd or Downex Agent.
+- [ ] While a call or a game runs over the same line, the download slows ("slowed to …") and the
+      call stays smooth; `--polite off` gives full speed back at once.
+
 ## 13. Security checks (optional)
 
 - [ ] A second user account: its daemon has its own socket directory; that user's

@@ -45,10 +45,28 @@ func (c *Center) Failed(now time.Time, d *downexv1.Download) []Notification {
 	if !c.policy.OnFailure {
 		return nil
 	}
+	if d.GetErrorCode() == "link_expired" {
+		text := DisplayName(d) + "\n" + textLinkExpired
+		if d.GetReceived() > 0 {
+			text += " " + textKept
+		}
+		return c.finished.add(now, Notification{Kind: KindFailed, Title: titleLinkExpired, ID: d.GetId(), Count: 1,
+			Error: true, Text: text})
+	}
 	return c.finished.add(now, Notification{
 		Kind: KindFailed, Title: titleFailed, ID: d.GetId(), Count: 1, Error: true,
 		Text: DisplayName(d) + "\n" + ShortError(d.GetErrorCode(), d.GetError()),
 	})
+}
+
+// Renewed reports that d, whose link expired, continues with a new link that proved to
+// serve the same file: "Download continues" (Policy.OnComplete). It is shown at once.
+func (c *Center) Renewed(now time.Time, d *downexv1.Download) []Notification {
+	if !c.policy.OnComplete {
+		return nil
+	}
+	return []Notification{{Kind: KindRenewed, Title: titleRenewed, Text: DisplayName(d) + "\n" + textRenewed,
+		ID: d.GetId(), Count: 1}}
 }
 
 // Awaiting reports that d awaits confirmation and the window could not be opened to

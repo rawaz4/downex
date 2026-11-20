@@ -1,6 +1,10 @@
 // Native-messaging protocol between the extension and downex-nmhost (BROWSER-SPEC §2).
 // Pure module: the browser port is injected, so everything here runs under vitest.
 
+import { CLIP_TEXTS, isClipMs, type VideoChapter } from './clip';
+
+export type { VideoChapter } from './clip';
+
 export const NATIVE_HOST_NAME = 'com.downex.host';
 export const PROTOCOL_VERSION = 1;
 /** The relay rejects browser → host messages larger than this (UTF-8 JSON bytes). */
@@ -33,6 +37,12 @@ export interface AddFields {
   size?: number;
   startPaused?: boolean;
   /**
+   * The page the link was found on (http or https, no user name): Downex offers to open it
+   * when the link expires (DESKTOP-SPEC §10). A relay that does not list `renew` ignores it
+   * (unknown fields are ignored).
+   */
+  pageUrl?: string;
+  /**
    * Milliseconds the relay has to commit the download. After that the extension has given
    * up and the browser kept the download, so the relay must drop the request.
    */
@@ -63,6 +73,13 @@ export interface AddMediaFields {
    */
   videoTrack?: string;
   audioTrack?: string;
+  /**
+   * A part of the video (MEDIA-SPEC §8): its start and end in ms (end 0 or missing = to the end).
+   * Sent only to a relay that lists FEATURE_CLIPS: NativeClient refuses it to an older one, which
+   * would drop it and save the whole video.
+   */
+  clipStartMs?: number;
+  clipEndMs?: number;
 }
 
 export interface AddMediaParams extends AddMediaFields {
@@ -96,6 +113,35 @@ export const FEATURE_VIDEO = 'video';
 export const FEATURE_PREFETCH = 'prefetch';
 /** The relay feature that serves `probeStream` and the tracks of `addMedia` (VIDEO-DETECT-SPEC §3.5). */
 export const FEATURE_STREAMS = 'streams';
+/** The relay serves `rescue` and `resume` (BROWSER-SPEC §6). */
+export const FEATURE_RESCUE = 'rescue';
+/** The relay takes a part of a video (`clipStartMs`/`clipEndMs`) and answers chapters (MEDIA-SPEC §8). */
+export const FEATURE_CLIPS = 'clips';
+/**
+ * The relay takes `entryId`, one video of a page with several, and answers the page's items
+ * (SITE-MEDIA-SPEC §3.12): an older relay would drop the item and Downex would take the page's
+ * default one.
+ */
+export const FEATURE_ITEMS = 'items';
+/**
+ * The relay takes `cookieDomain`, the domain a Cookie header's sign-in is for (SITE-MEDIA-SPEC
+ * §6.3). To an older relay the Cookie goes without it, and Downex keeps it to the page's own host.
+ */
+export const FEATURE_SIGN_IN = 'signIn';
+/**
+ * The relay takes `addVideo.browserFetch`, answers `added.fetchTicket` and `videoInfo.browserFetch`,
+ * and serves `fetchTake` and `fetchPut` (browser-fetched saves, SITE-MEDIA-SPEC §2.8). An older relay
+ * gets no `browserFetch` and is never asked to take or put.
+ */
+export const FEATURE_BROWSER_FETCH = 'browserFetch';
+/** The relay feature that serves `probePlayed` and `addPlayed` (SITE-MEDIA-SPEC §2.9). */
+export const FEATURE_PLAYED = 'played';
+/** What a played request to a relay without FEATURE_PLAYED is answered with (code `outdated_downex`). */
+export const OUTDATED_PLAYED_TEXT = 'Update Downex to save this video.';
+/** What a request for an item to a relay without FEATURE_ITEMS is answered with (code `outdated_downex`). */
+export const OUTDATED_ITEMS_TEXT = 'Update Downex to choose a video of this page.';
+/** What a `rescue` or `resume` to a relay without FEATURE_RESCUE is answered with (code `outdated_downex`). */
+export const OUTDATED_RESCUE_TEXT = 'Update Downex to finish downloads that failed in the browser.';
 /** At most this many welcome features of at most MAX_FEATURE_CHARS each are read. */
 export const MAX_FEATURES = 16;
 export const MAX_FEATURE_CHARS = 32;
@@ -107,9 +153,20 @@ export const OUTDATED_STREAMS_TEXT = 'Update Downex to choose a stream quality.'
 /** What both video requests carry: the page, its headers and the deadline. */
 export interface VideoPageFields {
   pageUrl: string;
-  /** Only `Cookie` (the user's opt-in) and `Referer` (the embedding page) mean something. */
+  /** Only `Cookie` (the user's sign-in, SITE-MEDIA-SPEC §6.3) and `Referer` (the embedding page) mean something. */
   headers?: HeaderPair[];
   deadlineMs?: number;
+  /**
+   * The registrable domain the Cookie's sign-in is for (a curated site's, §6.3): Downex gives the
+   * cookies to it and its subdomains. Missing: the page's own host. Dropped for a relay without
+   * FEATURE_SIGN_IN.
+   */
+  cookieDomain?: string;
+  /**
+   * One video of a page with several, by the site's id of it (SITE-MEDIA-SPEC §3.12; missing: the
+   * page's default). Sent only to a relay that lists FEATURE_ITEMS.
+   */
+  entryId?: string;
 }
 
 /**
@@ -135,10 +192,144 @@ export interface AddVideoFields extends VideoPageFields {
   audioTrack?: string;
   /** Page title, at most MAX_MEDIA_TITLE_CHARS. */
   title?: string;
+  /** A part of the video, as for `addMedia` (FEATURE_CLIPS only). */
+  clipStartMs?: number;
+  clipEndMs?: number;
+  /**
+   * This browser can fetch the video's bytes when its servers answer only browsers (SITE-MEDIA-SPEC
+   * §2.8); the answer then carries a fetch ticket. Dropped for a relay without FEATURE_BROWSER_FETCH.
+   */
+  browserFetch?: boolean;
 }
 
 export interface AddVideoParams extends AddVideoFields {
   type: 'addVideo';
+}
+
+/** One file the tab's player fetched for the clicked video (SITE-MEDIA-SPEC §2.9). */
+export interface PlayedFile {
+  /** "r1".."r16". */
+  id: string;
+  /** The whole file's address (range-in-query removed). */
+  url: string;
+  /** Exact total, 0 = unknown. */
+  size: number;
+  kind: 'video' | 'audio' | '';
+  /** Base64 of the file's first bytes (at most 256 KiB). */
+  head: string;
+  /** The head needed the tab: Downex fetches the file through this browser from the start. */
+  browser: boolean;
+}
+
+/** The clicked `<video>` and the files its tab played (SITE-MEDIA-SPEC §2.9). */
+export interface PlayedSourceFields {
+  resources: PlayedFile[];
+  /** 0 = unknown. */
+  durationMs: number;
+  videoWidth: number;
+  videoHeight: number;
+  /** 1 yes, 0 unknown, -1 no. */
+  hasAudio: number;
+  /** The frame's other `<video>` elements' durations (ms), at most 8. */
+  otherDurationsMs?: number[];
+}
+
+/** Describes the clicked video from its played files (no request is made by Downex). */
+export interface ProbePlayedFields {
+  /** The frame's address, a hint. */
+  pageUrl: string;
+  played: PlayedSourceFields;
+  deadlineMs?: number;
+}
+
+export interface ProbePlayedParams extends ProbePlayedFields {
+  type: 'probePlayed';
+}
+
+/** Adds the clicked video from its played files; empty tracks ask for Downex's default pick. */
+export interface AddPlayedFields extends ProbePlayedFields {
+  videoTrack?: string;
+  audioTrack?: string;
+  title?: string;
+}
+
+export interface AddPlayedParams extends AddPlayedFields {
+  type: 'addPlayed';
+}
+
+/**
+ * A download that failed in the browser, for Downex to finish from the browser's partial file
+ * (BROWSER-SPEC §6). Sent only to a relay that lists FEATURE_RESCUE. downexd finds the partial
+ * next to `target` (`<target>.crdownload`, `<target>.part`, or a provisional
+ * "Unconfirmed N.crdownload"), proves that the server still has the same file, and moves it
+ * into its own part file.
+ */
+export interface RescueFields {
+  /** The download's address (the original one; downexd follows redirects). */
+  url: string;
+  headers: HeaderPair[];
+  /** The browser's final path of the file (DownloadItem.filename), absolute. */
+  target: string;
+  /** The browser's count of good bytes. */
+  bytesReceived: number;
+  /** The browser's total; -1 = unknown. */
+  totalBytes?: number;
+  /** When the download started, Unix ms. */
+  startTime?: number;
+  /** The original response's validators, when the extension saw them. */
+  etag?: string;
+  lastModified?: string;
+  /** The page the download was started from (http or https, no user name). */
+  pageUrl?: string;
+  /** Stored paused: the extension erases its own entry first, then sends `resume`. */
+  startPaused: boolean;
+  /** Milliseconds the relay has; it drops a rescue it cannot finish by then. */
+  deadlineMs?: number;
+}
+
+export interface RescueParams extends RescueFields {
+  type: 'rescue';
+}
+
+/**
+ * The first start of a download a `rescue` stored paused (BROWSER-SPEC §6). downexd refuses any
+ * other download, and this one after its first start or 10 minutes.
+ */
+export interface ResumeParams {
+  type: 'resume';
+  downloadId: number | string;
+}
+
+/** Asks Downex for a request its downloads' runs want the browser to make (SITE-MEDIA-SPEC §2.8). */
+export interface FetchTakeParams {
+  type: 'fetchTake';
+  /** The fetch tickets this browser holds: 1 to MAX_FETCH_TICKETS. */
+  tickets: string[];
+  /** How long Downex may wait for one, 0 to 25,000 ms. */
+  waitMs?: number;
+}
+
+/** The head of the browser's answer to a fetch. */
+export interface FetchHead {
+  status: number;
+  contentType?: string;
+  contentRange?: string;
+  /** -1 or missing = unknown. */
+  contentLength?: number;
+}
+
+/** What the browser received for a fetch, in order: the head with seq 0, then the body. */
+export interface FetchPutParams {
+  type: 'fetchPut';
+  ticket: string;
+  fetchId: string;
+  seq: number;
+  head?: FetchHead;
+  /** Base64 of at most MAX_FETCH_PIECE bytes. */
+  data?: string;
+  end?: boolean;
+  /** The fetch failed in the browser (`no_tab`: no tab of the site is open), at most 256 bytes. */
+  error?: string;
 }
 
 export interface StatusParams {
@@ -156,6 +347,12 @@ export type RequestParams =
   | ProbeStreamParams
   | ProbeVideoParams
   | AddVideoParams
+  | ProbePlayedParams
+  | AddPlayedParams
+  | RescueParams
+  | ResumeParams
+  | FetchTakeParams
+  | FetchPutParams
   | StatusParams
   | PingParams;
 export type RequestType = RequestParams['type'];
@@ -179,6 +376,21 @@ export interface AddedResult {
    * missing from an older relay: unknown.
    */
   awaiting?: boolean;
+  /**
+   * Downex checks first whether this link continues one of its downloads whose link expired
+   * (`add`; DESKTOP-SPEC §10); missing from an older relay: unknown.
+   */
+  renewCheck?: boolean;
+  /**
+   * The download's fetch ticket (`addVideo` to a relay that lists FEATURE_BROWSER_FETCH,
+   * SITE-MEDIA-SPEC §2.8): 32 lowercase hex characters; missing when Downex made none.
+   */
+  fetchTicket?: string;
+  /**
+   * Set by the extension, never by the relay: the domain whose sign-in this add carried, after its
+   * anonymous request was answered `auth_required` (SITE-MEDIA-SPEC §6.3).
+   */
+  signedIn?: string;
 }
 
 /** Most tracks a videoInfo may list (SITE-MEDIA-SPEC §3.5). */
@@ -225,17 +437,111 @@ export interface VideoInfoResult {
   selectedVideo: string;
   selectedAudio: string;
   tracks: VideoTrack[];
+  /** The video's chapters (a relay that lists FEATURE_CLIPS; never for streams), start order. */
+  chapters?: VideoChapter[];
+  /**
+   * A page with several videos (a relay that lists FEATURE_ITEMS, SITE-MEDIA-SPEC §3.12): the item
+   * this answer describes, the page's videos in its order, and how many other items it has
+   * (photos, links, videos past 20), which are not downloaded.
+   */
+  entryId?: string;
+  items?: VideoItem[];
+  itemsLeftOut?: number;
+  /**
+   * Set by the extension, never by the relay: the domain whose sign-in this answer needed (its
+   * anonymous request was answered `auth_required`, SITE-MEDIA-SPEC §6.3).
+   */
+  signedIn?: string;
+  /**
+   * The page's video servers answer only web browsers: this browser fetches the video for Downex
+   * (SITE-MEDIA-SPEC §2.8; a relay that lists FEATURE_BROWSER_FETCH).
+   */
+  browserFetch?: boolean;
 }
+
+/** One video of a page with several (SITE-MEDIA-SPEC §3.12). */
+export interface VideoItem {
+  /** The site's id of it: its identity, never its position. */
+  id: string;
+  title: string;
+  /** 0 = unknown. */
+  durationMs: number;
+  /** An https image of the page's ("" = none); shown only in the panel of that page's frame. */
+  thumbnail: string;
+}
+
+/** Most items a videoInfo may list (SITE-MEDIA-SPEC §3.12). */
+export const MAX_VIDEO_ITEMS = 20;
+
+/** At most this many chapters of a videoInfo are read (MEDIA-SPEC §8 C14). */
+export const MAX_VIDEO_CHAPTERS = 512;
+
+/** Answer to rescue: the new download and the bytes it kept from the browser's partial file. */
+export interface RescuedResult {
+  type: 'rescued';
+  downloadId: number | string;
+  keptBytes: number;
+}
+
+/** Answer to resume. */
+export interface ResumedResult {
+  type: 'resumed';
+  downloadId: number | string;
+}
+
+/** Polite mode's state as the relay names it (docs/POLITE-SPEC.md §8). */
+export type PoliteState = 'off' | 'idle' | 'watching' | 'slowed' | 'measuring' | 'no_signal' | 'unavailable';
+
+const POLITE_STATES: readonly PoliteState[] = ['off', 'idle', 'watching', 'slowed', 'measuring', 'no_signal', 'unavailable'];
 
 export interface StatusResult {
   type: 'status';
   running: boolean;
   active: number;
   queued: number;
+  /** Polite mode's state; absent from an older relay or daemon. */
+  polite?: PoliteState;
+  /** Polite mode's cap in bytes per second, only while it slows downloads. */
+  politeRate?: number;
 }
 
 export interface PongResult {
   type: 'pong';
+}
+
+/** One request a download's run wants the browser to make (SITE-MEDIA-SPEC §2.8). */
+export interface BrowserFetchTask {
+  ticket: string;
+  fetchId: string;
+  /** The format's address (the extension may use its player's address of the same resource). */
+  url: string;
+  start: number;
+  /** -1 = to the end. */
+  end: number;
+  /** The resource's exact size, 0 = unknown. */
+  total: number;
+}
+
+/** Answer to fetchTake: a request to make (none came within the wait) and the tickets Downex no longer knows. */
+export interface FetchTaskResult {
+  type: 'fetchTask';
+  fetch?: BrowserFetchTask;
+  ended: string[];
+}
+
+/** Answer to fetchPut: `stop` = abort the fetch. */
+export interface FetchAckResult {
+  type: 'fetchAck';
+  stop: boolean;
+}
+
+/** At most this many tickets go in a fetchTake, and a fetchPut carries at most this many bytes. */
+export const MAX_FETCH_TICKETS = 64;
+export const MAX_FETCH_PIECE = 256 * 1024;
+
+/** A fetch ticket's syntax: 32 lowercase hex characters. */
+export function isFetchTicket(v: unknown): v is string {
+  return typeof v === 'string' && /^[0-9a-f]{32}$/.test(v);
 }
 
 export interface ResultFor {
@@ -245,6 +551,12 @@ export interface ResultFor {
   probeStream: VideoInfoResult;
   probeVideo: VideoInfoResult;
   addVideo: AddedResult;
+  probePlayed: VideoInfoResult;
+  addPlayed: AddedResult;
+  rescue: RescuedResult;
+  resume: ResumedResult;
+  fetchTake: FetchTaskResult;
+  fetchPut: FetchAckResult;
   status: StatusResult;
   ping: PongResult;
 }
@@ -258,6 +570,12 @@ const EXPECTED_RESULT: { [K in RequestType]: ResultFor[K]['type'] } = {
   probeStream: 'videoInfo',
   probeVideo: 'videoInfo',
   addVideo: 'added',
+  probePlayed: 'videoInfo',
+  addPlayed: 'added',
+  rescue: 'rescued',
+  resume: 'resumed',
+  fetchTake: 'fetchTask',
+  fetchPut: 'fetchAck',
   status: 'status',
   ping: 'pong',
 };
@@ -289,6 +607,18 @@ export interface ProtocolError {
   message: string;
   /** The daemon's stable error code (`tools_installing`, `auth_required`, …), when it sent one. */
   reason?: string;
+  /** Set by the extension on a page video's `auth_required`: what happened with the sign-in (§6.3). */
+  signIn?: SignInNote;
+}
+
+/**
+ * What became of the user's sign-in for a page video Downex answered `auth_required` (SITE-MEDIA-SPEC
+ * §6.3): `used` (sent, and the site still refused), `none` (the browser holds no cookie of the site),
+ * `off` (the option "Use my sign-in for videos that need it" is off), `too-large` (more than 16 KiB).
+ */
+export interface SignInNote {
+  domain: string;
+  state: 'used' | 'none' | 'off' | 'too-large';
 }
 
 export type Outcome<T> = { ok: true; value: T } | { ok: false; error: ProtocolError };
@@ -342,6 +672,16 @@ export interface ParsedResponse {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Polite mode's optional status fields: a state this extension knows (anything else is dropped,
+ * as from an older relay), and the cap only while slowed.
+ */
+function parsePolite(m: Record<string, unknown>): Pick<StatusResult, 'polite' | 'politeRate'> {
+  const state = POLITE_STATES.find((s) => s === m.polite);
+  if (state === undefined) return {};
+  return state === 'slowed' && isCount(m.politeRate) ? { polite: state, politeRate: m.politeRate } : { polite: state };
 }
 
 function isCount(v: unknown): v is number {
@@ -409,7 +749,74 @@ export function parseVideoInfo(m: Record<string, unknown>): VideoInfoResult | un
     ids.add(t.id);
     out.push(t);
   }
-  return { type: 'videoInfo', site, title, durationMs, format, container, selectedVideo, selectedAudio, tracks: out };
+  const info: VideoInfoResult = { type: 'videoInfo', site, title, durationMs, format, container, selectedVideo, selectedAudio, tracks: out };
+  const chapters = parseChapters(m.chapters);
+  if (chapters) info.chapters = chapters;
+  const items = parseItems(m);
+  if (items) {
+    info.entryId = items.entryId;
+    info.items = items.items;
+    info.itemsLeftOut = items.leftOut;
+  }
+  if (m.browserFetch === true) info.browserFetch = true;
+  return info;
+}
+
+/** An item's thumbnail as Downex checked it (SITE-MEDIA-SPEC §3.12): an https URL without user information; else "". */
+function httpsImage(s: string): string {
+  if (s === '') return '';
+  try {
+    const u = new URL(s);
+    return u.protocol === 'https:' && u.username === '' && u.password === '' && u.hash === '' ? s : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The items of a videoInfo (SITE-MEDIA-SPEC §3.12): undefined unless the answer has them and every
+ * one is well formed (a bad list means no items, never a refused answer): ids unique, the entry id
+ * one of them (or "" when there is none), thumbnails https or "".
+ */
+function parseItems(m: Record<string, unknown>): { entryId: string; items: VideoItem[]; leftOut: number } | undefined {
+  const { entryId, items, itemsLeftOut } = m;
+  if (!isText(entryId, 256) || !Array.isArray(items) || items.length > MAX_VIDEO_ITEMS || !isCount(itemsLeftOut)) return undefined;
+  const out: VideoItem[] = [];
+  const ids = new Set<string>();
+  for (const it of items) {
+    if (!isRecord(it)) return undefined;
+    const { id, title, durationMs, thumbnail } = it;
+    if (!isText(id, 256) || id === '' || ids.has(id) || !isText(title, 2048) || !isCount(durationMs) || !isText(thumbnail, 2048)) {
+      return undefined;
+    }
+    ids.add(id);
+    out.push({ id, title, durationMs, thumbnail: httpsImage(thumbnail) });
+  }
+  if (out.length > 0 && !ids.has(entryId)) return undefined;
+  return { entryId, items: out, leftOut: itemsLeftOut };
+}
+
+/**
+ * The chapters of a videoInfo: undefined unless every entry is well formed and they follow each
+ * other in start order (a bad list means no chapters, never a refused answer).
+ */
+function parseChapters(v: unknown): VideoChapter[] | undefined {
+  if (!Array.isArray(v) || v.length === 0 || v.length > MAX_VIDEO_CHAPTERS) return undefined;
+  const out: VideoChapter[] = [];
+  for (const c of v) {
+    if (!isRecord(c)) return undefined;
+    const { startMs, endMs, title } = c;
+    if (!isClipMs(startMs) || !isClipMs(endMs) || endMs <= startMs || !isText(title, 256)) return undefined;
+    const prev = out[out.length - 1];
+    if (prev && startMs < prev.endMs) return undefined;
+    out.push({ startMs, endMs, title });
+  }
+  return out;
+}
+
+/** A daemon download ID as the relay sends it (int64 may arrive as number or string). */
+function isDownloadId(d: unknown): d is number | string {
+  return (typeof d === 'number' && Number.isFinite(d)) || (typeof d === 'string' && d !== '');
 }
 
 function parseSuccess(m: Record<string, unknown>): SuccessResult | undefined {
@@ -421,15 +828,42 @@ function parseSuccess(m: Record<string, unknown>): SuccessResult | undefined {
     case 'added': {
       const d = m.downloadId;
       if (!((typeof d === 'number' && Number.isFinite(d)) || (typeof d === 'string' && d !== ''))) return undefined;
-      if (m.awaiting === undefined) return { type: 'added', downloadId: d };
-      return typeof m.awaiting === 'boolean' ? { type: 'added', downloadId: d, awaiting: m.awaiting } : undefined;
+      if (m.awaiting !== undefined && typeof m.awaiting !== 'boolean') return undefined;
+      if (m.renewCheck !== undefined && typeof m.renewCheck !== 'boolean') return undefined;
+      const added: AddedResult = { type: 'added', downloadId: d };
+      if (typeof m.awaiting === 'boolean') added.awaiting = m.awaiting;
+      if (typeof m.renewCheck === 'boolean') added.renewCheck = m.renewCheck;
+      if (m.fetchTicket !== undefined && !isFetchTicket(m.fetchTicket)) return undefined;
+      if (isFetchTicket(m.fetchTicket)) added.fetchTicket = m.fetchTicket;
+      return added;
     }
+    case 'fetchTask': {
+      if (!Array.isArray(m.ended) || m.ended.length > MAX_FETCH_TICKETS || !m.ended.every(isFetchTicket)) return undefined;
+      const task: FetchTaskResult = { type: 'fetchTask', ended: m.ended };
+      if (m.fetch !== undefined) {
+        const f = m.fetch;
+        if (!isRecord(f) || !isFetchTicket(f.ticket) || !isText(f.fetchId, 32) || f.fetchId === '') return undefined;
+        if (typeof f.url !== 'string' || !/^https?:\/\//i.test(f.url) || f.url.length > 32 * 1024) return undefined;
+        if (!isCount(f.start) || !isCount(f.total) || !(f.end === -1 || isCount(f.end))) return undefined;
+        task.fetch = { ticket: f.ticket, fetchId: f.fetchId, url: f.url, start: f.start, end: f.end as number, total: f.total };
+      }
+      return task;
+    }
+    case 'fetchAck':
+      return typeof m.stop === 'boolean' ? { type: 'fetchAck', stop: m.stop } : undefined;
     case 'videoInfo':
       return parseVideoInfo(m);
     case 'status':
       return typeof m.running === 'boolean' && isCount(m.active) && isCount(m.queued)
-        ? { type: 'status', running: m.running, active: m.active, queued: m.queued }
+        ? { type: 'status', running: m.running, active: m.active, queued: m.queued, ...parsePolite(m) }
         : undefined;
+    case 'rescued': {
+      const d = m.downloadId;
+      if (!isDownloadId(d) || !isCount(m.keptBytes)) return undefined;
+      return { type: 'rescued', downloadId: d, keptBytes: m.keptBytes };
+    }
+    case 'resumed':
+      return isDownloadId(m.downloadId) ? { type: 'resumed', downloadId: m.downloadId } : undefined;
     case 'pong':
       return { type: 'pong' };
     default:
@@ -566,7 +1000,20 @@ type LateCallback = (outcome: Outcome<SuccessResult>) => void;
  */
 const VIDEO_REQUESTS: ReadonlySet<RequestType> = new Set(['probeVideo', 'addVideo', 'probeStream']);
 /** Requests whose `deadlineMs` is timed from sending: the wait for the welcome is taken off it. */
-const DEADLINE_REQUESTS: ReadonlySet<RequestType> = new Set(['add', 'addMedia', 'probeVideo', 'addVideo', 'probeStream']);
+const DEADLINE_REQUESTS: ReadonlySet<RequestType> = new Set([
+  'add',
+  'addMedia',
+  'probeVideo',
+  'addVideo',
+  'probeStream',
+  'rescue',
+  'probePlayed',
+  'addPlayed',
+]);
+/** Requests sent only to a relay whose welcome lists FEATURE_PLAYED (SITE-MEDIA-SPEC §2.9). */
+const PLAYED_REQUESTS: ReadonlySet<RequestType> = new Set(['probePlayed', 'addPlayed']);
+/** Requests sent only to a relay whose welcome lists FEATURE_RESCUE. */
+const RESCUE_REQUESTS: ReadonlySet<RequestType> = new Set(['rescue', 'resume']);
 
 interface Pending {
   type: RequestType;
@@ -707,6 +1154,45 @@ export class NativeClient {
     return this.request<'addVideo'>({ type: 'addVideo', ...fields }, options);
   }
 
+  /**
+   * Describes the clicked video from the files its tab played (SITE-MEDIA-SPEC §2.9);
+   * `outdated_downex` when the relay does not list FEATURE_PLAYED.
+   */
+  probePlayed(fields: ProbePlayedFields, options?: RequestOptions<VideoInfoResult>): Promise<Outcome<VideoInfoResult>> {
+    return this.request<'probePlayed'>({ type: 'probePlayed', ...fields }, options);
+  }
+
+  /** Adds the clicked video from the files its tab played; `outdated_downex` without FEATURE_PLAYED. */
+  addPlayed(fields: AddPlayedFields, options?: RequestOptions<AddedResult>): Promise<Outcome<AddedResult>> {
+    return this.request<'addPlayed'>({ type: 'addPlayed', ...fields }, options);
+  }
+
+  /**
+   * Hands a download that failed in the browser to Downex (BROWSER-SPEC §6); `outdated_downex`
+   * when the relay does not list FEATURE_RESCUE.
+   */
+  rescue(fields: RescueFields, options?: RequestOptions<RescuedResult>): Promise<Outcome<RescuedResult>> {
+    return this.request<'rescue'>({ type: 'rescue', ...fields }, options);
+  }
+
+  /**
+   * Asks for a request of the downloads whose tickets this browser holds (SITE-MEDIA-SPEC §2.8);
+   * `outdated_downex` when the relay does not list FEATURE_BROWSER_FETCH.
+   */
+  fetchTake(tickets: string[], waitMs: number, options?: RequestOptions<FetchTaskResult>): Promise<Outcome<FetchTaskResult>> {
+    return this.request<'fetchTake'>({ type: 'fetchTake', tickets, waitMs }, options);
+  }
+
+  /** Gives Downex what the browser received for a fetch; `stop` = abort it. */
+  fetchPut(fields: Omit<FetchPutParams, 'type'>, options?: RequestOptions<FetchAckResult>): Promise<Outcome<FetchAckResult>> {
+    return this.request<'fetchPut'>({ type: 'fetchPut', ...fields }, options);
+  }
+
+  /** The first start of a download `rescue` stored paused. */
+  resume(downloadId: number | string, options?: RequestOptions<ResumedResult>): Promise<Outcome<ResumedResult>> {
+    return this.request<'resume'>({ type: 'resume', downloadId }, options);
+  }
+
   queryStatus(options?: RequestOptions<StatusResult>): Promise<Outcome<StatusResult>> {
     return this.request<'status'>({ type: 'status' }, options);
   }
@@ -768,9 +1254,42 @@ export class NativeClient {
       this.#settle(id, failure('outdated_downex', OUTDATED_DOWNEX_TEXT));
       return;
     }
+    if (PLAYED_REQUESTS.has(m.type) && !features.includes(FEATURE_PLAYED)) {
+      // An older relay would refuse the request type: it is never sent one.
+      this.#settle(id, failure('outdated_downex', OUTDATED_PLAYED_TEXT));
+      return;
+    }
+    if (RESCUE_REQUESTS.has(m.type) && !features.includes(FEATURE_RESCUE)) {
+      // An older relay would refuse the request type: it is never sent one.
+      this.#settle(id, failure('outdated_downex', OUTDATED_RESCUE_TEXT));
+      return;
+    }
     if (m.type === 'probeVideo' && m.prefetch && !features.includes(FEATURE_PREFETCH)) {
       // An older relay would forward a look-ahead as a user's probe: it is never sent one.
       this.#settle(id, failure('unsupported', 'this Downex does not prepare video qualities ahead'));
+      return;
+    }
+    if ((m.type === 'probeVideo' || m.type === 'addVideo') && m.entryId && !features.includes(FEATURE_ITEMS)) {
+      // An older relay would drop the item and Downex would take another video: it is never sent one.
+      this.#settle(id, failure('outdated_downex', OUTDATED_ITEMS_TEXT));
+      return;
+    }
+    if ((m.type === 'fetchTake' || m.type === 'fetchPut') && !features.includes(FEATURE_BROWSER_FETCH)) {
+      // An older relay would refuse the request type: it is never sent one.
+      this.#settle(id, failure('outdated_downex', 'this Downex does not take videos fetched by the browser'));
+      return;
+    }
+    if (m.type === 'addVideo' && m.browserFetch !== undefined && !features.includes(FEATURE_BROWSER_FETCH)) {
+      // An older relay ignores it all the same; no ticket comes back.
+      delete m.browserFetch;
+    }
+    if ((m.type === 'probeVideo' || m.type === 'addVideo') && m.cookieDomain !== undefined && !features.includes(FEATURE_SIGN_IN)) {
+      // An older relay would drop it all the same; Downex then keeps the cookies to the page's host.
+      delete m.cookieDomain;
+    }
+    if ((m.type === 'addMedia' || m.type === 'addVideo') && m.clipStartMs !== undefined && !features.includes(FEATURE_CLIPS)) {
+      // An older relay would drop the part and save the whole video: it is never sent one.
+      this.#settle(id, failure('outdated_downex', CLIP_TEXTS.outdated));
       return;
     }
     if (m.type === 'addMedia' && !features.includes(FEATURE_STREAMS)) {
@@ -839,11 +1358,12 @@ export class NativeClient {
       // Only a running downexd adds or describes a video (the welcome may have come while
       // it was still starting).
       else if (outcome.value.type === 'added' || outcome.value.type === 'videoInfo') running = true;
+      else if (outcome.value.type === 'rescued' || outcome.value.type === 'resumed') running = true;
     } else if (outcome.error.code === 'rejected') {
       // Only downexd refuses a request: the relay's own refusals are invalid_request.
       running = true;
     } else if (outcome.error.code === 'daemon_unavailable') {
-      if (type === 'addMedia' || VIDEO_REQUESTS.has(type)) {
+      if (type === 'addMedia' || type === 'rescue' || VIDEO_REQUESTS.has(type) || PLAYED_REQUESTS.has(type)) {
         // The daemon reads the manifests (or resolves the page) before it answers, so the
         // relay's deadline may have passed while it runs: the status says whether it does.
         this.#recheckDaemon();

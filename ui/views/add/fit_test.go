@@ -19,6 +19,14 @@ var allowFit = map[string]bool{
 	"confirm-video-8-all@small": true,
 	"add-files-more@small":      true, "add-video-8@small": true, "add-video-8-more@small": true, "add-video-6-more@small": true,
 	"add-video-6-adding@small@20": true,
+	// The "Save only part of the video" row (docs/MEDIA-SPEC.md §8, DESIGN-SYSTEM §3.19): the
+	// states it pushes past the small windows at 16 px text too.
+	"confirm-video-8-long@small": true, "confirm-video-8-queue@small": true, "confirm-video-8@small": true,
+	"add-video-6-adding@small": true, "add-video-6-long@small": true,
+	// The item row of a page with several videos (docs/SITE-MEDIA-SPEC.md §3.12): in the qualities'
+	// column it fits the small windows at 16 px text; at 20 px its wrapped note pushes that column
+	// past 900×600, as the larger video states above.
+	"confirm-items@small@20": true,
 }
 
 // fitMayScroll is measure-dialogs.mjs's allowed(): the strict windows (1200×760, 1190×752,

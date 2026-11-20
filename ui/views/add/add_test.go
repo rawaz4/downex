@@ -547,6 +547,54 @@ func TestAddDialogVideoPages(t *testing.T) {
 		want := &downexv1.AddMediaRequest{PageUrl: formattest.Page, Origin: downexv1.MediaOrigin_MEDIA_ORIGIN_SITE, Source: downexv1.AddSource_ADD_SOURCE_UI, VideoTrack: "18"}
 		eq(t, "add", r.media.last().String(), want.String())
 	})
+	t.Run("saves part of the video: a chapter fills the times, an error blocks the add", func(t *testing.T) {
+		probe := func(_ context.Context, req *downexv1.ProbeMediaRequest) (*downexv1.MediaInfo, error) {
+			return formattest.SiteMediaInfo(func(m *downexv1.MediaInfo) {
+				m.PageUrl = req.GetPageUrl()
+				m.Chapters = []*downexv1.Chapter{{StartMs: 0, EndMs: 80_000, Title: "Intro"}, {StartMs: 80_000, EndMs: 165_000, Title: "Results"}}
+			}), nil
+		}
+		r := setupAdd(t, rigOptions{probe: probe, submitMedia: siteAdd})
+		r.enterPage(t, formattest.Page)
+		r.primary()
+		r.settle(t, "qualities", func() bool { return r.a.Info() != nil })
+		c := r.a.Clip
+		if c == nil || c.Check.Checked() || c.Chapter == nil {
+			t.Fatal("no part section, or it starts checked, or without its chapters")
+		}
+		eq(t, "footer", r.a.FooterSummary(), "1080p · H.264 + English audio · 482 MB")
+		r.h.Click(c.Check.Box.Base())
+		r.h.Settle()
+		eq(t, "chapters", optionLabels(c.Chapter), []string{media.ClipCustom, "1. Intro (0:00–1:20)", "2. Results (1:20–2:45)"})
+		c.chooseChapter("2")
+		r.h.Settle()
+		eq(t, "times", c.Form().From+" "+c.Form().To, "1:20 2:45")
+		// the size × 90 s ÷ 600 s (the part and 5 s), an estimate
+		eq(t, "footer", r.a.FooterSummary(), "1080p · H.264 + English audio · ~72.4 MB · part 1:20 – 2:45")
+		// an edited time is custom again; a bad one blocks the add and takes the keyboard
+		c.From.SetText("1:2")
+		c.form.From = "1:2"
+		c.custom()
+		r.h.Settle()
+		eq(t, "chapter", c.Chapter.Value(), "0")
+		r.primary()
+		r.h.Settle()
+		eq(t, "error", c.ErrorText(), media.ClipBadTime)
+		eq(t, "adds", r.media.n(), 0)
+		if w := r.h.Window; w.Focused() != c.From.Base() {
+			t.Error("the keyboard is not on From")
+		}
+		c.From.SetText("1:20")
+		c.form.From = "1:20"
+		c.custom()
+		r.h.Settle()
+		r.primary()
+		r.settle(t, "close", func() bool { return r.closed == 1 })
+		got := r.media.last()
+		if got.GetClip().GetStartMs() != 80_000 || got.GetClip().GetEndMs() != 165_000 || got.GetClip().GetChapter() != "" || got.GetFilename() != "" {
+			t.Errorf("add = %v", got)
+		}
+	})
 	t.Run("asks again while yt-dlp is set up and the page is read, showing how far it is", func(t *testing.T) {
 		answers := []any{
 			textError("failed_precondition: tools_installing: downloading yt-dlp and Deno (34%)"),

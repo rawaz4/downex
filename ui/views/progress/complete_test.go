@@ -610,6 +610,21 @@ func TestProgressWindowVideoPages(t *testing.T) {
 		want(t, "Quality", r.mustRow("Quality"), "1080p · H.264 · AAC 129 kbit/s")
 	})
 
+	t.Run("shows the part of the video with its keyframe in the completion view", func(t *testing.T) {
+		r := show(t, site(nil))
+		r.update(7, func(d *downexv1.Download) {
+			d.State, d.Received, d.ConnectionInfo = state.StateCompleted, 460*MiB, nil
+			d.Media = formattest.SiteMediaInfo(func(m *downexv1.MediaInfo) {
+				m.FragmentsTotal, m.FragmentsDone = 46, 46
+				m.Clip = &downexv1.MediaClip{StartMs: 80_000, EndMs: 165_000, KeyframeMs: 77_400, FetchEndMs: 168_000}
+			})
+		})
+		if !r.completeShown() {
+			t.Fatal("no complete view")
+		}
+		want(t, "Part", r.mustRow("Part"), "1:20 – 2:45")
+	})
+
 	t.Run("explains a page that failed and offers no retry for a gone quality", func(t *testing.T) {
 		r := show(t, site(func(d *downexv1.Download) {
 			d.State, d.ErrorCode, d.Error, d.ConnectionInfo = state.StateFailed, "media_invalid", "the chosen quality is gone", nil

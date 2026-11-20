@@ -27,7 +27,8 @@ const (
 	phaseBackoff                       // waiting before a retry
 )
 
-// job holds the per-download values workers share. It is immutable while workers run.
+// job holds the per-download values workers share. It is immutable while workers run,
+// except for the expired flag.
 type job struct {
 	req        model.Request  // what segment requests send (possibly pinned, see pin.go)
 	fallback   *model.Request // the original request when req is pinned, else nil
@@ -46,7 +47,10 @@ type job struct {
 	writes     chan<- writeReq
 	events     chan<- event
 	received   *atomic.Int64 // bytes reserved by all workers this session
-	log        *slog.Logger
+	// expired is set by the first worker whose request finds the link expired (§7.2 E3):
+	// from then on no request is sent; responses already streaming go on.
+	expired atomic.Bool
+	log     *slog.Logger
 	// epoch is the clock time when the run started. Activity times are durations
 	// since it (worker.touch), so idle times follow the monotonic clock: a system clock
 	// set forward stalls no connection.
@@ -219,6 +223,9 @@ func (w *worker) serve(seg *segment) error {
 					return err
 				}
 			}
+			if w.job.expired.Load() {
+				return errLinkStopped // another connection found the link expired (§7.2 E3)
+			}
 			replacing := w.replaced // only the first request: a retry may be one too many
 			w.replaced = false
 			st, err := w.open(pos, end)
@@ -268,6 +275,10 @@ func (w *worker) serve(seg *segment) error {
 	}
 }
 
+// errLinkStopped ends a worker that would send a request after the link expired
+// (§7.2 E3): it leaves its range unowned and does not fail the download itself.
+var errLinkStopped = errors.New("engine: no new request after the link expired")
+
 // errEndOfFile reports that a chained single-mode download reached the end of the
 // resource: the server answered "bytes=pos-" with 416.
 var errEndOfFile = errors.New("engine: end of resource")
@@ -310,6 +321,11 @@ func (w *worker) open(pos, end int64) (*stream, error) {
 		w.unpinned = true
 		w.job.log.Debug("redirect target refused a segment; using the original URL", "worker", w.id, "status", resp.StatusCode)
 		return w.open(pos, end)
+	}
+	if expired, why := isExpiry(resp, expiryCheck{sentURL: req.URL, rangedRequest: !w.job.single}); expired {
+		closeBody(resp)
+		w.job.expired.Store(true)
+		return nil, expiryError(pos, end, why)
 	}
 	if w.job.chained && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 		closeBody(resp)

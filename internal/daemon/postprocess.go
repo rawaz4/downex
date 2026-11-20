@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"time"
 
 	"downex/internal/avscan"
+	"downex/internal/filecheck"
 	"downex/internal/filemark"
 	"downex/internal/model"
 )
@@ -38,6 +40,34 @@ type PostResult struct {
 	// Note is the text for Download.error ("" = none): set when the scan reported a
 	// problem or did not finish, so the user sees it with the completed download.
 	Note string
+	// Checked: the file check ran (docs/DESKTOP-SPEC.md §9); Check is its result (nil =
+	// nothing to say, or the check could not read the file).
+	Checked bool
+	Check   *model.FileCheck
+}
+
+// withoutPath drops the file's path from a file error: the file check's log lines never
+// carry file names (docs/DESKTOP-SPEC.md §9.1 F1).
+func withoutPath(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
+}
+
+// FileCheckNotice is the notification text of the file check of the file named name:
+// DANGER always, CAUTION only while notify_on_complete is on (§9.7). ok is false when
+// there is none.
+func (r PostResult) FileCheckNotice(name string, notifyOnComplete bool) (text string, ok bool) {
+	switch {
+	case r.Check == nil:
+		return "", false
+	case r.Check.Level == model.FileCheckDanger,
+		r.Check.Level == model.FileCheckCaution && notifyOnComplete:
+		return filecheck.NotificationText(r.Check, name), true
+	}
+	return "", false
 }
 
 // Alarming reports whether the user must be told about the scan: it reported a
@@ -57,13 +87,18 @@ func (r PostResult) NotificationText(name string) string {
 }
 
 // PostProcessor finishes a completed download's file before the daemon announces the
-// completion (docs/M6-SPEC.md §3): it marks the file with its origin
-// (mark_downloaded_files) and then runs the antivirus scanner on it (av_scan_enabled).
+// completion (docs/M6-SPEC.md §3): it checks whether the file is what its name says
+// (check_downloaded_files, docs/DESKTOP-SPEC.md §9; file downloads only), marks the file
+// with its origin (mark_downloaded_files) whatever the check found, and then runs the
+// antivirus scanner on it (av_scan_enabled).
 // Neither ever fails the download: a failed mark is logged, a scan that reports a
 // problem or does not finish leaves a note (PostResult.Note) for Download.error and an
 // alarming result for the notification. The zero value is not usable; create it with
 // NewPostProcessor (tests replace the fields).
 type PostProcessor struct {
+	// Check runs the final file check on the completed file at path (filecheck.CheckPath
+	// with d's name, hidden-controls flag and served type, within filecheck.Timeout).
+	Check func(ctx context.Context, path string, d *model.Download) (*model.FileCheck, error)
 	// Mark marks a file with its origin (filemark.Mark).
 	Mark func(path string, o filemark.Origin) error
 	// Scan runs the scanner on file (avscan.Run with avscan.DefaultTimeout).
@@ -80,6 +115,9 @@ func NewPostProcessor(log *slog.Logger) *PostProcessor {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &PostProcessor{
+		Check: func(ctx context.Context, path string, d *model.Download) (*model.FileCheck, error) {
+			return filecheck.CheckPath(ctx, path, d.Filename, d.NameControls, d.ServedType)
+		},
 		Mark: filemark.Mark,
 		Scan: func(ctx context.Context, command, args, file string) (avscan.Result, error) {
 			return avscan.Run(ctx, command, args, file, avscan.Options{})
@@ -110,6 +148,17 @@ func (p *PostProcessor) Process(ctx context.Context, d *model.Download, s Deskto
 		return res
 	}
 	path := filepath.Join(d.Dir, d.Filename)
+	if s.CheckFiles && d.Kind == model.KindFile && p.Check != nil {
+		fc, err := p.Check(ctx, path, d)
+		if err != nil { // advisory: no result, the download is unaffected
+			log.Warn("cannot check the downloaded file", "download", int64(d.ID), "err", withoutPath(err))
+		} else {
+			res.Checked, res.Check = true, fc
+			if fc != nil {
+				log.Info("file check", "download", int64(d.ID), "level", int(fc.Level), "reason", fc.Reason, "content", fc.Content)
+			}
+		}
+	}
 	if s.MarkDownloadedFiles && p.Mark != nil {
 		now := time.Now()
 		if p.Now != nil {
@@ -148,25 +197,38 @@ func (p *PostProcessor) Process(ctx context.Context, d *model.Download, s Deskto
 	return res
 }
 
-// postProcess marks and scans the file of rec, which its run has just completed and
-// stored, as the desktop settings ask (finish calls it before the completion is
-// announced). A note of the scan is stored as rec.Error; the download stays completed.
+// postProcess checks, marks and scans the file of rec, which its run has just completed
+// and stored, as the desktop settings ask (finish calls it before the completion is
+// announced). The check's result is stored with SetFileCheck and set as rec.FileCheck
+// (docs/DESKTOP-SPEC.md §9); a note of the scan is stored as rec.Error; the download
+// stays completed.
 // The scan holds the download's slot and ends when Shutdown starts.
 func (m *Manager) postProcess(rec *model.Download) PostResult {
 	m.mu.Lock()
 	desk := m.settings.Desktop
 	m.mu.Unlock()
-	if !desk.MarkDownloadedFiles && !desk.scanConfigured() {
-		return PostResult{}
+	var res PostResult
+	if desk.MarkDownloadedFiles || desk.scanConfigured() || desk.CheckFiles {
+		res = m.post.Process(m.base, rec, desk)
 	}
-	res := m.post.Process(m.base, rec, desk)
+	// The run's finalisation context may have expired during a long scan.
+	ctx, cancel := context.WithTimeout(context.Background(), finalizeTimeout)
+	defer cancel()
+	// The stored check describes this file only: a check that did not run (setting off,
+	// a media download, a read error) leaves none rather than one of an earlier copy.
+	if res.Checked || rec.FileCheck != nil {
+		if res.Check != nil {
+			res.Check.CheckedAt = m.now()
+		}
+		if err := m.st.SetFileCheck(ctx, rec.ID, res.Check); err != nil {
+			m.log.Warn("cannot store the file check", "download", int64(rec.ID), "err", err)
+		}
+		rec.FileCheck = res.Check
+	}
 	if res.Note == "" {
 		return res
 	}
 	rec.Error, rec.UpdatedAt = res.Note, time.Now()
-	// The run's finalisation context may have expired during a long scan.
-	ctx, cancel := context.WithTimeout(context.Background(), finalizeTimeout)
-	defer cancel()
 	if err := m.st.UpdateDownload(ctx, rec); err != nil {
 		m.log.Warn("cannot store the antivirus scan's note", "download", int64(rec.ID), "err", err)
 	}

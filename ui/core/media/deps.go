@@ -15,14 +15,15 @@ import (
 // formats), and the two locale services today's window takes from Intl.
 
 var (
-	isJSSpace     = text.IsJSSpace
-	jsTrim        = text.TrimJS
-	jsLower       = text.LowerJS
-	jsRound       = format.Round
-	jsNumber      = format.Num
-	formatBytes   = format.Bytes
-	formatBitrate = format.Bitrate
-	formatPercent = format.Percent
+	isJSSpace      = text.IsJSSpace
+	jsTrim         = text.TrimJS
+	jsLower        = text.LowerJS
+	jsRound        = format.Round
+	jsNumber       = format.Num
+	formatBytes    = format.Bytes
+	formatBitrate  = format.Bitrate
+	formatPercent  = format.Percent
+	formatDuration = format.Duration
 )
 
 // schemeAndPath is new URL(s)'s scheme (without ":") and pathname; ok false where it throws.

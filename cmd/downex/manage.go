@@ -22,6 +22,7 @@ import (
 	"downex/internal/dlock"
 	"downex/internal/dlview"
 	"downex/internal/engine"
+	"downex/internal/filecheck"
 	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
 )
@@ -56,11 +57,12 @@ func (a *app) ls(ctx context.Context, args []string) error {
 
 // listStore reads every download from the database at db (or the default one).
 func listStore(ctx context.Context, db string) (views []downloadView, err error) {
-	st, _, err := openStore(db)
+	st, dbPath, err := openStore(db)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, closeStore(st)) }()
+	checkOn := checkFilesOn(dbPath)
 
 	list, err := st.ListDownloads(ctx)
 	if err != nil {
@@ -72,7 +74,11 @@ func listStore(ctx context.Context, db string) (views []downloadView, err error)
 		if err != nil {
 			return nil, fmt.Errorf("load download %d: %w", list[i].ID, err)
 		}
-		views = append(views, newDownloadView(&list[i], segs))
+		v := newDownloadView(&list[i], segs)
+		if !checkOn {
+			v.FileCheck = nil
+		}
+		views = append(views, v)
 	}
 	return views, nil
 }
@@ -94,7 +100,7 @@ func writeList(w io.Writer, views []downloadView) error {
 		if name == "" {
 			name = v.URL
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", v.ID, v.State, progress, v.sizeText(), printable(name))
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", v.ID, v.stateText(), progress, v.sizeText(), printable(name))
 	}
 	return tw.Flush()
 }
@@ -134,7 +140,7 @@ func (a *app) info(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	st, _, err := openStore(t.db)
+	st, dbPath, err := openStore(t.db)
 	if err != nil {
 		return err
 	}
@@ -145,6 +151,9 @@ func (a *app) info(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	v := infoView{downloadView: newDownloadView(d, segs), Segments: segs}
+	if !checkFilesOn(dbPath) {
+		v.FileCheck = nil
+	}
 	live, err := a.liveDownload(ctx, t, id)
 	if err != nil {
 		return err
@@ -156,6 +165,8 @@ func (a *app) info(ctx context.Context, args []string) (err error) {
 		// yet, and so does a completion_dialog mark set during the run.
 		v.ActiveMS = max(v.ActiveMS, live.GetActiveMs())
 		v.liveReceived = live.GetReceived()
+		// The running download's early check is known to downexd only.
+		v.FileCheck = rpcFileCheckView(live.GetFileCheck())
 		v.CompletionDialog = live.GetCompletionDialog()
 		if v.StartedAt == nil && live.GetStartedAt() != nil {
 			started := live.GetStartedAt().AsTime()
@@ -282,6 +293,7 @@ type downloadView struct {
 	Validators     model.Validators `json:"validators,omitzero"`
 	Error          string           `json:"error,omitempty"`
 	ErrorCode      string           `json:"errorCode,omitempty"` // stable machine code from downexd, e.g. "http_status"
+	PageURL        string           `json:"pageUrl,omitempty"`   // the page a file download came from (docs/DESKTOP-SPEC.md §10)
 	CreatedAt      time.Time        `json:"createdAt"`
 	UpdatedAt      time.Time        `json:"updatedAt"`
 	CompletedAt    *time.Time       `json:"completedAt,omitempty"`
@@ -301,6 +313,25 @@ type downloadView struct {
 	StartedAt        *time.Time `json:"startedAt,omitempty"`
 	ActiveMS         int64      `json:"activeMs,omitempty"`
 	CompletionDialog bool       `json:"completionDialog,omitempty"`
+	// The file check (docs/DESKTOP-SPEC.md §9): omitted when it has nothing to say or
+	// check_downloaded_files is off.
+	FileCheck *fileCheckView `json:"fileCheck,omitempty"`
+
+	// RescuedBytes were adopted from a browser's partial file (docs/ENGINE-SPEC.md §7.4).
+	RescuedBytes int64 `json:"rescuedBytes,omitempty"`
+}
+
+// stateText is the state ls prints: "check file" for a completed download whose file
+// check warns (docs/DESKTOP-SPEC.md §9.7), "link expired" for a download whose link
+// expired (§10).
+func (v downloadView) stateText() string {
+	switch {
+	case v.State == stateName(model.StateCompleted) && v.FileCheck.warns():
+		return "check file"
+	case linkExpired(v.State, v.ErrorCode, v.Error):
+		return "link expired"
+	}
+	return v.State
 }
 
 // infoView adds the stored segments for "info --json", and the live connections while
@@ -326,7 +357,12 @@ func newDownloadView(d *model.Download, segs []model.Segment) downloadView {
 		Error: d.Error, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 		Category: d.Category, ExpectedSize: d.ExpectedSize, MIME: d.MIME, Kind: d.Kind.String(),
 		ActiveMS: max(d.ActiveMS, 0), CompletionDialog: d.CompletionDialog,
+		// The stored final result, else the name stage (downexd adds a running download's
+		// early result).
+		FileCheck: newFileCheckView(filecheck.Shown(d, nil), d.Filename),
+		PageURL:   dlview.PageURL(d),
 	}
+	v.RescuedBytes = d.RescuedBytes
 	if !d.StartedAt.IsZero() {
 		t := d.StartedAt
 		v.StartedAt = &t
@@ -391,14 +427,35 @@ func writeInfo(w io.Writer, d *model.Download, v infoView) error {
 	} else {
 		row("Directory", "%s", v.Dir)
 	}
-	row("State", "%s", v.State)
+	if linkExpired(v.State, v.ErrorCode, v.Error) {
+		row("State", "%s (link expired)", v.State)
+	} else {
+		row("State", "%s", v.State)
+	}
 	if v.Error != "" {
 		row("Error", "%s", v.Error)
 	}
+	if v.PageURL != "" {
+		row("Page", "%s", v.PageURL)
+	}
+	if fc := v.FileCheck; fc != nil {
+		if c := fc.contentsText(); c != "" {
+			row("Contents", "%s", c)
+		}
+		row("File check", "%s", fc.resultText())
+	}
 	if m := v.Media; m != nil {
-		if m.Origin == originSite {
-			// A web page's video (docs/SITE-MEDIA-SPEC.md §3.7); its address is the page.
-			row("Kind", "video page (%s)", cmp.Or(m.Site, "web page"))
+		if m.Origin == originPlayed {
+			// A video saved from what the browser played (docs/SITE-MEDIA-SPEC.md §2.9).
+			row("Kind", "video played in the browser (%s)", cmp.Or(m.Site, "web page"))
+		} else if m.Origin == originSite {
+			// A web page's video (docs/SITE-MEDIA-SPEC.md §3.7); its address is the page. A
+			// page without video saves its audio (§3.13).
+			kind := "video"
+			if m.audioPage() {
+				kind = "audio"
+			}
+			row("Kind", "%s page (%s)", kind, cmp.Or(m.Site, "web page"))
 		} else {
 			row("Kind", "media (%s stream)", strings.ToUpper(m.Format))
 		}
@@ -412,7 +469,14 @@ func writeInfo(w io.Writer, d *model.Download, v infoView) error {
 		if m.Duration > 0 {
 			row("Duration", "%s", formatDuration(time.Duration(m.Duration*float64(time.Second))))
 		}
-		if m.Origin == originSite && m.Format == "http" {
+		if c := m.Clip; c != nil {
+			// The part of the video (docs/MEDIA-SPEC.md §8, B6).
+			row("Part", "%s", partText(c, time.Duration(m.Duration*float64(time.Second))))
+			if c.FetchedWhole {
+				row("Downloaded in full", "%s", "this site's file has no index, so the part was cut from the whole file.")
+			}
+		}
+		if (m.Origin == originSite || m.Origin == originPlayed) && m.Format == "http" {
 			// Direct formats download in parts of a few MiB, not in fragments.
 			row("Parts", "%s", partProgress(m.FragmentsDone, m.FragmentsTotal))
 		} else {
@@ -433,6 +497,9 @@ func writeInfo(w io.Writer, d *model.Download, v infoView) error {
 		row("Downloaded", "%s (%.1f%%)", formatBytes(v.Downloaded), pct)
 	} else {
 		row("Downloaded", "%s", formatBytes(v.Downloaded))
+	}
+	if v.RescuedBytes > 0 {
+		row("Rescued", "%s from a partial file", formatBytes(v.RescuedBytes))
 	}
 	if v.MaxConnections > 0 {
 		row("Connections", "up to %d", v.MaxConnections)

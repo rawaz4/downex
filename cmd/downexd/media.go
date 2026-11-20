@@ -18,7 +18,7 @@ import (
 // added on one side only breaks this file's compilation. Host rules cap media jobs too
 // (docs/SITE-MEDIA-SPEC.md §3.3: connections, speed and request length per host).
 type mediaJobs struct {
-	// assemble, checkTS and concatTS replace remux.Assemble, remux.CheckTS and
+	// assemble, checkTS and concatTS replace remux.AssembleWindow, remux.CheckTS and
 	// remux.ConcatTS in the jobs (tests); nil keeps them.
 	assemble mediajob.AssembleFunc
 	checkTS  func(prefix []byte, k remux.Kind) error
@@ -69,7 +69,7 @@ func jobCheckpoint(c *model.MediaCheckpoint) *mediajob.Checkpoint {
 		return nil
 	}
 	c = c.Clone()
-	out := &mediajob.Checkpoint{DurableBytes: c.DurableBytes, BytesTotal: c.BytesTotal}
+	out := &mediajob.Checkpoint{DurableBytes: c.DurableBytes, BytesTotal: c.BytesTotal, LeadIn: c.LeadIn}
 	if c.Tracks != nil {
 		out.Tracks = make([]mediajob.TrackCheckpoint, len(c.Tracks))
 		for i, t := range c.Tracks {
@@ -82,7 +82,7 @@ func jobCheckpoint(c *model.MediaCheckpoint) *mediajob.Checkpoint {
 // modelCheckpoint converts a job's checkpoint for the store. The bitmaps and chunk
 // prefixes are copied: the job keeps updating its own.
 func modelCheckpoint(c mediajob.Checkpoint) model.MediaCheckpoint {
-	out := model.MediaCheckpoint{DurableBytes: c.DurableBytes, BytesTotal: c.BytesTotal}
+	out := model.MediaCheckpoint{DurableBytes: c.DurableBytes, BytesTotal: c.BytesTotal, LeadIn: c.LeadIn}
 	if c.Tracks != nil {
 		out.Tracks = make([]model.MediaTrackCheckpoint, len(c.Tracks))
 		for i, t := range c.Tracks {

@@ -232,7 +232,9 @@ func TestOffersRefusals(t *testing.T) {
 		data []byte
 		want error
 	}{
-		"audio only":         {fixture(t, "audio.json"), media.ErrUnsupported},
+		"audio of opus only": {page(`{"format_id": "o", "protocol": "https", "url": "https://cdn.example.com/o", "ext": "opus", "vcodec": "none", "acodec": "opus"}`), media.ErrUnsupported},
+		"audio of flac only": {page(`{"format_id": "f", "protocol": "https", "url": "https://cdn.example.com/f", "ext": "flac", "vcodec": "none", "acodec": "flac"}`), media.ErrUnsupported},
+		"audio of mp3 hls":   {page(`{"format_id": "m", "protocol": "m3u8_native", "url": "https://cdn.example.com/m.m3u8", "ext": "mp3", "vcodec": "none", "acodec": "mp3"}`), media.ErrUnsupported},
 		"drm":                {fixture(t, "drm.json"), media.ErrEncrypted},
 		"has drm":            {[]byte(`{"id": "x", "extractor_key": "Generic", "_has_drm": true, "formats": []}`), media.ErrEncrypted},
 		"needs auth":         {[]byte(`{"id": "x", "extractor_key": "Generic", "availability": "needs_auth"}`), ErrAuthRequired},
@@ -240,7 +242,7 @@ func TestOffersRefusals(t *testing.T) {
 		"premium only":       {[]byte(`{"id": "x", "extractor_key": "Generic", "availability": "premium_only"}`), ErrAuthRequired},
 		"no formats":         {[]byte(`{"id": "x", "extractor_key": "Generic", "availability": "public"}`), media.ErrUnsupported},
 		"webm only":          {page(`{"format_id": "w", "protocol": "https", "url": "https://cdn.example.com/w", "ext": "webm", "vcodec": "vp9", "acodec": "opus"}`), media.ErrUnsupported},
-		"audio manifest":     {page(`{"format_id": "a", "protocol": "m3u8_native", "url": "https://cdn.example.com/a.m3u8", "vcodec": "none", "acodec": "mp4a"}`), media.ErrUnsupported},
+		"audio with webm":    {page(`{"format_id": "w", "protocol": "https", "url": "https://cdn.example.com/w", "ext": "webm", "vcodec": "vp9", "acodec": "none"}`, `{"format_id": "a", "protocol": "https", "url": "https://cdn.example.com/a", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2"}`), media.ErrUnsupported},
 		"video without mp4a": {page(`{"format_id": "v", "protocol": "https", "url": "https://cdn.example.com/v", "ext": "mp4", "container": "mp4_dash", "vcodec": "avc1", "acodec": "none"}`, `{"format_id": "a", "protocol": "https", "url": "https://cdn.example.com/a", "ext": "webm", "container": "webm_dash", "vcodec": "none", "acodec": "opus"}`), media.ErrUnsupported},
 	} {
 		info, err := Parse(c.data, testNow)
@@ -654,5 +656,171 @@ func TestManifestTracksSecondRound(t *testing.T) {
 	}
 	if got := ids(ManifestTracks([]media.Track{aac, low})); !reflect.DeepEqual(got, []string{"v1", "v2"}) {
 		t.Errorf("second round = %v", got)
+	}
+}
+
+// Plain codec names (amendment 2026-11-18): a TikTok-like page whose muxed formats say
+// "h264"/"aac" and "bytevc1" is offered, H.264 before HEVC within the class, its codecs
+// named by their sample entries; the watermarked copy without a picture is kept out of
+// the list while a known quality is listed (still selectable, then listed after the
+// classes), and the audio whose codec is a container's name ("mp4") is not offered.
+func TestOffersPlainCodecs(t *testing.T) {
+	info, off := offerFixture(t, "tiktok.json", "www.example.com")
+	videos, audios := trackIDs(off.Tracks)
+	if want := []string{"h264_540p_875617-1"}; !reflect.DeepEqual(videos, want) || audios != nil {
+		t.Errorf("tracks %v + %v, want %v and no audio", videos, audios, want)
+	}
+	if pick, err := Select(info, off, "download", "", "", ""); err != nil || pick.Tracks[0].ID != "download" {
+		t.Errorf("Select(download) = %+v, %v", pick, err)
+	} else if got, _ := trackIDs(off.Listed(pick)); !reflect.DeepEqual(got, []string{"h264_540p_875617-1", "download"}) {
+		t.Errorf("Listed(download) = %v", got)
+	}
+	if off.DefaultVideo != "h264_540p_875617-1" || off.DefaultAudio != "" {
+		t.Errorf("default %q + %q", off.DefaultVideo, off.DefaultAudio)
+	}
+	for _, tr := range off.Tracks {
+		if tr.Codecs != "avc1, mp4a" || tr.Kind != media.KindMuxed {
+			t.Errorf("track %s: kind %s, codecs %q", tr.ID, tr.Kind, tr.Codecs)
+		}
+	}
+	if tr := trackByID(off, "bytevc1_540p_520000-0"); tr == nil || tr.Codecs != "hvc1, mp4a" {
+		t.Errorf("the HEVC format = %+v, want a left-out track named hvc1", tr)
+	}
+	if f := info.Format("bytevc1_540p_520000-0"); f == nil || f.VCodec != "bytevc1" {
+		t.Errorf("the format keeps the codec as yt-dlp gave it: %+v", f)
+	}
+	pick, err := Select(info, off, "", "", "", "")
+	if err != nil || pick.Output != OutputCopy || len(pick.Tracks) != 1 {
+		t.Fatalf("Select = %+v, %v; want one muxed track copied", pick, err)
+	}
+	if got := QualityLabel(&off.Tracks[0], nil); got != "480p H.264 + AAC" {
+		t.Errorf("QualityLabel = %q", got)
+	}
+}
+
+// Split MP4 formats without a container (a Bilibili-like page, amendment 2026-11-18)
+// pair like DASH ones: the best H.264 video of the class with the best audio, joined.
+func TestOffersSplitWithoutContainer(t *testing.T) {
+	info, off := offerFixture(t, "bilibili.json", "www.example.com")
+	videos, audios := trackIDs(off.Tracks)
+	if !reflect.DeepEqual(videos, []string{"30032"}) || !reflect.DeepEqual(audios, []string{"30232", "30216"}) {
+		t.Errorf("tracks %v + %v", videos, audios)
+	}
+	pick, err := Select(info, off, "", "", "", "")
+	if err != nil || pick.Output != OutputRemux || len(pick.Tracks) != 2 || pick.Tracks[0].ID != "30032" || pick.Tracks[1].ID != "30232" {
+		t.Fatalf("Select = %+v, %v", pick, err)
+	}
+	// The AV1 and HEVC formats of the class stay selectable.
+	if pick, err := Select(info, off, "100023", "", "", ""); err != nil || pick.Tracks[0].ID != "100023" || len(pick.Tracks) != 2 {
+		t.Errorf("Select(100023) = %+v, %v", pick, err)
+	}
+}
+
+// Within a class a fragmented video-only format comes first, then a muxed one, then a
+// video-only format without a container, whose bytes may not join (amendment
+// 2026-11-18).
+func TestOffersContainerlessAfterMuxed(t *testing.T) {
+	split := func(id, container string) string {
+		return fmt.Sprintf(`{"format_id": %q, "ext": "mp4", "protocol": "https", "url": "https://cdn.example.com/%s",`+
+			` "container": %q, "vcodec": "avc1.64001f", "acodec": "none", "width": 1280, "height": 720, "tbr": 2000}`, id, id, container)
+	}
+	audio := `{"format_id": "a", "ext": "m4a", "protocol": "https", "url": "https://cdn.example.com/a", "vcodec": "none", "acodec": "mp4a.40.2"}`
+	muxed := `{"format_id": "m", "ext": "mp4", "protocol": "https", "url": "https://cdn.example.com/m", "vcodec": "avc1", "acodec": "mp4a", "width": 1280, "height": 720, "tbr": 900}`
+	for name, c := range map[string]struct {
+		formats []string
+		want    string
+	}{
+		"dash first":     {[]string{split("plain", ""), muxed, split("dash", "mp4_dash"), audio}, "dash"},
+		"muxed next":     {[]string{split("plain", ""), muxed, audio}, "m"},
+		"container-less": {[]string{split("plain", ""), audio}, "plain"},
+	} {
+		info, err := Parse(page(c.formats...), testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		off, err := Offers(info, "example.com")
+		if err != nil || off.DefaultVideo != c.want {
+			t.Errorf("%s: Offers = %+v, %v; want default %s", name, off, err, c.want)
+		}
+	}
+}
+
+// A silent page (every format has acodec "none", amendment 2026-11-18) offers its
+// video-only formats alone; the rows that name nothing (no picture, no codec) are left
+// out while a known quality is listed, and stay selectable: a fragmented one is joined,
+// another saved as it is.
+func TestOffersSilent(t *testing.T) {
+	info, off := offerFixture(t, "silent.json", "www.example.com")
+	if !info.Silent {
+		t.Fatal("the page is not silent")
+	}
+	videos, audios := trackIDs(off.Tracks)
+	if want := []string{"dash-841320813455671v", "dash-747962539633307v"}; !reflect.DeepEqual(videos, want) || audios != nil {
+		t.Errorf("tracks %v + %v, want %v", videos, audios, want)
+	}
+	if off.DefaultAudio != "" {
+		t.Errorf("default audio %q", off.DefaultAudio)
+	}
+	pick, err := Select(info, off, "", "", "", "")
+	if err != nil || pick.Output != OutputRemux || len(pick.Tracks) != 1 || pick.Tracks[0].Kind != media.KindVideo {
+		t.Fatalf("Select = %+v, %v; want the video alone, joined", pick, err)
+	}
+	pick, err = Select(info, off, "0", "", "", "")
+	if err != nil || pick.Output != OutputCopy || len(pick.Tracks) != 1 || pick.Tracks[0].ID != "0" {
+		t.Fatalf("Select(0) = %+v, %v; want the progressive video saved as it is", pick, err)
+	}
+	// The chosen row is listed after the known qualities, none of which it replaces.
+	if got, _ := trackIDs(off.Listed(pick)); !reflect.DeepEqual(got, []string{"dash-841320813455671v", "dash-747962539633307v", "0"}) {
+		t.Errorf("Listed(0) = %v", got)
+	}
+
+	// Without a known quality the unnamed videos are the offer.
+	bare := page(`{"format_id": "0", "ext": "mp4", "protocol": "https", "url": "https://cdn.example.com/0.mp4", "acodec": "none"}`)
+	if info, err := Parse(bare, testNow); err != nil || !info.Silent {
+		t.Fatalf("Parse = %+v, %v", info, err)
+	} else if off, err := Offers(info, "example.com"); err != nil || off.DefaultVideo != "0" {
+		t.Errorf("Offers = %+v, %v", off, err)
+	}
+	// One format with sound, even one Parse drops, makes the page not silent: its video
+	// alone would lose the sound.
+	video := `{"format_id": "v", "ext": "mp4", "protocol": "https", "url": "https://cdn.example.com/v", "container": "mp4_dash", "vcodec": "avc1", "acodec": "none", "height": 720}`
+	for name, data := range map[string][]byte{
+		"webm audio":    page(video, `{"format_id": "a", "ext": "webm", "protocol": "https", "url": "https://cdn.example.com/a", "vcodec": "none", "acodec": "opus"}`),
+		"dropped audio": page(video, `{"format_id": "a", "ext": "m4a", "protocol": "https", "url": "https://cdn.example.com/a", "vcodec": "none", "acodec": "mp4a", "request_data": "x"}`),
+		"unknown audio": page(video, `{"format_id": "u", "ext": "mp4", "protocol": "https", "url": "https://cdn.example.com/u"}`),
+	} {
+		info, err := Parse(data, testNow)
+		if err != nil || info.Silent {
+			t.Errorf("%s: Parse = %+v, %v; want a page with sound", name, info, err)
+			continue
+		}
+		if off, err := Offers(info, "example.com"); err == nil && slices.ContainsFunc(off.Tracks, func(t media.Track) bool { return t.ID == "v" }) {
+			t.Errorf("%s: the video-only format is offered without its sound", name)
+		}
+	}
+}
+
+// Rows that name nothing are left out when a known quality is listed (an
+// Instagram-like reel with sound, amendment 2026-11-18), and still select.
+func TestOffersHideUnknown(t *testing.T) {
+	info, off := offerFixture(t, "reel.json", "www.example.com")
+	videos, audios := trackIDs(off.Tracks)
+	want := []string{"dash-331826349953647v", "dash-1226595825432467v", "dash-8338913039537558v", "dash-1561138118163125v"}
+	if !reflect.DeepEqual(videos, want) || !reflect.DeepEqual(audios, []string{"dash-1254645688899587a"}) {
+		t.Errorf("tracks %v + %v", videos, audios)
+	}
+	if pick, err := Select(info, off, "2", "", "", ""); err != nil || pick.Output != OutputCopy || pick.Tracks[0].ID != "2" {
+		t.Errorf("Select(2) = %+v, %v", pick, err)
+	}
+	// A chosen row that names nothing is listed after the known qualities, which all stay.
+	for _, id := range []string{"1", "2", "3"} {
+		pick, err := Select(info, off, id, "", "", "")
+		if err != nil {
+			t.Fatalf("Select(%s): %v", id, err)
+		}
+		got, gotAudios := trackIDs(off.Listed(pick))
+		if !reflect.DeepEqual(got, append(slices.Clone(want), id)) || !reflect.DeepEqual(gotAudios, audios) {
+			t.Errorf("Listed(%s) = %v + %v", id, got, gotAudios)
+		}
 	}
 }

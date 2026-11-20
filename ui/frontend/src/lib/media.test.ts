@@ -37,6 +37,7 @@ import {
   siteRetry,
   siteVideoLabel,
   splitCode,
+  noSound,
   siteQualityLabel,
   videoPictureText,
   videoTrackLabel,
@@ -337,6 +338,13 @@ describe('video pages: picker (SITE-MEDIA-SPEC §3.11, §5.3)', () => {
     expect(siteQualityLabel(site, { video: '299', audio: '140' }, track('18'))).toBe('360p · H.264 + AAC · about 45.0 MB');
     // Without a length or sizes: the bitrate, as the track label says it.
     expect(siteQualityLabel({ ...site, durationMs: 0 }, { video: '299', audio: '140' }, track('18'))).toBe('360p · H.264 + AAC · 600 kbit/s');
+  });
+
+  it('says a video listed without audio has no sound', () => {
+    const silent = { ...site, tracks: site.tracks.filter((t) => t.kind !== 'audio') };
+    expect(siteQualityLabel(silent, { video: '397', audio: '' }, track('397'))).toBe('480p · AV1 · No sound · ~157 MB');
+    expect(siteQualityLabel(silent, { video: '18', audio: '' }, track('18'))).toBe('360p · H.264 + AAC · about 45.0 MB');
+    expect([noSound(silent, track('397')), noSound(site, track('397')), noSound(silent, track('18'))]).toEqual([true, false, false]);
   });
 
   it('adds the declared sizes when every chosen track has one, else estimates', () => {

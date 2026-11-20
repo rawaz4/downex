@@ -527,10 +527,19 @@ FunctionEnd
 ; The files of the extension folders this Setup ships (IsShippedExtensionFile, generated
 ; from SRCDIR\extension while Setup is compiled). Up to three tries: Windows PowerShell,
 ; started from makensis, has been seen to fail now and then before it ran the script.
+; makensis is a 32-bit program, so a bare "powershell" starts the 32-bit Windows PowerShell
+; (SysWOW64), whose .NET runtime has been seen to crash at start-up on every try (JIT
+; internal limitation, access violation); the native one is used through Sysnative, as
+; Setup itself does (PowerShellExe), and "powershell" from PATH only where there is none.
+!if /FileExists "$%WINDIR%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  !define EXTFILES_PS '$%WINDIR%\Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+!else
+  !define EXTFILES_PS 'powershell'
+!endif
 !tempfile EXTFILES_NSH
 !macro EXTFILES_TRY
   !ifndef EXTFILES_OK
-    !system 'powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${__FILEDIR__}\extension-files.ps1" "${SRCDIR}\extension" "${EXTFILES_NSH}"' EXTFILES_RET
+    !system '${EXTFILES_PS} -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${__FILEDIR__}\extension-files.ps1" "${SRCDIR}\extension" "${EXTFILES_NSH}"' EXTFILES_RET
     !if "${EXTFILES_RET}" == "0"
       !define EXTFILES_OK
     !endif
@@ -544,6 +553,7 @@ FunctionEnd
   !error "installer\extension-files.ps1 failed three times (its output is above)"
 !endif
 !undef EXTFILES_OK
+!undef EXTFILES_PS
 !include "${EXTFILES_NSH}"
 !delfile "${EXTFILES_NSH}"
 !undef EXTFILES_NSH

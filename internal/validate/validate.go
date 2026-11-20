@@ -6,11 +6,13 @@
 package validate
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -34,6 +36,9 @@ const (
 	// MaxTrackIDBytes bounds a media track id (an HLS `v<i>`/`r<i>` or a DASH
 	// Representation@id).
 	MaxTrackIDBytes = 1 << 10
+	// MaxEntryIDBytes bounds the id of one video of a page with several
+	// (docs/SITE-MEDIA-SPEC.md §3.12): yt-dlp's id, at most 256 bytes.
+	MaxEntryIDBytes = 256
 )
 
 // Title checks a media title hint (a page or media title, docs/MEDIA-SPEC.md §6): valid
@@ -64,6 +69,19 @@ func TrackID(id string) error {
 		return fmt.Errorf("track id is longer than %d bytes", MaxTrackIDBytes)
 	case !utf8.ValidString(id) || strings.ContainsFunc(id, func(r rune) bool { return r < 0x20 || r == 0x7f }):
 		return errors.New("track id must be printable text")
+	}
+	return nil
+}
+
+// EntryID checks a requested item of a page with several videos
+// (docs/SITE-MEDIA-SPEC.md §3.12): "" (the page's default) or at most MaxEntryIDBytes of
+// printable UTF-8.
+func EntryID(id string) error {
+	switch {
+	case len(id) > MaxEntryIDBytes:
+		return fmt.Errorf("entry id is longer than %d bytes", MaxEntryIDBytes)
+	case !utf8.ValidString(id) || strings.ContainsFunc(id, func(r rune) bool { return r < 0x20 || r == 0x7f }):
+		return errors.New("entry id must be printable text")
 	}
 	return nil
 }
@@ -257,4 +275,78 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// Limits of parts of a video (clips) and of chapters (docs/DAEMON-SPEC.md §4,
+// docs/MEDIA-SPEC.md §8 C1/C14).
+const (
+	// MaxClipMs bounds the start and end of a part: 168 hours.
+	MaxClipMs = 168 * 3600 * 1000
+	// MinClipMs is the shortest part: 1 second.
+	MinClipMs = 1000
+	// MaxChapters bounds the chapters of a video.
+	MaxChapters = 512
+	// MaxChapterTitleBytes bounds a chapter's title.
+	MaxChapterTitleBytes = 200
+)
+
+// ClipMs checks the bounds of a part of a video in milliseconds (docs/MEDIA-SPEC.md §8
+// C1/C2): 0 ≤ start, end ≤ 168 h, end 0 = to the end, else start < end and the part at
+// least 1 s long. The reasons are those of internal/media's clip checks; the duration
+// of the video is checked where it is known (the daemon).
+func ClipMs(startMs, endMs int64) error {
+	switch {
+	case startMs < 0 || endMs < 0 || startMs > MaxClipMs || endMs > MaxClipMs:
+		return errors.New("times must be between 0 and 168 hours")
+	case endMs != 0 && startMs >= endMs:
+		return errors.New("the part must start before it ends")
+	case endMs != 0 && endMs-startMs < MinClipMs:
+		return errors.New("the part must be at least 1 second long")
+	}
+	return nil
+}
+
+// Chapter is one chapter of a video in milliseconds (docs/MEDIA-SPEC.md §8 C14).
+type Chapter struct {
+	StartMs, EndMs int64
+	Title          string
+}
+
+// Chapters checks the chapters of a video of durationMs milliseconds (0 = unknown) by
+// docs/MEDIA-SPEC.md §8 C14: an entry needs 0 ≤ start < end and, with a known duration,
+// end ≤ duration + 1 s; its title is cleaned like Title and cut to MaxChapterTitleBytes.
+// Entries that fail are dropped, the rest sorted by start, and an entry that overlaps the
+// one before it is dropped. More than MaxChapters entries make the list invalid: no
+// chapters. The result is a new slice (nil for none).
+func Chapters(cs []Chapter, durationMs int64) []Chapter {
+	if len(cs) > MaxChapters {
+		return nil
+	}
+	var ok []Chapter
+	for _, c := range cs {
+		if c.StartMs < 0 || c.EndMs <= c.StartMs || durationMs > 0 && c.EndMs > durationMs+1000 {
+			continue
+		}
+		title, err := Title(c.Title)
+		if err != nil {
+			title = ""
+		}
+		if len(title) > MaxChapterTitleBytes {
+			n := MaxChapterTitleBytes
+			for n > 0 && !utf8.RuneStart(title[n]) {
+				n--
+			}
+			title = strings.TrimSpace(title[:n])
+		}
+		ok = append(ok, Chapter{StartMs: c.StartMs, EndMs: c.EndMs, Title: title})
+	}
+	slices.SortStableFunc(ok, func(a, b Chapter) int { return cmp.Compare(a.StartMs, b.StartMs) })
+	var out []Chapter
+	for _, c := range ok {
+		if n := len(out); n > 0 && c.StartMs < out[n-1].EndMs {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }

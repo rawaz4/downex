@@ -29,6 +29,14 @@ const (
 	// maxVideoWaiting bounds the video requests waiting for or holding a slot; more are
 	// refused at once, so reading never pauses for them.
 	maxVideoWaiting = 4 * maxVideoInFlight
+	// maxFetchInFlight bounds the browser fetches' takes and puts served at once
+	// (docs/SITE-MEDIA-SPEC.md §2.8): their own pool, so a take's long wait never holds
+	// an add's or a video request's slot. More wait for a slot within their bound.
+	maxFetchInFlight = 4
+	// fetchPutTimeout bounds a put (it waits until the download has read its bytes);
+	// fetchTakeMargin is added to a take's wait.
+	fetchPutTimeout = 30 * time.Second
+	fetchTakeMargin = 5 * time.Second
 	// addTimeout bounds an add, including a daemon autostart (≤ 3 s); an add's
 	// deadlineMs can only shorten it.
 	addTimeout = 15 * time.Second
@@ -43,6 +51,9 @@ const (
 	// still sends DownloadService.Add; with less, the daemon could commit a download
 	// the extension has already left to the browser.
 	minAddTime = 150 * time.Millisecond
+	// rescueTimeout bounds a rescue, a daemon autostart and the daemon's check of the
+	// partial file with the server included; deadlineMs can only shorten it.
+	rescueTimeout = 30 * time.Second
 	// helloTimeout bounds a hello's wait for the daemon (its start and Status).
 	helloTimeout = time.Second
 	// queryTimeout bounds status.
@@ -60,14 +71,25 @@ type backend interface {
 	// add forwards req to DownloadService.Add, starting downexd first when needed. It
 	// does not send the Add when less than minAddTime is left before ctx's deadline.
 	add(ctx context.Context, req *downexv1.AddRequest) (*downexv1.Download, error)
-	// addMedia forwards req to DownloadService.AddMedia like add (autostart, deadline).
-	addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, error)
+	// addMedia forwards req to DownloadService.AddMedia like add (autostart, deadline),
+	// and returns the download and its fetch ticket ("" = none).
+	addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, string, error)
 	// probeMedia forwards req to DownloadService.ProbeMedia, starting downexd first when
 	// needed. It has no side effects.
 	probeMedia(ctx context.Context, req *downexv1.ProbeMediaRequest) (*downexv1.MediaInfo, error)
 	// status returns the daemon's status, or nil when no daemon is running. It never
 	// starts one.
 	status(ctx context.Context) (*downexv1.StatusResponse, error)
+	// rescue forwards req to DownloadService.Rescue, starting downexd first when needed
+	// (a user's click), and returns the download and the bytes it kept.
+	rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.Download, int64, error)
+	// resume sends DownloadService.Resume with rescue_start for download id: the first
+	// start of a rescue stored paused.
+	resume(ctx context.Context, id int64) (*downexv1.Download, error)
+	// takeFetch and putFetch forward a browser fetch's take and put
+	// (docs/SITE-MEDIA-SPEC.md §2.8). Neither starts downexd.
+	takeFetch(ctx context.Context, req *downexv1.TakeBrowserFetchRequest) (*downexv1.TakeBrowserFetchResponse, error)
+	putFetch(ctx context.Context, req *downexv1.PutBrowserFetchRequest) (*downexv1.PutBrowserFetchResponse, error)
 }
 
 // relay serves native-messaging requests from a browser.
@@ -89,6 +111,7 @@ func (r *relay) serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	sem := make(chan struct{}, maxInFlight)
 	video := make(chan struct{}, maxVideoInFlight)
 	videoWaiting := make(chan struct{}, maxVideoWaiting)
+	fetches := make(chan struct{}, maxFetchInFlight)
 	var wg sync.WaitGroup
 	defer func() {
 		cancel()
@@ -114,6 +137,20 @@ func (r *relay) serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			continue
 		}
 		req.received = received
+		if req.typ == typeFetchTake || req.typ == typeFetchPut {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case fetches <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-fetches }()
+				r.reply(fw, r.handle(ctx, req))
+			}()
+			continue
+		}
 		if req.video() {
 			select {
 			case videoWaiting <- struct{}{}:
@@ -179,7 +216,8 @@ func (r *relay) handle(ctx context.Context, req *request) response {
 	case typeAdd:
 		attrs = append(attrs, "url", redactURL(req.info.url), "method", req.info.method,
 			"headers", req.info.headers, "body_bytes", req.info.body, "mime", req.info.mime, "size", req.info.size,
-			"start_paused", req.add.GetStartPaused(), "deadline_ms", req.info.deadline.Milliseconds())
+			"start_paused", req.add.GetStartPaused(), "deadline_ms", req.info.deadline.Milliseconds(),
+			"page_host", req.info.pageHost)
 	case typeAddMedia:
 		attrs = append(attrs, "manifest", redactURL(req.info.url), "headers", req.info.headers,
 			"title_chars", req.info.title, "video_track", truncate(req.media.GetVideoTrack(), 64),
@@ -194,6 +232,26 @@ func (r *relay) handle(ctx context.Context, req *request) response {
 		attrs = append(attrs, "page", redactURL(req.info.url), "headers", req.info.headers,
 			"title_chars", req.info.title, "video_track", truncate(req.media.GetVideoTrack(), 64),
 			"audio_track", truncate(req.media.GetAudioTrack(), 64), "deadline_ms", req.info.deadline.Milliseconds())
+	case typeProbePlayed, typeAddPlayed:
+		attrs = append(attrs, "page_host", playedHost(req.info.url), "files", req.info.files, "hosts", req.info.hosts,
+			"head_bytes", req.info.headBytes, "title_chars", req.info.title, "deadline_ms", req.info.deadline.Milliseconds())
+	case typeRescue:
+		attrs = append(attrs, "url", redactURL(req.info.url), "headers", req.info.headers, "target", req.info.target,
+			"bytes_received", req.info.received, "total_bytes", req.info.size, "start_paused", req.rescue.GetStartPaused(),
+			"deadline_ms", req.info.deadline.Milliseconds(), "page_host", req.info.pageHost)
+		if kept, ok := resp["keptBytes"]; ok {
+			attrs = append(attrs, "kept_bytes", kept)
+		}
+	case typeResume:
+		attrs = append(attrs, "resume", req.resume)
+	case typeFetchTake:
+		attrs = append(attrs, "tickets", len(req.take.GetTickets()), "wait_ms", req.take.GetWaitMs())
+		if f, ok := resp["fetch"].(map[string]any); ok {
+			attrs = append(attrs, "ticket", ticketPrefix(f["ticket"]), "fetch", f["fetchId"], "start", f["start"], "end", f["end"])
+		}
+	case typeFetchPut:
+		attrs = append(attrs, "ticket", ticketPrefix(req.put.GetTicket()), "fetch", req.put.GetFetchId(), "seq", req.put.GetSeq(),
+			"bytes", len(req.put.GetData()), "end", req.put.GetEnd(), "status", req.put.GetHead().GetStatus(), "error", truncate(req.put.GetError(), 64))
 	case typeHello:
 		attrs = append(attrs, "browser", req.hello.browser, "ext_version", req.hello.extVersion)
 	}
@@ -203,6 +261,9 @@ func (r *relay) handle(ctx context.Context, req *request) response {
 			attrs = append(attrs, "reason", reason)
 		}
 		r.log.Warn("request failed", attrs...)
+	} else if req.typ == typeFetchPut || (req.typ == typeFetchTake && resp["fetch"] == nil) {
+		// Every piece of a video and every empty wait: not worth an info line each.
+		r.log.Debug("request served", attrs...)
 	} else {
 		if id, ok := resp["downloadId"]; ok {
 			attrs = append(attrs, "download", id)
@@ -212,7 +273,19 @@ func (r *relay) handle(ctx context.Context, req *request) response {
 	return resp
 }
 
+// allowForeground hands the browser's right to the foreground on (handForeground); tests
+// replace it.
+var allowForeground = handForeground
+
 func (r *relay) dispatch(ctx context.Context, req *request) response {
+	switch req.typ {
+	case typeAdd, typeAddMedia, typeAddVideo, typeAddPlayed, typeRescue:
+		// The user just started a download in the browser: Downex's window for it may
+		// come to the front over the browser.
+		if !allowForeground() {
+			r.log.Debug("the foreground could not be handed on")
+		}
+	}
 	switch req.typ {
 	case typePing:
 		return success(req.id, "pong", nil)
@@ -242,9 +315,7 @@ func (r *relay) dispatch(ctx context.Context, req *request) response {
 		if err != nil {
 			return failed(req.id, err)
 		}
-		return success(req.id, "status", map[string]any{
-			"running": st != nil, "active": st.GetActive(), "queued": st.GetQueued(),
-		})
+		return success(req.id, "status", statusFields(st))
 	case typeAdd:
 		actx, cancel := context.WithDeadline(ctx, requestDeadline(req, addTimeout))
 		defer cancel()
@@ -259,12 +330,12 @@ func (r *relay) dispatch(ctx context.Context, req *request) response {
 		// ("encrypted: ...", "live: ...").
 		actx, cancel := context.WithDeadline(ctx, requestDeadline(req, addTimeout))
 		defer cancel()
-		d, err := r.be.addMedia(actx, req.media)
+		d, _, err := r.be.addMedia(actx, req.media)
 		if err != nil {
 			return failed(req.id, err)
 		}
 		return added(req.id, d)
-	case typeProbeVideo, typeProbeStream:
+	case typeProbeVideo, typeProbeStream, typeProbePlayed:
 		// probeVideo: the daemon resolves the page with yt-dlp (downloading it first on
 		// first use) within its wait budget; past it, it answers tools_installing or
 		// site_resolving, forwarded as reason, and the extension asks again.
@@ -283,15 +354,60 @@ func (r *relay) dispatch(ctx context.Context, req *request) response {
 		if resp := success(req.id, "videoInfo", fields); resp.fits(maxVideoResponseBytes) {
 			return resp
 		}
+		// Chapters are dropped first: the qualities are what the answer is for
+		// (docs/SITE-MEDIA-SPEC.md §3.5).
+		fields["chapters"] = []map[string]any{}
+		if resp := success(req.id, "videoInfo", fields); resp.fits(maxVideoResponseBytes) {
+			return resp
+		}
+		// Then the items' thumbnails: the items themselves are needed to choose one.
+		withoutThumbnails(fields)
+		if resp := success(req.id, "videoInfo", fields); resp.fits(maxVideoResponseBytes) {
+			return resp
+		}
 		return failure(req.id, codeInternal, fmt.Sprintf("the video info is larger than %d bytes", maxVideoResponseBytes))
-	case typeAddVideo:
-		vctx, cancel := context.WithDeadline(ctx, requestDeadline(req, videoTimeout))
+	case typeRescue:
+		// downexd proves the partial file with a few range requests before it moves it;
+		// refusals carry their code as reason (rescue_changed, rescue_not_found, ...).
+		rctx, cancel := context.WithDeadline(ctx, requestDeadline(req, rescueTimeout))
 		defer cancel()
-		d, err := r.be.addMedia(vctx, req.media)
+		d, kept, err := r.be.rescue(rctx, req.rescue)
 		if err != nil {
 			return failed(req.id, err)
 		}
-		return added(req.id, d)
+		return rescued(req.id, d, kept)
+	case typeResume:
+		rctx, cancel := context.WithDeadline(ctx, requestDeadline(req, addTimeout))
+		defer cancel()
+		d, err := r.be.resume(rctx, req.resume)
+		if err != nil {
+			return failed(req.id, err)
+		}
+		return resumed(req.id, d)
+	case typeAddVideo, typeAddPlayed:
+		vctx, cancel := context.WithDeadline(ctx, requestDeadline(req, videoTimeout))
+		defer cancel()
+		d, ticket, err := r.be.addMedia(vctx, req.media)
+		if err != nil {
+			return failed(req.id, err)
+		}
+		return addedVideo(req.id, d, ticket)
+	case typeFetchTake:
+		tctx, cancel := context.WithTimeout(ctx, time.Duration(req.take.GetWaitMs())*time.Millisecond+fetchTakeMargin)
+		defer cancel()
+		resp, err := r.be.takeFetch(tctx, req.take)
+		if err != nil {
+			return failed(req.id, err)
+		}
+		return fetchTask(req.id, resp)
+	case typeFetchPut:
+		pctx, cancel := context.WithTimeout(ctx, fetchPutTimeout)
+		defer cancel()
+		resp, err := r.be.putFetch(pctx, req.put)
+		if err != nil {
+			return failed(req.id, err)
+		}
+		return success(req.id, "fetchAck", map[string]any{"stop": resp.GetStop()})
 	}
 	return failure(req.id, codeInternal, "unhandled request type")
 }
@@ -478,22 +594,62 @@ func (b *daemonBackend) add(ctx context.Context, req *downexv1.AddRequest) (*dow
 	return resp.Msg.GetDownload(), nil
 }
 
-func (b *daemonBackend) addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, error) {
+func (b *daemonBackend) addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, string, error) {
 	if !timeLeft(ctx, minAddTime) {
-		return nil, &unavailableError{errTooLate}
+		return nil, "", &unavailableError{errTooLate}
 	}
 	c, err := b.connect(ctx, true)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !timeLeft(ctx, minAddTime) {
-		return nil, &unavailableError{errTooLate}
+		return nil, "", &unavailableError{errTooLate}
 	}
 	resp, err := c.Downloads.AddMedia(ctx, connect.NewRequest(req))
 	if err != nil {
+		return nil, "", err
+	}
+	return resp.Msg.GetDownload(), resp.Msg.GetFetchTicket(), nil
+}
+
+// errNoDaemonFetch answers a browser fetch while downexd does not run: its tickets ended
+// with it, and a fetch never starts it.
+var errNoDaemonFetch = errors.New("downexd is not running; a browser fetch never starts it")
+
+func (b *daemonBackend) takeFetch(ctx context.Context, req *downexv1.TakeBrowserFetchRequest) (*downexv1.TakeBrowserFetchResponse, error) {
+	c, err := b.connect(ctx, false)
+	if err != nil {
 		return nil, err
 	}
-	return resp.Msg.GetDownload(), nil
+	if c == nil {
+		return nil, &unavailableError{errNoDaemonFetch}
+	}
+	resp, err := c.Downloads.TakeBrowserFetch(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+func (b *daemonBackend) putFetch(ctx context.Context, req *downexv1.PutBrowserFetchRequest) (*downexv1.PutBrowserFetchResponse, error) {
+	c, err := b.connect(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, &unavailableError{errNoDaemonFetch}
+	}
+	resp, err := c.Downloads.PutBrowserFetch(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+// ticketPrefix is what the log keeps of a fetch ticket: its first 8 characters.
+func ticketPrefix(t any) string {
+	s, _ := t.(string)
+	return truncate(s, 8)
 }
 
 // errNotRunning answers a look-ahead while downexd does not run: only a user's request
@@ -513,6 +669,30 @@ func (b *daemonBackend) probeMedia(ctx context.Context, req *downexv1.ProbeMedia
 		return nil, err
 	}
 	return resp.Msg.GetMedia(), nil
+}
+
+func (b *daemonBackend) rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.Download, int64, error) {
+	c, err := b.connect(ctx, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := c.Downloads.Rescue(ctx, connect.NewRequest(req))
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Msg.GetDownload(), resp.Msg.GetRescuedBytes(), nil
+}
+
+func (b *daemonBackend) resume(ctx context.Context, id int64) (*downexv1.Download, error) {
+	c, err := b.connect(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.Downloads.Resume(ctx, connect.NewRequest(&downexv1.ResumeRequest{Id: id, RescueStart: true}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg.GetDownload(), nil
 }
 
 func (b *daemonBackend) status(ctx context.Context) (*downexv1.StatusResponse, error) {
@@ -539,4 +719,44 @@ func runRelay(ctx context.Context, stdin io.Reader, stdout io.Writer, from strin
 	}
 	logger.Info("relay stopped: the browser closed the connection")
 	return exitOK
+}
+
+// statusFields is the status answer for st (nil: no daemon runs; docs/BROWSER-SPEC.md
+// §2): running, active and queued, and Polite mode's state ("off", "idle", "watching",
+// "slowed", "measuring", "no_signal" or "unavailable"; left out for a daemon without
+// Polite mode) with politeRate, its cap in bytes per second, while it slows downloads
+// (docs/POLITE-SPEC.md §8).
+func statusFields(st *downexv1.StatusResponse) map[string]any {
+	f := map[string]any{"running": st != nil, "active": st.GetActive(), "queued": st.GetQueued()}
+	p := st.GetPolite()
+	name := politeStateName(p.GetState())
+	if name == "" {
+		return f
+	}
+	f["polite"] = name
+	if p.GetState() == downexv1.PoliteState_POLITE_STATE_SLOWED {
+		f["politeRate"] = p.GetRateLimit()
+	}
+	return f
+}
+
+// politeStateName is the relay's name of a Polite mode state ("" for an older daemon's).
+func politeStateName(s downexv1.PoliteState) string {
+	switch s {
+	case downexv1.PoliteState_POLITE_STATE_OFF:
+		return "off"
+	case downexv1.PoliteState_POLITE_STATE_IDLE:
+		return "idle"
+	case downexv1.PoliteState_POLITE_STATE_WATCHING:
+		return "watching"
+	case downexv1.PoliteState_POLITE_STATE_SLOWED:
+		return "slowed"
+	case downexv1.PoliteState_POLITE_STATE_MEASURING:
+		return "measuring"
+	case downexv1.PoliteState_POLITE_STATE_NO_SIGNAL:
+		return "no_signal"
+	case downexv1.PoliteState_POLITE_STATE_UNAVAILABLE:
+		return "unavailable"
+	}
+	return ""
 }

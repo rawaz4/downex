@@ -27,9 +27,13 @@ const (
 	ModalPalette
 	// ModalUpdate is the pop-up that offers an update downexd found (docs/M6-SPEC.md §4).
 	ModalUpdate
+	// ModalRenew is the New link dialog (docs/DESKTOP-SPEC.md §10).
+	ModalRenew
+	// ModalRescue is the Rescue partial file dialog (docs/DESKTOP-SPEC.md §11).
+	ModalRescue
 )
 
-var modalNames = [...]string{"none", "add", "settings", "queues", "move", "remove", "restart", "open", "confirm", "palette", "update"}
+var modalNames = [...]string{"none", "add", "settings", "queues", "move", "remove", "restart", "open", "confirm", "palette", "update", "renew", "rescue"}
 
 func (k ModalKind) String() string {
 	if int(k) < len(modalNames) {

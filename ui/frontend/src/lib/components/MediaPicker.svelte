@@ -51,6 +51,8 @@
     audioTracks,
     isSite,
     needsAudio,
+    NO_SOUND,
+    noSound,
     qualityName,
     trackById,
     trackSizeText,
@@ -87,6 +89,8 @@
   const onlyAudio = $derived(videoOnly && audios.length === 1 ? audios[0] : undefined);
   const chosen = $derived(trackById(info, pick.video));
   const muxedChosen = $derived(videos.length > 0 && audios.length > 0 && chosen?.kind === 'muxed');
+  /** A chosen video without sound: the page or stream has none (noSound). */
+  const silentChosen = $derived(chosen !== undefined && noSound(info, chosen));
   const note = $derived(codecNote(videos));
   const showVideo = $derived(part !== 'audio');
   const showAudioPart = $derived(part !== 'video');
@@ -108,9 +112,11 @@
         suffix,
         codec,
         size,
-        label: [name, codecs, size].filter(Boolean).join(' · '),
+        label: [name, codecs, noSound(info, t) ? NO_SOUND : '', size].filter(Boolean).join(' · '),
         // the whole name first: a narrow column cuts its suffix ("(2160p) 60fps HDR")
-        tip: [name, picture, site ? '' : rate, t.kind === 'muxed' ? 'with its sound' : ''].filter(Boolean).join(' · '),
+        tip: [name, picture, site ? '' : rate, t.kind === 'muxed' ? 'with its sound' : noSound(info, t) ? NO_SOUND : '']
+          .filter(Boolean)
+          .join(' · '),
       };
     }),
   );
@@ -210,7 +216,7 @@
         onchange={(v) => (pick = { ...pick, audio: v })}
       />
     </div>
-  {:else if onlyAudio || muxedChosen}
+  {:else if onlyAudio || muxedChosen || silentChosen}
     <div class="field audio">
       <span class="label">Audio track</span>
       <p class="static">
@@ -220,6 +226,8 @@
           <span class="sound" title={escapeBidi(audioTrackLabel(onlyAudio, site))}
             ><bdi>{escapeBidi(audioTrackTitle(onlyAudio, site))}</bdi>{#if detail}<span class="detail">{` · ${detail}`}</span>{/if}</span
           >
+        {:else if silentChosen}
+          <span>This video has no sound.</span>
         {:else}
           <span>This video quality includes its sound.</span>
         {/if}

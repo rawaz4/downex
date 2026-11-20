@@ -30,11 +30,17 @@ const BY_EXTENSION: ReadonlyMap<string, FileKind> = new Map(
   ),
 );
 
-/** Lowercase extension of the last path component ("" when none). Ignores query/fragment. */
+/**
+ * Lowercase extension of the last path component ("" when none). Only an address
+ * ("scheme://…") has a query or fragment to ignore: in a file name "#" and "?" are ordinary
+ * characters ("Episode #37.mp4" is an mp4, "game#1.exe" a program).
+ */
 export function extensionOf(name: string): string {
   let base = name;
-  const cut = base.search(/[?#]/);
-  if (cut >= 0) base = base.slice(0, cut);
+  if (base.includes('://')) {
+    const cut = base.search(/[?#]/);
+    if (cut >= 0) base = base.slice(0, cut);
+  }
   const slash = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
   if (slash >= 0) base = base.slice(slash + 1);
   const dot = base.lastIndexOf('.');

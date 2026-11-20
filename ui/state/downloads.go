@@ -1275,6 +1275,23 @@ func (s *DownloadsStore) Confirm(ctx context.Context, req *downexv1.ConfirmReque
 	return resp.GetDownload(), nil
 }
 
+// Rescue finishes a download a browser left unfinished from its partial file
+// (docs/DESKTOP-SPEC.md §11); the new download is held at once.
+func (s *DownloadsStore) Rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.RescueResponse, error) {
+	return answer(s, func() (*downexv1.RescueResponse, error) {
+		return s.daemon.Rescue(ctx, req)
+	}, (*downexv1.RescueResponse).GetDownload)
+}
+
+// RenewLink gives a stopped download a new link (docs/DESKTOP-SPEC.md §10). The answer
+// replaces the download held; a download whose link it took (from_download) is gone
+// once the removed event arrives.
+func (s *DownloadsStore) RenewLink(ctx context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
+	return answer(s, func() (*downexv1.RenewLinkResponse, error) {
+		return s.daemon.RenewLink(ctx, req)
+	}, (*downexv1.RenewLinkResponse).GetDownload)
+}
+
 // AssignQueue records that downloads moved to a queue (after MoveDownloads), until the
 // daemon's own updates arrive.
 func (s *DownloadsStore) AssignQueue(ids []int64, queueID int64) {

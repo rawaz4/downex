@@ -151,6 +151,7 @@ const (
 	MediaOrigin_MEDIA_ORIGIN_UNSPECIFIED MediaOrigin = 0 // = MANIFEST: every client written before site media
 	MediaOrigin_MEDIA_ORIGIN_MANIFEST    MediaOrigin = 1 // an HLS/DASH manifest URL (MEDIA-SPEC)
 	MediaOrigin_MEDIA_ORIGIN_SITE        MediaOrigin = 2 // a web page resolved with yt-dlp
+	MediaOrigin_MEDIA_ORIGIN_PLAYED      MediaOrigin = 3 // the files the user's browser played for a video (SITE-MEDIA-SPEC §2.9)
 )
 
 // Enum value maps for MediaOrigin.
@@ -159,11 +160,13 @@ var (
 		0: "MEDIA_ORIGIN_UNSPECIFIED",
 		1: "MEDIA_ORIGIN_MANIFEST",
 		2: "MEDIA_ORIGIN_SITE",
+		3: "MEDIA_ORIGIN_PLAYED",
 	}
 	MediaOrigin_value = map[string]int32{
 		"MEDIA_ORIGIN_UNSPECIFIED": 0,
 		"MEDIA_ORIGIN_MANIFEST":    1,
 		"MEDIA_ORIGIN_SITE":        2,
+		"MEDIA_ORIGIN_PLAYED":      3,
 	}
 )
 
@@ -299,6 +302,112 @@ func (Mode) EnumDescriptor() ([]byte, []int) {
 	return file_downex_v1_downex_proto_rawDescGZIP(), []int{4}
 }
 
+// How much a file check has to say (docs/DESKTOP-SPEC.md §9).
+type FileCheckLevel int32
+
+const (
+	FileCheckLevel_FILE_CHECK_LEVEL_UNSPECIFIED FileCheckLevel = 0 // nothing to say (the field is omitted)
+	FileCheckLevel_FILE_CHECK_LEVEL_NOTE        FileCheckLevel = 1 // a harmless difference, details only
+	FileCheckLevel_FILE_CHECK_LEVEL_CAUTION     FileCheckLevel = 2 // probably not the wanted file (an error page); Open not held
+	FileCheckLevel_FILE_CHECK_LEVEL_DANGER      FileCheckLevel = 3 // the file pretends to be another type; Open asks first
+)
+
+// Enum value maps for FileCheckLevel.
+var (
+	FileCheckLevel_name = map[int32]string{
+		0: "FILE_CHECK_LEVEL_UNSPECIFIED",
+		1: "FILE_CHECK_LEVEL_NOTE",
+		2: "FILE_CHECK_LEVEL_CAUTION",
+		3: "FILE_CHECK_LEVEL_DANGER",
+	}
+	FileCheckLevel_value = map[string]int32{
+		"FILE_CHECK_LEVEL_UNSPECIFIED": 0,
+		"FILE_CHECK_LEVEL_NOTE":        1,
+		"FILE_CHECK_LEVEL_CAUTION":     2,
+		"FILE_CHECK_LEVEL_DANGER":      3,
+	}
+)
+
+func (x FileCheckLevel) Enum() *FileCheckLevel {
+	p := new(FileCheckLevel)
+	*p = x
+	return p
+}
+
+func (x FileCheckLevel) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FileCheckLevel) Descriptor() protoreflect.EnumDescriptor {
+	return file_downex_v1_downex_proto_enumTypes[5].Descriptor()
+}
+
+func (FileCheckLevel) Type() protoreflect.EnumType {
+	return &file_downex_v1_downex_proto_enumTypes[5]
+}
+
+func (x FileCheckLevel) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FileCheckLevel.Descriptor instead.
+func (FileCheckLevel) EnumDescriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{5}
+}
+
+// What a file check looked at (docs/DESKTOP-SPEC.md §9.1).
+type FileCheckStage int32
+
+const (
+	FileCheckStage_FILE_CHECK_STAGE_UNSPECIFIED FileCheckStage = 0
+	FileCheckStage_FILE_CHECK_STAGE_NAME        FileCheckStage = 1 // name, served type and MIME hint only (not stored)
+	FileCheckStage_FILE_CHECK_STAGE_EARLY       FileCheckStage = 2 // the first 64 KiB of a running download (kept in memory)
+	FileCheckStage_FILE_CHECK_STAGE_FINAL       FileCheckStage = 3 // the completed file, archive listing included (stored)
+)
+
+// Enum value maps for FileCheckStage.
+var (
+	FileCheckStage_name = map[int32]string{
+		0: "FILE_CHECK_STAGE_UNSPECIFIED",
+		1: "FILE_CHECK_STAGE_NAME",
+		2: "FILE_CHECK_STAGE_EARLY",
+		3: "FILE_CHECK_STAGE_FINAL",
+	}
+	FileCheckStage_value = map[string]int32{
+		"FILE_CHECK_STAGE_UNSPECIFIED": 0,
+		"FILE_CHECK_STAGE_NAME":        1,
+		"FILE_CHECK_STAGE_EARLY":       2,
+		"FILE_CHECK_STAGE_FINAL":       3,
+	}
+)
+
+func (x FileCheckStage) Enum() *FileCheckStage {
+	p := new(FileCheckStage)
+	*p = x
+	return p
+}
+
+func (x FileCheckStage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FileCheckStage) Descriptor() protoreflect.EnumDescriptor {
+	return file_downex_v1_downex_proto_enumTypes[6].Descriptor()
+}
+
+func (FileCheckStage) Type() protoreflect.EnumType {
+	return &file_downex_v1_downex_proto_enumTypes[6]
+}
+
+func (x FileCheckStage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FileCheckStage.Descriptor instead.
+func (FileCheckStage) EnumDescriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{6}
+}
+
 // What one worker connection is doing right now (docs/DESKTOP-SPEC.md §7).
 type ConnectionState int32
 
@@ -348,11 +457,11 @@ func (x ConnectionState) String() string {
 }
 
 func (ConnectionState) Descriptor() protoreflect.EnumDescriptor {
-	return file_downex_v1_downex_proto_enumTypes[5].Descriptor()
+	return file_downex_v1_downex_proto_enumTypes[7].Descriptor()
 }
 
 func (ConnectionState) Type() protoreflect.EnumType {
-	return &file_downex_v1_downex_proto_enumTypes[5]
+	return &file_downex_v1_downex_proto_enumTypes[7]
 }
 
 func (x ConnectionState) Number() protoreflect.EnumNumber {
@@ -361,7 +470,7 @@ func (x ConnectionState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ConnectionState.Descriptor instead.
 func (ConnectionState) EnumDescriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{5}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{7}
 }
 
 // What a restart does with the file of a completed download (docs/ENGINE-SPEC.md §7.1).
@@ -406,11 +515,11 @@ func (x ExistingFile) String() string {
 }
 
 func (ExistingFile) Descriptor() protoreflect.EnumDescriptor {
-	return file_downex_v1_downex_proto_enumTypes[6].Descriptor()
+	return file_downex_v1_downex_proto_enumTypes[8].Descriptor()
 }
 
 func (ExistingFile) Type() protoreflect.EnumType {
-	return &file_downex_v1_downex_proto_enumTypes[6]
+	return &file_downex_v1_downex_proto_enumTypes[8]
 }
 
 func (x ExistingFile) Number() protoreflect.EnumNumber {
@@ -419,7 +528,125 @@ func (x ExistingFile) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ExistingFile.Descriptor instead.
 func (ExistingFile) EnumDescriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{6}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{8}
+}
+
+// Polite mode's state (docs/POLITE-SPEC.md §4).
+type PoliteState int32
+
+const (
+	PoliteState_POLITE_STATE_UNSPECIFIED PoliteState = 0 // an older daemon without Polite mode
+	PoliteState_POLITE_STATE_OFF         PoliteState = 1
+	PoliteState_POLITE_STATE_IDLE        PoliteState = 2 // on, nothing downloading
+	PoliteState_POLITE_STATE_WATCHING    PoliteState = 3 // on, full speed, line smooth
+	PoliteState_POLITE_STATE_SLOWED      PoliteState = 4 // on, downloads capped at rate_limit
+	PoliteState_POLITE_STATE_MEASURING   PoliteState = 5 // calibration: held at the floor for at most 4 s
+	PoliteState_POLITE_STATE_NO_SIGNAL   PoliteState = 6 // on, but no server answers probes: full speed
+	PoliteState_POLITE_STATE_UNAVAILABLE PoliteState = 7 // this downexd cannot measure (no prober)
+)
+
+// Enum value maps for PoliteState.
+var (
+	PoliteState_name = map[int32]string{
+		0: "POLITE_STATE_UNSPECIFIED",
+		1: "POLITE_STATE_OFF",
+		2: "POLITE_STATE_IDLE",
+		3: "POLITE_STATE_WATCHING",
+		4: "POLITE_STATE_SLOWED",
+		5: "POLITE_STATE_MEASURING",
+		6: "POLITE_STATE_NO_SIGNAL",
+		7: "POLITE_STATE_UNAVAILABLE",
+	}
+	PoliteState_value = map[string]int32{
+		"POLITE_STATE_UNSPECIFIED": 0,
+		"POLITE_STATE_OFF":         1,
+		"POLITE_STATE_IDLE":        2,
+		"POLITE_STATE_WATCHING":    3,
+		"POLITE_STATE_SLOWED":      4,
+		"POLITE_STATE_MEASURING":   5,
+		"POLITE_STATE_NO_SIGNAL":   6,
+		"POLITE_STATE_UNAVAILABLE": 7,
+	}
+)
+
+func (x PoliteState) Enum() *PoliteState {
+	p := new(PoliteState)
+	*p = x
+	return p
+}
+
+func (x PoliteState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PoliteState) Descriptor() protoreflect.EnumDescriptor {
+	return file_downex_v1_downex_proto_enumTypes[9].Descriptor()
+}
+
+func (PoliteState) Type() protoreflect.EnumType {
+	return &file_downex_v1_downex_proto_enumTypes[9]
+}
+
+func (x PoliteState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PoliteState.Descriptor instead.
+func (PoliteState) EnumDescriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{9}
+}
+
+// docs/DAEMON-SPEC.md §3 "Automatic matching".
+type RenewLinks int32
+
+const (
+	RenewLinks_RENEW_LINKS_UNSPECIFIED RenewLinks = 0 // = AUTO
+	RenewLinks_RENEW_LINKS_AUTO        RenewLinks = 1 // a matching new link continues the stopped download
+	RenewLinks_RENEW_LINKS_ASK         RenewLinks = 2 // a matching new link waits for confirmation with an offer
+	RenewLinks_RENEW_LINKS_OFF         RenewLinks = 3 // new links are never matched
+)
+
+// Enum value maps for RenewLinks.
+var (
+	RenewLinks_name = map[int32]string{
+		0: "RENEW_LINKS_UNSPECIFIED",
+		1: "RENEW_LINKS_AUTO",
+		2: "RENEW_LINKS_ASK",
+		3: "RENEW_LINKS_OFF",
+	}
+	RenewLinks_value = map[string]int32{
+		"RENEW_LINKS_UNSPECIFIED": 0,
+		"RENEW_LINKS_AUTO":        1,
+		"RENEW_LINKS_ASK":         2,
+		"RENEW_LINKS_OFF":         3,
+	}
+)
+
+func (x RenewLinks) Enum() *RenewLinks {
+	p := new(RenewLinks)
+	*p = x
+	return p
+}
+
+func (x RenewLinks) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RenewLinks) Descriptor() protoreflect.EnumDescriptor {
+	return file_downex_v1_downex_proto_enumTypes[10].Descriptor()
+}
+
+func (RenewLinks) Type() protoreflect.EnumType {
+	return &file_downex_v1_downex_proto_enumTypes[10]
+}
+
+func (x RenewLinks) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RenewLinks.Descriptor instead.
+func (RenewLinks) EnumDescriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{10}
 }
 
 // What happens when a queue finishes all its downloads (after a cancellable countdown).
@@ -462,11 +689,11 @@ func (x PostAction) String() string {
 }
 
 func (PostAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_downex_v1_downex_proto_enumTypes[7].Descriptor()
+	return file_downex_v1_downex_proto_enumTypes[11].Descriptor()
 }
 
 func (PostAction) Type() protoreflect.EnumType {
-	return &file_downex_v1_downex_proto_enumTypes[7]
+	return &file_downex_v1_downex_proto_enumTypes[11]
 }
 
 func (x PostAction) Number() protoreflect.EnumNumber {
@@ -475,7 +702,7 @@ func (x PostAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PostAction.Descriptor instead.
 func (PostAction) EnumDescriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{7}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{11}
 }
 
 type ProxyMode int32
@@ -517,11 +744,11 @@ func (x ProxyMode) String() string {
 }
 
 func (ProxyMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_downex_v1_downex_proto_enumTypes[8].Descriptor()
+	return file_downex_v1_downex_proto_enumTypes[12].Descriptor()
 }
 
 func (ProxyMode) Type() protoreflect.EnumType {
-	return &file_downex_v1_downex_proto_enumTypes[8]
+	return &file_downex_v1_downex_proto_enumTypes[12]
 }
 
 func (x ProxyMode) Number() protoreflect.EnumNumber {
@@ -530,7 +757,7 @@ func (x ProxyMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProxyMode.Descriptor instead.
 func (ProxyMode) EnumDescriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{8}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{12}
 }
 
 // State of one external tool (yt-dlp or Deno) that site media runs.
@@ -576,11 +803,11 @@ func (x ToolState) String() string {
 }
 
 func (ToolState) Descriptor() protoreflect.EnumDescriptor {
-	return file_downex_v1_downex_proto_enumTypes[9].Descriptor()
+	return file_downex_v1_downex_proto_enumTypes[13].Descriptor()
 }
 
 func (ToolState) Type() protoreflect.EnumType {
-	return &file_downex_v1_downex_proto_enumTypes[9]
+	return &file_downex_v1_downex_proto_enumTypes[13]
 }
 
 func (x ToolState) Number() protoreflect.EnumNumber {
@@ -589,7 +816,179 @@ func (x ToolState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolState.Descriptor instead.
 func (ToolState) EnumDescriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{9}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{13}
+}
+
+// One file the tab's player fetched for a video (SITE-MEDIA-SPEC §2.9).
+type PlayedResource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`            // "r1".."r16", unique in its source
+	Url           string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`          // the whole file's address (range-in-query removed): http(s), at most 8 KiB, no user information
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`       // exact total in bytes, 0 = unknown
+	Kind          string                 `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`        // "video" | "audio" | "": a hint; the head decides
+	Head          []byte                 `protobuf:"bytes,5,opt,name=head,proto3" json:"head,omitempty"`        // the file's first bytes as the browser read them, at most 256 KiB
+	Browser       bool                   `protobuf:"varint,6,opt,name=browser,proto3" json:"browser,omitempty"` // the head needed the tab: the file is fetched through the browser from the start
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PlayedResource) Reset() {
+	*x = PlayedResource{}
+	mi := &file_downex_v1_downex_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlayedResource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlayedResource) ProtoMessage() {}
+
+func (x *PlayedResource) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlayedResource.ProtoReflect.Descriptor instead.
+func (*PlayedResource) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PlayedResource) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PlayedResource) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *PlayedResource) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *PlayedResource) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *PlayedResource) GetHead() []byte {
+	if x != nil {
+		return x.Head
+	}
+	return nil
+}
+
+func (x *PlayedResource) GetBrowser() bool {
+	if x != nil {
+		return x.Browser
+	}
+	return false
+}
+
+// The clicked <video> and the files its tab played (SITE-MEDIA-SPEC §2.9).
+type PlayedSource struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Resources   []*PlayedResource      `protobuf:"bytes,1,rep,name=resources,proto3" json:"resources,omitempty"`                      // 1-16
+	DurationMs  int64                  `protobuf:"varint,2,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"` // the element's duration, 0 = unknown
+	VideoWidth  int32                  `protobuf:"varint,3,opt,name=video_width,json=videoWidth,proto3" json:"video_width,omitempty"` // the element's picture, 0 = unknown
+	VideoHeight int32                  `protobuf:"varint,4,opt,name=video_height,json=videoHeight,proto3" json:"video_height,omitempty"`
+	HasAudio    int32                  `protobuf:"varint,5,opt,name=has_audio,json=hasAudio,proto3" json:"has_audio,omitempty"` // 1 yes, 0 unknown, -1 no
+	// The durations of the frame's other <video> elements (each 1 ms to 24 h, at most 8): a file
+	// closer to one of them than to the clicked element's is that element's (a feed's neighbour).
+	OtherDurationsMs []int64 `protobuf:"varint,6,rep,packed,name=other_durations_ms,json=otherDurationsMs,proto3" json:"other_durations_ms,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *PlayedSource) Reset() {
+	*x = PlayedSource{}
+	mi := &file_downex_v1_downex_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlayedSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlayedSource) ProtoMessage() {}
+
+func (x *PlayedSource) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlayedSource.ProtoReflect.Descriptor instead.
+func (*PlayedSource) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PlayedSource) GetResources() []*PlayedResource {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+func (x *PlayedSource) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *PlayedSource) GetVideoWidth() int32 {
+	if x != nil {
+		return x.VideoWidth
+	}
+	return 0
+}
+
+func (x *PlayedSource) GetVideoHeight() int32 {
+	if x != nil {
+		return x.VideoHeight
+	}
+	return 0
+}
+
+func (x *PlayedSource) GetHasAudio() int32 {
+	if x != nil {
+		return x.HasAudio
+	}
+	return 0
+}
+
+func (x *PlayedSource) GetOtherDurationsMs() []int64 {
+	if x != nil {
+		return x.OtherDurationsMs
+	}
+	return nil
 }
 
 // One selectable track of a streaming presentation (docs/MEDIA-SPEC.md §1 Track).
@@ -614,7 +1013,7 @@ type MediaTrack struct {
 
 func (x *MediaTrack) Reset() {
 	*x = MediaTrack{}
-	mi := &file_downex_v1_downex_proto_msgTypes[0]
+	mi := &file_downex_v1_downex_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -626,7 +1025,7 @@ func (x *MediaTrack) String() string {
 func (*MediaTrack) ProtoMessage() {}
 
 func (x *MediaTrack) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[0]
+	mi := &file_downex_v1_downex_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -639,7 +1038,7 @@ func (x *MediaTrack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MediaTrack.ProtoReflect.Descriptor instead.
 func (*MediaTrack) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{0}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *MediaTrack) GetId() string {
@@ -741,13 +1140,24 @@ type MediaInfo struct {
 	Origin         MediaOrigin            `protobuf:"varint,11,opt,name=origin,proto3,enum=downex.v1.MediaOrigin" json:"origin,omitempty"`
 	Site           string                 `protobuf:"bytes,12,opt,name=site,proto3" json:"site,omitempty"`                      // SITE: the site's display name, e.g. "YouTube"
 	PageUrl        string                 `protobuf:"bytes,13,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"` // the page (SITE: the address resolved; MANIFEST: the page hint)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	Chapters       []*Chapter             `protobuf:"bytes,14,rep,name=chapters,proto3" json:"chapters,omitempty"`              // SITE only: the video's chapters (MEDIA-SPEC §8 C14); never for manifests
+	Clip           *MediaClip             `protobuf:"bytes,15,opt,name=clip,proto3" json:"clip,omitempty"`                      // the part of the video saved (MEDIA-SPEC §8); unset = the whole video
+	// SITE, a page with several videos (SITE-MEDIA-SPEC §3.12): the videos Downex can save, in the
+	// page's order (at most 20; empty for a page with one video), the one this info describes, and
+	// how many other items of the page are not listed (photos, links, items past the 20).
+	Items        []*MediaItem `protobuf:"bytes,16,rep,name=items,proto3" json:"items,omitempty"`
+	EntryId      string       `protobuf:"bytes,17,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"` // SITE: the item's id ("" = the page has one video)
+	ItemsLeftOut int32        `protobuf:"varint,18,opt,name=items_left_out,json=itemsLeftOut,proto3" json:"items_left_out,omitempty"`
+	// SITE (SITE-MEDIA-SPEC §2.8): a probe of a page whose video servers answer only web browsers, or a
+	// download whose bytes the user's browser fetches for Downex.
+	BrowserFetch  bool `protobuf:"varint,19,opt,name=browser_fetch,json=browserFetch,proto3" json:"browser_fetch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MediaInfo) Reset() {
 	*x = MediaInfo{}
-	mi := &file_downex_v1_downex_proto_msgTypes[1]
+	mi := &file_downex_v1_downex_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -759,7 +1169,7 @@ func (x *MediaInfo) String() string {
 func (*MediaInfo) ProtoMessage() {}
 
 func (x *MediaInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[1]
+	mi := &file_downex_v1_downex_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -772,7 +1182,7 @@ func (x *MediaInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MediaInfo.ProtoReflect.Descriptor instead.
 func (*MediaInfo) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{1}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *MediaInfo) GetManifestUrl() string {
@@ -866,6 +1276,272 @@ func (x *MediaInfo) GetPageUrl() string {
 	return ""
 }
 
+func (x *MediaInfo) GetChapters() []*Chapter {
+	if x != nil {
+		return x.Chapters
+	}
+	return nil
+}
+
+func (x *MediaInfo) GetClip() *MediaClip {
+	if x != nil {
+		return x.Clip
+	}
+	return nil
+}
+
+func (x *MediaInfo) GetItems() []*MediaItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *MediaInfo) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *MediaInfo) GetItemsLeftOut() int32 {
+	if x != nil {
+		return x.ItemsLeftOut
+	}
+	return 0
+}
+
+func (x *MediaInfo) GetBrowserFetch() bool {
+	if x != nil {
+		return x.BrowserFetch
+	}
+	return false
+}
+
+// One video of a page with several (SITE-MEDIA-SPEC §3.12), named by the site's id of it.
+type MediaItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	DurationMs    int64                  `protobuf:"varint,3,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"` // 0 = unknown
+	Thumbnail     string                 `protobuf:"bytes,4,opt,name=thumbnail,proto3" json:"thumbnail,omitempty"`                      // https image of the page's; probes only, never stored ("" = none)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaItem) Reset() {
+	*x = MediaItem{}
+	mi := &file_downex_v1_downex_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaItem) ProtoMessage() {}
+
+func (x *MediaItem) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaItem.ProtoReflect.Descriptor instead.
+func (*MediaItem) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *MediaItem) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *MediaItem) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *MediaItem) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *MediaItem) GetThumbnail() string {
+	if x != nil {
+		return x.Thumbnail
+	}
+	return ""
+}
+
+// A chapter of a video (docs/MEDIA-SPEC.md §8 C14).
+type Chapter struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StartMs       int64                  `protobuf:"varint,1,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs         int64                  `protobuf:"varint,2,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Chapter) Reset() {
+	*x = Chapter{}
+	mi := &file_downex_v1_downex_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Chapter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Chapter) ProtoMessage() {}
+
+func (x *Chapter) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Chapter.ProtoReflect.Descriptor instead.
+func (*Chapter) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Chapter) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *Chapter) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *Chapter) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+// A part of a video (clips, docs/MEDIA-SPEC.md §8): [start_ms, end_ms) in presentation time.
+type MediaClip struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	StartMs int64                  `protobuf:"varint,1,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"` // requested start
+	EndMs   int64                  `protobuf:"varint,2,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`       // requested end, exclusive; 0 = to the end
+	Chapter string                 `protobuf:"bytes,3,opt,name=chapter,proto3" json:"chapter,omitempty"`                 // title of the chosen chapter ("" = custom times); display only
+	// Set by downexd when the download completes (0/false before):
+	KeyframeMs    int64 `protobuf:"varint,4,opt,name=keyframe_ms,json=keyframeMs,proto3" json:"keyframe_ms,omitempty"`         // presentation time of the first decoded frame (<= start_ms, or later when there is no earlier keyframe)
+	FetchStartMs  int64 `protobuf:"varint,5,opt,name=fetch_start_ms,json=fetchStartMs,proto3" json:"fetch_start_ms,omitempty"` // what was downloaded
+	FetchEndMs    int64 `protobuf:"varint,6,opt,name=fetch_end_ms,json=fetchEndMs,proto3" json:"fetch_end_ms,omitempty"`
+	FetchedWhole  bool  `protobuf:"varint,7,opt,name=fetched_whole,json=fetchedWhole,proto3" json:"fetched_whole,omitempty"` // the resource had no index: downloaded in full, cut locally
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaClip) Reset() {
+	*x = MediaClip{}
+	mi := &file_downex_v1_downex_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaClip) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaClip) ProtoMessage() {}
+
+func (x *MediaClip) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaClip.ProtoReflect.Descriptor instead.
+func (*MediaClip) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *MediaClip) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *MediaClip) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *MediaClip) GetChapter() string {
+	if x != nil {
+		return x.Chapter
+	}
+	return ""
+}
+
+func (x *MediaClip) GetKeyframeMs() int64 {
+	if x != nil {
+		return x.KeyframeMs
+	}
+	return 0
+}
+
+func (x *MediaClip) GetFetchStartMs() int64 {
+	if x != nil {
+		return x.FetchStartMs
+	}
+	return 0
+}
+
+func (x *MediaClip) GetFetchEndMs() int64 {
+	if x != nil {
+		return x.FetchEndMs
+	}
+	return 0
+}
+
+func (x *MediaClip) GetFetchedWhole() bool {
+	if x != nil {
+		return x.FetchedWhole
+	}
+	return false
+}
+
 type Header struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -876,7 +1552,7 @@ type Header struct {
 
 func (x *Header) Reset() {
 	*x = Header{}
-	mi := &file_downex_v1_downex_proto_msgTypes[2]
+	mi := &file_downex_v1_downex_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -888,7 +1564,7 @@ func (x *Header) String() string {
 func (*Header) ProtoMessage() {}
 
 func (x *Header) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[2]
+	mi := &file_downex_v1_downex_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -901,7 +1577,7 @@ func (x *Header) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Header.ProtoReflect.Descriptor instead.
 func (*Header) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{2}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Header) GetName() string {
@@ -930,7 +1606,7 @@ type Segment struct {
 
 func (x *Segment) Reset() {
 	*x = Segment{}
-	mi := &file_downex_v1_downex_proto_msgTypes[3]
+	mi := &file_downex_v1_downex_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -942,7 +1618,7 @@ func (x *Segment) String() string {
 func (*Segment) ProtoMessage() {}
 
 func (x *Segment) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[3]
+	mi := &file_downex_v1_downex_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -955,7 +1631,7 @@ func (x *Segment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Segment.ProtoReflect.Descriptor instead.
 func (*Segment) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{3}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Segment) GetStart() int64 {
@@ -1016,14 +1692,31 @@ type Download struct {
 	// size is an estimate: a stream that is not completed (its fragments' bytes so far over
 	// the rest, else the probe's size or bit rate × duration of the chosen tracks); a
 	// completed download's size is always its file's.
-	SizeApprox    bool `protobuf:"varint,32,opt,name=size_approx,json=sizeApprox,proto3" json:"size_approx,omitempty"`
+	SizeApprox bool `protobuf:"varint,32,opt,name=size_approx,json=sizeApprox,proto3" json:"size_approx,omitempty"`
+	// The file check (docs/DESKTOP-SPEC.md §9): omitted when there is nothing to say or
+	// check_downloaded_files is off.
+	FileCheck *FileCheck `protobuf:"bytes,33,opt,name=file_check,json=fileCheck,proto3" json:"file_check,omitempty"`
+	// Expired links (docs/ENGINE-SPEC.md §7.2-7.3, docs/DESKTOP-SPEC.md §10). The page the
+	// download was started from (file downloads; "" = unknown): the add's page_url, else the
+	// request's Referer when it names more than an origin. Media downloads: media.page_url.
+	PageUrl string `protobuf:"bytes,34,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`
+	// Set on a download awaiting confirmation whose link serves the same file as a download
+	// whose link expired (Settings.renew_links = ASK): the window offers to continue that
+	// one (RenewLink with from_download). Kept in downexd's memory only.
+	RenewOffer *RenewOffer `protobuf:"bytes,35,opt,name=renew_offer,json=renewOffer,proto3" json:"renew_offer,omitempty"`
+	// downexd is checking whether this new download's link continues a download whose link
+	// expired; it starts, asks or is removed once the check ends (at most 15 s).
+	RenewCheck bool `protobuf:"varint,36,opt,name=renew_check,json=renewCheck,proto3" json:"renew_check,omitempty"`
+	// Bytes adopted from a partial file another program (a browser) left unfinished
+	// (docs/ENGINE-SPEC.md §7.4; 0 = none). Kept after completion; cleared by a restart.
+	RescuedBytes  int64 `protobuf:"varint,37,opt,name=rescued_bytes,json=rescuedBytes,proto3" json:"rescued_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Download) Reset() {
 	*x = Download{}
-	mi := &file_downex_v1_downex_proto_msgTypes[4]
+	mi := &file_downex_v1_downex_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1035,7 +1728,7 @@ func (x *Download) String() string {
 func (*Download) ProtoMessage() {}
 
 func (x *Download) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[4]
+	mi := &file_downex_v1_downex_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1048,7 +1741,7 @@ func (x *Download) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Download.ProtoReflect.Descriptor instead.
 func (*Download) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{4}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Download) GetId() int64 {
@@ -1275,6 +1968,251 @@ func (x *Download) GetSizeApprox() bool {
 	return false
 }
 
+func (x *Download) GetFileCheck() *FileCheck {
+	if x != nil {
+		return x.FileCheck
+	}
+	return nil
+}
+
+func (x *Download) GetPageUrl() string {
+	if x != nil {
+		return x.PageUrl
+	}
+	return ""
+}
+
+func (x *Download) GetRenewOffer() *RenewOffer {
+	if x != nil {
+		return x.RenewOffer
+	}
+	return nil
+}
+
+func (x *Download) GetRenewCheck() bool {
+	if x != nil {
+		return x.RenewCheck
+	}
+	return false
+}
+
+func (x *Download) GetRescuedBytes() int64 {
+	if x != nil {
+		return x.RescuedBytes
+	}
+	return 0
+}
+
+// A stopped download that a new link would continue (docs/DESKTOP-SPEC.md §10).
+type RenewOffer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DownloadId    int64                  `protobuf:"varint,1,opt,name=download_id,json=downloadId,proto3" json:"download_id,omitempty"` // the download whose link expired
+	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"`
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	Received      int64                  `protobuf:"varint,4,opt,name=received,proto3" json:"received,omitempty"`                          // its durable bytes
+	NameDiffers   bool                   `protobuf:"varint,5,opt,name=name_differs,json=nameDiffers,proto3" json:"name_differs,omitempty"` // the new link names the file differently
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewOffer) Reset() {
+	*x = RenewOffer{}
+	mi := &file_downex_v1_downex_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewOffer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewOffer) ProtoMessage() {}
+
+func (x *RenewOffer) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewOffer.ProtoReflect.Descriptor instead.
+func (*RenewOffer) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RenewOffer) GetDownloadId() int64 {
+	if x != nil {
+		return x.DownloadId
+	}
+	return 0
+}
+
+func (x *RenewOffer) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *RenewOffer) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *RenewOffer) GetReceived() int64 {
+	if x != nil {
+		return x.Received
+	}
+	return 0
+}
+
+func (x *RenewOffer) GetNameDiffers() bool {
+	if x != nil {
+		return x.NameDiffers
+	}
+	return false
+}
+
+// docs/DESKTOP-SPEC.md §9. Advisory: it never says a file is safe.
+type FileCheck struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Level             FileCheckLevel         `protobuf:"varint,1,opt,name=level,proto3,enum=downex.v1.FileCheckLevel" json:"level,omitempty"`
+	Stage             FileCheckStage         `protobuf:"varint,2,opt,name=stage,proto3,enum=downex.v1.FileCheckStage" json:"stage,omitempty"`
+	Reason            string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                                        // stable code [a-z_]{1,64} (§9.9)
+	Content           string                 `protobuf:"bytes,4,opt,name=content,proto3" json:"content,omitempty"`                                      // sniffed content id ("pe", "zip", "html"; "" unknown)
+	ContentLabel      string                 `protobuf:"bytes,5,opt,name=content_label,json=contentLabel,proto3" json:"content_label,omitempty"`        // "Windows program"
+	ClaimLabel        string                 `protobuf:"bytes,6,opt,name=claim_label,json=claimLabel,proto3" json:"claim_label,omitempty"`              // what the name (or served type) claims: "MP4 video"; "" none
+	ServedType        string                 `protobuf:"bytes,7,opt,name=served_type,json=servedType,proto3" json:"served_type,omitempty"`              // the server's Content-Type media type; "" none
+	Member            string                 `protobuf:"bytes,8,opt,name=member,proto3" json:"member,omitempty"`                                        // the archive member the reason names (≤ 255 bytes, UTF-8, unescaped)
+	ProgramMembers    int32                  `protobuf:"varint,9,opt,name=program_members,json=programMembers,proto3" json:"program_members,omitempty"` // programs found inside an archive
+	ListingIncomplete bool                   `protobuf:"varint,10,opt,name=listing_incomplete,json=listingIncomplete,proto3" json:"listing_incomplete,omitempty"`
+	Summary           string                 `protobuf:"bytes,11,opt,name=summary,proto3" json:"summary,omitempty"` // one or two sentences, the exact texts of §9.6
+	Detail            string                 `protobuf:"bytes,12,opt,name=detail,proto3" json:"detail,omitempty"`   // the DANGER advice and the stage notes of §9.6; "" for none
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *FileCheck) Reset() {
+	*x = FileCheck{}
+	mi := &file_downex_v1_downex_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileCheck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileCheck) ProtoMessage() {}
+
+func (x *FileCheck) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileCheck.ProtoReflect.Descriptor instead.
+func (*FileCheck) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *FileCheck) GetLevel() FileCheckLevel {
+	if x != nil {
+		return x.Level
+	}
+	return FileCheckLevel_FILE_CHECK_LEVEL_UNSPECIFIED
+}
+
+func (x *FileCheck) GetStage() FileCheckStage {
+	if x != nil {
+		return x.Stage
+	}
+	return FileCheckStage_FILE_CHECK_STAGE_UNSPECIFIED
+}
+
+func (x *FileCheck) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *FileCheck) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *FileCheck) GetContentLabel() string {
+	if x != nil {
+		return x.ContentLabel
+	}
+	return ""
+}
+
+func (x *FileCheck) GetClaimLabel() string {
+	if x != nil {
+		return x.ClaimLabel
+	}
+	return ""
+}
+
+func (x *FileCheck) GetServedType() string {
+	if x != nil {
+		return x.ServedType
+	}
+	return ""
+}
+
+func (x *FileCheck) GetMember() string {
+	if x != nil {
+		return x.Member
+	}
+	return ""
+}
+
+func (x *FileCheck) GetProgramMembers() int32 {
+	if x != nil {
+		return x.ProgramMembers
+	}
+	return 0
+}
+
+func (x *FileCheck) GetListingIncomplete() bool {
+	if x != nil {
+		return x.ListingIncomplete
+	}
+	return false
+}
+
+func (x *FileCheck) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *FileCheck) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 type ConnectionInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Index         int32                  `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"` // 1-based slot number, stable while the download runs
@@ -1291,7 +2229,7 @@ type ConnectionInfo struct {
 
 func (x *ConnectionInfo) Reset() {
 	*x = ConnectionInfo{}
-	mi := &file_downex_v1_downex_proto_msgTypes[5]
+	mi := &file_downex_v1_downex_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1303,7 +2241,7 @@ func (x *ConnectionInfo) String() string {
 func (*ConnectionInfo) ProtoMessage() {}
 
 func (x *ConnectionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[5]
+	mi := &file_downex_v1_downex_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1316,7 +2254,7 @@ func (x *ConnectionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionInfo.ProtoReflect.Descriptor instead.
 func (*ConnectionInfo) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{5}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ConnectionInfo) GetIndex() int32 {
@@ -1390,13 +2328,16 @@ type AddRequest struct {
 	ExpectedSize   int64                  `protobuf:"varint,11,opt,name=expected_size,json=expectedSize,proto3" json:"expected_size,omitempty"` // optional size hint (bytes) shown in the confirmation dialog
 	Mime           string                 `protobuf:"bytes,12,opt,name=mime,proto3" json:"mime,omitempty"`                                      // optional MIME hint used for category selection
 	QueueId        int64                  `protobuf:"varint,13,opt,name=queue_id,json=queueId,proto3" json:"queue_id,omitempty"`                // M6: 0 = the main queue
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The page the link was found on (http or https, at most 32 KiB; "" = unknown). Stored
+	// for "Open page" of a download whose link expires (docs/DESKTOP-SPEC.md §10).
+	PageUrl       string `protobuf:"bytes,14,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddRequest) Reset() {
 	*x = AddRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[6]
+	mi := &file_downex_v1_downex_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1408,7 +2349,7 @@ func (x *AddRequest) String() string {
 func (*AddRequest) ProtoMessage() {}
 
 func (x *AddRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[6]
+	mi := &file_downex_v1_downex_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1421,7 +2362,7 @@ func (x *AddRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddRequest.ProtoReflect.Descriptor instead.
 func (*AddRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{6}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AddRequest) GetUrl() string {
@@ -1515,6 +2456,13 @@ func (x *AddRequest) GetQueueId() int64 {
 	return 0
 }
 
+func (x *AddRequest) GetPageUrl() string {
+	if x != nil {
+		return x.PageUrl
+	}
+	return ""
+}
+
 // Confirm completes a download in DOWNLOAD_STATE_AWAITING_CONFIRMATION.
 // To cancel instead, call Remove.
 type ConfirmRequest struct {
@@ -1528,13 +2476,17 @@ type ConfirmRequest struct {
 	VideoTrack     string                 `protobuf:"bytes,7,opt,name=video_track,json=videoTrack,proto3" json:"video_track,omitempty"` // media downloads: chosen track ids ("" = keep the daemon's default pick)
 	AudioTrack     string                 `protobuf:"bytes,8,opt,name=audio_track,json=audioTrack,proto3" json:"audio_track,omitempty"`
 	QueueId        int64                  `protobuf:"varint,9,opt,name=queue_id,json=queueId,proto3" json:"queue_id,omitempty"` // M6: 0 = keep the current queue
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	Clip           *MediaClip             `protobuf:"bytes,10,opt,name=clip,proto3" json:"clip,omitempty"`                      // media downloads: unset = keep the part; set with start_ms 0 and end_ms 0 = the whole video
+	// SITE media of a page with several videos (SITE-MEDIA-SPEC §3.12): "" = keep the item; another
+	// item's id resolves the page again for it (its tracks, title and part replace the old ones).
+	EntryId       string `protobuf:"bytes,11,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfirmRequest) Reset() {
 	*x = ConfirmRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[7]
+	mi := &file_downex_v1_downex_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1546,7 +2498,7 @@ func (x *ConfirmRequest) String() string {
 func (*ConfirmRequest) ProtoMessage() {}
 
 func (x *ConfirmRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[7]
+	mi := &file_downex_v1_downex_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1559,7 +2511,7 @@ func (x *ConfirmRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmRequest.ProtoReflect.Descriptor instead.
 func (*ConfirmRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{7}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ConfirmRequest) GetId() int64 {
@@ -1625,30 +2577,56 @@ func (x *ConfirmRequest) GetQueueId() int64 {
 	return 0
 }
 
+func (x *ConfirmRequest) GetClip() *MediaClip {
+	if x != nil {
+		return x.Clip
+	}
+	return nil
+}
+
+func (x *ConfirmRequest) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
 // AddMedia adds a streaming-media download for an HLS (.m3u8) or DASH (.mpd) manifest.
 // The daemon fetches and parses the manifest first (encrypted → InvalidArgument "encrypted",
 // live → InvalidArgument "live"); browser hand-offs then await confirmation like files.
 type AddMediaRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ManifestUrl   string                 `protobuf:"bytes,1,opt,name=manifest_url,json=manifestUrl,proto3" json:"manifest_url,omitempty"`
-	Headers       []*Header              `protobuf:"bytes,2,rep,name=headers,proto3" json:"headers,omitempty"` // Cookie/Referer/User-Agent the page used
-	Dir           string                 `protobuf:"bytes,3,opt,name=dir,proto3" json:"dir,omitempty"`
-	Filename      string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"` // without extension is fine; the daemon appends .mp4
-	Source        AddSource              `protobuf:"varint,5,opt,name=source,proto3,enum=downex.v1.AddSource" json:"source,omitempty"`
-	VideoTrack    string                 `protobuf:"bytes,6,opt,name=video_track,json=videoTrack,proto3" json:"video_track,omitempty"` // "" = default best pick
-	AudioTrack    string                 `protobuf:"bytes,7,opt,name=audio_track,json=audioTrack,proto3" json:"audio_track,omitempty"`
-	PageUrl       string                 `protobuf:"bytes,8,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`
-	Title         string                 `protobuf:"bytes,9,opt,name=title,proto3" json:"title,omitempty"`
-	StartPaused   bool                   `protobuf:"varint,10,opt,name=start_paused,json=startPaused,proto3" json:"start_paused,omitempty"`
-	QueueId       int64                  `protobuf:"varint,11,opt,name=queue_id,json=queueId,proto3" json:"queue_id,omitempty"`           // M6: 0 = the main queue
-	Origin        MediaOrigin            `protobuf:"varint,12,opt,name=origin,proto3,enum=downex.v1.MediaOrigin" json:"origin,omitempty"` // SITE: page_url is the address and manifest_url must be empty
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ManifestUrl string                 `protobuf:"bytes,1,opt,name=manifest_url,json=manifestUrl,proto3" json:"manifest_url,omitempty"`
+	Headers     []*Header              `protobuf:"bytes,2,rep,name=headers,proto3" json:"headers,omitempty"` // Cookie/Referer/User-Agent the page used
+	Dir         string                 `protobuf:"bytes,3,opt,name=dir,proto3" json:"dir,omitempty"`
+	Filename    string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"` // without extension is fine; the daemon appends .mp4
+	Source      AddSource              `protobuf:"varint,5,opt,name=source,proto3,enum=downex.v1.AddSource" json:"source,omitempty"`
+	VideoTrack  string                 `protobuf:"bytes,6,opt,name=video_track,json=videoTrack,proto3" json:"video_track,omitempty"` // "" = default best pick
+	AudioTrack  string                 `protobuf:"bytes,7,opt,name=audio_track,json=audioTrack,proto3" json:"audio_track,omitempty"`
+	PageUrl     string                 `protobuf:"bytes,8,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`
+	Title       string                 `protobuf:"bytes,9,opt,name=title,proto3" json:"title,omitempty"`
+	StartPaused bool                   `protobuf:"varint,10,opt,name=start_paused,json=startPaused,proto3" json:"start_paused,omitempty"`
+	QueueId     int64                  `protobuf:"varint,11,opt,name=queue_id,json=queueId,proto3" json:"queue_id,omitempty"`           // M6: 0 = the main queue
+	Origin      MediaOrigin            `protobuf:"varint,12,opt,name=origin,proto3,enum=downex.v1.MediaOrigin" json:"origin,omitempty"` // SITE: page_url is the address and manifest_url must be empty
+	Clip        *MediaClip             `protobuf:"bytes,13,opt,name=clip,proto3" json:"clip,omitempty"`                                 // unset = the whole video; only start_ms, end_ms and chapter are read (MEDIA-SPEC §8)
+	EntryId     string                 `protobuf:"bytes,14,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`            // SITE: the video of a page with several (SITE-MEDIA-SPEC §3.12); "" = the page's default
+	// SITE: the domain the Cookie header's sign-in is for (SITE-MEDIA-SPEC §6.3): the page's host or a
+	// parent of it that is no public suffix; the cookie file then covers it and its subdomains. "" = the
+	// page's exact host.
+	CookieDomain string `protobuf:"bytes,15,opt,name=cookie_domain,json=cookieDomain,proto3" json:"cookie_domain,omitempty"`
+	// SITE, source BROWSER (SITE-MEDIA-SPEC §2.8): the caller's browser can fetch the download's bytes
+	// when its video servers answer only browsers; the answer then carries a fetch ticket.
+	BrowserFetch bool `protobuf:"varint,16,opt,name=browser_fetch,json=browserFetch,proto3" json:"browser_fetch,omitempty"`
+	// PLAYED, source BROWSER (SITE-MEDIA-SPEC §2.9): the files the tab played; manifest_url empty,
+	// page_url the frame's address (a hint).
+	Played        *PlayedSource `protobuf:"bytes,17,opt,name=played,proto3" json:"played,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddMediaRequest) Reset() {
 	*x = AddMediaRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[8]
+	mi := &file_downex_v1_downex_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1660,7 +2638,7 @@ func (x *AddMediaRequest) String() string {
 func (*AddMediaRequest) ProtoMessage() {}
 
 func (x *AddMediaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[8]
+	mi := &file_downex_v1_downex_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1673,7 +2651,7 @@ func (x *AddMediaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddMediaRequest.ProtoReflect.Descriptor instead.
 func (*AddMediaRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{8}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AddMediaRequest) GetManifestUrl() string {
@@ -1760,16 +2738,52 @@ func (x *AddMediaRequest) GetOrigin() MediaOrigin {
 	return MediaOrigin_MEDIA_ORIGIN_UNSPECIFIED
 }
 
+func (x *AddMediaRequest) GetClip() *MediaClip {
+	if x != nil {
+		return x.Clip
+	}
+	return nil
+}
+
+func (x *AddMediaRequest) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *AddMediaRequest) GetCookieDomain() string {
+	if x != nil {
+		return x.CookieDomain
+	}
+	return ""
+}
+
+func (x *AddMediaRequest) GetBrowserFetch() bool {
+	if x != nil {
+		return x.BrowserFetch
+	}
+	return false
+}
+
+func (x *AddMediaRequest) GetPlayed() *PlayedSource {
+	if x != nil {
+		return x.Played
+	}
+	return nil
+}
+
 type AddMediaResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Download      *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
+	FetchTicket   string                 `protobuf:"bytes,2,opt,name=fetch_ticket,json=fetchTicket,proto3" json:"fetch_ticket,omitempty"` // SITE-MEDIA-SPEC §2.8: 32 lowercase hex characters; "" = none
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddMediaResponse) Reset() {
 	*x = AddMediaResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[9]
+	mi := &file_downex_v1_downex_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1781,7 +2795,7 @@ func (x *AddMediaResponse) String() string {
 func (*AddMediaResponse) ProtoMessage() {}
 
 func (x *AddMediaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[9]
+	mi := &file_downex_v1_downex_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1794,7 +2808,7 @@ func (x *AddMediaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddMediaResponse.ProtoReflect.Descriptor instead.
 func (*AddMediaResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{9}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AddMediaResponse) GetDownload() *Download {
@@ -1802,6 +2816,410 @@ func (x *AddMediaResponse) GetDownload() *Download {
 		return x.Download
 	}
 	return nil
+}
+
+func (x *AddMediaResponse) GetFetchTicket() string {
+	if x != nil {
+		return x.FetchTicket
+	}
+	return ""
+}
+
+// TakeBrowserFetch waits for a request of the downloads whose fetch tickets are given
+// (SITE-MEDIA-SPEC §2.8) and hands it to the browser.
+type TakeBrowserFetchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tickets       []string               `protobuf:"bytes,1,rep,name=tickets,proto3" json:"tickets,omitempty"`              // 1-64 tickets
+	WaitMs        int32                  `protobuf:"varint,2,opt,name=wait_ms,json=waitMs,proto3" json:"wait_ms,omitempty"` // 0-25000: how long to wait for a request
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TakeBrowserFetchRequest) Reset() {
+	*x = TakeBrowserFetchRequest{}
+	mi := &file_downex_v1_downex_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TakeBrowserFetchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TakeBrowserFetchRequest) ProtoMessage() {}
+
+func (x *TakeBrowserFetchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TakeBrowserFetchRequest.ProtoReflect.Descriptor instead.
+func (*TakeBrowserFetchRequest) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *TakeBrowserFetchRequest) GetTickets() []string {
+	if x != nil {
+		return x.Tickets
+	}
+	return nil
+}
+
+func (x *TakeBrowserFetchRequest) GetWaitMs() int32 {
+	if x != nil {
+		return x.WaitMs
+	}
+	return 0
+}
+
+type TakeBrowserFetchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fetch         *BrowserFetch          `protobuf:"bytes,1,opt,name=fetch,proto3" json:"fetch,omitempty"`                                   // unset: none came within the wait
+	EndedTickets  []string               `protobuf:"bytes,2,rep,name=ended_tickets,json=endedTickets,proto3" json:"ended_tickets,omitempty"` // given tickets downexd no longer knows
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TakeBrowserFetchResponse) Reset() {
+	*x = TakeBrowserFetchResponse{}
+	mi := &file_downex_v1_downex_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TakeBrowserFetchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TakeBrowserFetchResponse) ProtoMessage() {}
+
+func (x *TakeBrowserFetchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TakeBrowserFetchResponse.ProtoReflect.Descriptor instead.
+func (*TakeBrowserFetchResponse) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *TakeBrowserFetchResponse) GetFetch() *BrowserFetch {
+	if x != nil {
+		return x.Fetch
+	}
+	return nil
+}
+
+func (x *TakeBrowserFetchResponse) GetEndedTickets() []string {
+	if x != nil {
+		return x.EndedTickets
+	}
+	return nil
+}
+
+// One request the browser makes for a download (SITE-MEDIA-SPEC §2.8).
+type BrowserFetch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ticket        string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	FetchId       string                 `protobuf:"bytes,2,opt,name=fetch_id,json=fetchId,proto3" json:"fetch_id,omitempty"`
+	Url           string                 `protobuf:"bytes,3,opt,name=url,proto3" json:"url,omitempty"`      // the format's address; the browser may use its player's address of the same resource
+	Start         int64                  `protobuf:"varint,4,opt,name=start,proto3" json:"start,omitempty"` // first byte
+	End           int64                  `protobuf:"varint,5,opt,name=end,proto3" json:"end,omitempty"`     // last byte, -1 = to the end
+	Total         int64                  `protobuf:"varint,6,opt,name=total,proto3" json:"total,omitempty"` // the resource's exact size, 0 = unknown
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BrowserFetch) Reset() {
+	*x = BrowserFetch{}
+	mi := &file_downex_v1_downex_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BrowserFetch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BrowserFetch) ProtoMessage() {}
+
+func (x *BrowserFetch) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BrowserFetch.ProtoReflect.Descriptor instead.
+func (*BrowserFetch) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *BrowserFetch) GetTicket() string {
+	if x != nil {
+		return x.Ticket
+	}
+	return ""
+}
+
+func (x *BrowserFetch) GetFetchId() string {
+	if x != nil {
+		return x.FetchId
+	}
+	return ""
+}
+
+func (x *BrowserFetch) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *BrowserFetch) GetStart() int64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *BrowserFetch) GetEnd() int64 {
+	if x != nil {
+		return x.End
+	}
+	return 0
+}
+
+func (x *BrowserFetch) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+// PutBrowserFetch gives downexd what the browser received for a fetch, in order.
+type PutBrowserFetchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ticket        string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	FetchId       string                 `protobuf:"bytes,2,opt,name=fetch_id,json=fetchId,proto3" json:"fetch_id,omitempty"`
+	Seq           int64                  `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`    // 0, 1, 2, ... per fetch
+	Head          *BrowserFetchHead      `protobuf:"bytes,4,opt,name=head,proto3" json:"head,omitempty"`   // seq 0 only
+	Data          []byte                 `protobuf:"bytes,5,opt,name=data,proto3" json:"data,omitempty"`   // at most 256 KiB
+	End           bool                   `protobuf:"varint,6,opt,name=end,proto3" json:"end,omitempty"`    // the body ended
+	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"` // the fetch failed in the browser ("no_tab", a short reason); at most 256 bytes
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutBrowserFetchRequest) Reset() {
+	*x = PutBrowserFetchRequest{}
+	mi := &file_downex_v1_downex_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutBrowserFetchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutBrowserFetchRequest) ProtoMessage() {}
+
+func (x *PutBrowserFetchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutBrowserFetchRequest.ProtoReflect.Descriptor instead.
+func (*PutBrowserFetchRequest) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PutBrowserFetchRequest) GetTicket() string {
+	if x != nil {
+		return x.Ticket
+	}
+	return ""
+}
+
+func (x *PutBrowserFetchRequest) GetFetchId() string {
+	if x != nil {
+		return x.FetchId
+	}
+	return ""
+}
+
+func (x *PutBrowserFetchRequest) GetSeq() int64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *PutBrowserFetchRequest) GetHead() *BrowserFetchHead {
+	if x != nil {
+		return x.Head
+	}
+	return nil
+}
+
+func (x *PutBrowserFetchRequest) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *PutBrowserFetchRequest) GetEnd() bool {
+	if x != nil {
+		return x.End
+	}
+	return false
+}
+
+func (x *PutBrowserFetchRequest) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// The answer's head as the browser received it.
+type BrowserFetchHead struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        int32                  `protobuf:"varint,1,opt,name=status,proto3" json:"status,omitempty"`
+	ContentType   string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	ContentRange  string                 `protobuf:"bytes,3,opt,name=content_range,json=contentRange,proto3" json:"content_range,omitempty"`
+	ContentLength int64                  `protobuf:"varint,4,opt,name=content_length,json=contentLength,proto3" json:"content_length,omitempty"` // -1 = unknown
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BrowserFetchHead) Reset() {
+	*x = BrowserFetchHead{}
+	mi := &file_downex_v1_downex_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BrowserFetchHead) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BrowserFetchHead) ProtoMessage() {}
+
+func (x *BrowserFetchHead) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BrowserFetchHead.ProtoReflect.Descriptor instead.
+func (*BrowserFetchHead) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *BrowserFetchHead) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *BrowserFetchHead) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *BrowserFetchHead) GetContentRange() string {
+	if x != nil {
+		return x.ContentRange
+	}
+	return ""
+}
+
+func (x *BrowserFetchHead) GetContentLength() int64 {
+	if x != nil {
+		return x.ContentLength
+	}
+	return 0
+}
+
+type PutBrowserFetchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Stop          bool                   `protobuf:"varint,1,opt,name=stop,proto3" json:"stop,omitempty"` // downexd needs no more of this fetch: abort it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutBrowserFetchResponse) Reset() {
+	*x = PutBrowserFetchResponse{}
+	mi := &file_downex_v1_downex_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutBrowserFetchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutBrowserFetchResponse) ProtoMessage() {}
+
+func (x *PutBrowserFetchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutBrowserFetchResponse.ProtoReflect.Descriptor instead.
+func (*PutBrowserFetchResponse) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PutBrowserFetchResponse) GetStop() bool {
+	if x != nil {
+		return x.Stop
+	}
+	return false
 }
 
 // ProbeMedia fetches and parses a manifest and lists its tracks without adding anything.
@@ -1815,14 +3233,17 @@ type ProbeMediaRequest struct {
 	// SITE: a look-ahead while the user watches (SITE-MEDIA-SPEC §5.6). It never installs tools
 	// (tools_unavailable while they are not ready), never waits behind or delays a user's probe,
 	// and fills the same extraction cache a later probe, Add and run use.
-	Prefetch      bool `protobuf:"varint,5,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
+	Prefetch      bool          `protobuf:"varint,5,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
+	EntryId       string        `protobuf:"bytes,6,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`                // SITE: the video of a page with several (SITE-MEDIA-SPEC §3.12); "" = the page's default
+	CookieDomain  string        `protobuf:"bytes,7,opt,name=cookie_domain,json=cookieDomain,proto3" json:"cookie_domain,omitempty"` // SITE: as AddMediaRequest.cookie_domain (SITE-MEDIA-SPEC §6.3)
+	Played        *PlayedSource `protobuf:"bytes,8,opt,name=played,proto3" json:"played,omitempty"`                                 // PLAYED: as AddMediaRequest.played (SITE-MEDIA-SPEC §2.9)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProbeMediaRequest) Reset() {
 	*x = ProbeMediaRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[10]
+	mi := &file_downex_v1_downex_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1834,7 +3255,7 @@ func (x *ProbeMediaRequest) String() string {
 func (*ProbeMediaRequest) ProtoMessage() {}
 
 func (x *ProbeMediaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[10]
+	mi := &file_downex_v1_downex_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1847,7 +3268,7 @@ func (x *ProbeMediaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeMediaRequest.ProtoReflect.Descriptor instead.
 func (*ProbeMediaRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{10}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ProbeMediaRequest) GetManifestUrl() string {
@@ -1885,6 +3306,27 @@ func (x *ProbeMediaRequest) GetPrefetch() bool {
 	return false
 }
 
+func (x *ProbeMediaRequest) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *ProbeMediaRequest) GetCookieDomain() string {
+	if x != nil {
+		return x.CookieDomain
+	}
+	return ""
+}
+
+func (x *ProbeMediaRequest) GetPlayed() *PlayedSource {
+	if x != nil {
+		return x.Played
+	}
+	return nil
+}
+
 type ProbeMediaResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Media         *MediaInfo             `protobuf:"bytes,1,opt,name=media,proto3" json:"media,omitempty"`
@@ -1894,7 +3336,7 @@ type ProbeMediaResponse struct {
 
 func (x *ProbeMediaResponse) Reset() {
 	*x = ProbeMediaResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[11]
+	mi := &file_downex_v1_downex_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1906,7 +3348,7 @@ func (x *ProbeMediaResponse) String() string {
 func (*ProbeMediaResponse) ProtoMessage() {}
 
 func (x *ProbeMediaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[11]
+	mi := &file_downex_v1_downex_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1919,7 +3361,7 @@ func (x *ProbeMediaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeMediaResponse.ProtoReflect.Descriptor instead.
 func (*ProbeMediaResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{11}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ProbeMediaResponse) GetMedia() *MediaInfo {
@@ -1938,7 +3380,7 @@ type ConfirmResponse struct {
 
 func (x *ConfirmResponse) Reset() {
 	*x = ConfirmResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[12]
+	mi := &file_downex_v1_downex_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1950,7 +3392,7 @@ func (x *ConfirmResponse) String() string {
 func (*ConfirmResponse) ProtoMessage() {}
 
 func (x *ConfirmResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[12]
+	mi := &file_downex_v1_downex_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1963,7 +3405,7 @@ func (x *ConfirmResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmResponse.ProtoReflect.Descriptor instead.
 func (*ConfirmResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{12}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ConfirmResponse) GetDownload() *Download {
@@ -1981,7 +3423,7 @@ type PauseAllRequest struct {
 
 func (x *PauseAllRequest) Reset() {
 	*x = PauseAllRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[13]
+	mi := &file_downex_v1_downex_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1993,7 +3435,7 @@ func (x *PauseAllRequest) String() string {
 func (*PauseAllRequest) ProtoMessage() {}
 
 func (x *PauseAllRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[13]
+	mi := &file_downex_v1_downex_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2006,7 +3448,7 @@ func (x *PauseAllRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseAllRequest.ProtoReflect.Descriptor instead.
 func (*PauseAllRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{13}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{26}
 }
 
 type PauseAllResponse struct {
@@ -2018,7 +3460,7 @@ type PauseAllResponse struct {
 
 func (x *PauseAllResponse) Reset() {
 	*x = PauseAllResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[14]
+	mi := &file_downex_v1_downex_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2030,7 +3472,7 @@ func (x *PauseAllResponse) String() string {
 func (*PauseAllResponse) ProtoMessage() {}
 
 func (x *PauseAllResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[14]
+	mi := &file_downex_v1_downex_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2043,7 +3485,7 @@ func (x *PauseAllResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseAllResponse.ProtoReflect.Descriptor instead.
 func (*PauseAllResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{14}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *PauseAllResponse) GetPaused() int32 {
@@ -2061,7 +3503,7 @@ type ResumeAllRequest struct {
 
 func (x *ResumeAllRequest) Reset() {
 	*x = ResumeAllRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[15]
+	mi := &file_downex_v1_downex_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2073,7 +3515,7 @@ func (x *ResumeAllRequest) String() string {
 func (*ResumeAllRequest) ProtoMessage() {}
 
 func (x *ResumeAllRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[15]
+	mi := &file_downex_v1_downex_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2086,7 +3528,7 @@ func (x *ResumeAllRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeAllRequest.ProtoReflect.Descriptor instead.
 func (*ResumeAllRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{15}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{28}
 }
 
 type ResumeAllResponse struct {
@@ -2098,7 +3540,7 @@ type ResumeAllResponse struct {
 
 func (x *ResumeAllResponse) Reset() {
 	*x = ResumeAllResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[16]
+	mi := &file_downex_v1_downex_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2110,7 +3552,7 @@ func (x *ResumeAllResponse) String() string {
 func (*ResumeAllResponse) ProtoMessage() {}
 
 func (x *ResumeAllResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[16]
+	mi := &file_downex_v1_downex_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2123,7 +3565,7 @@ func (x *ResumeAllResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeAllResponse.ProtoReflect.Descriptor instead.
 func (*ResumeAllResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{16}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ResumeAllResponse) GetResumed() int32 {
@@ -2142,7 +3584,7 @@ type AddResponse struct {
 
 func (x *AddResponse) Reset() {
 	*x = AddResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[17]
+	mi := &file_downex_v1_downex_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2154,7 +3596,7 @@ func (x *AddResponse) String() string {
 func (*AddResponse) ProtoMessage() {}
 
 func (x *AddResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[17]
+	mi := &file_downex_v1_downex_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2167,7 +3609,7 @@ func (x *AddResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddResponse.ProtoReflect.Descriptor instead.
 func (*AddResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{17}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AddResponse) GetDownload() *Download {
@@ -2185,7 +3627,7 @@ type ListRequest struct {
 
 func (x *ListRequest) Reset() {
 	*x = ListRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[18]
+	mi := &file_downex_v1_downex_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2197,7 +3639,7 @@ func (x *ListRequest) String() string {
 func (*ListRequest) ProtoMessage() {}
 
 func (x *ListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[18]
+	mi := &file_downex_v1_downex_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2210,7 +3652,7 @@ func (x *ListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
 func (*ListRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{18}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{31}
 }
 
 type ListResponse struct {
@@ -2222,7 +3664,7 @@ type ListResponse struct {
 
 func (x *ListResponse) Reset() {
 	*x = ListResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[19]
+	mi := &file_downex_v1_downex_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2234,7 +3676,7 @@ func (x *ListResponse) String() string {
 func (*ListResponse) ProtoMessage() {}
 
 func (x *ListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[19]
+	mi := &file_downex_v1_downex_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2247,7 +3689,7 @@ func (x *ListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
 func (*ListResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{19}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ListResponse) GetDownloads() []*Download {
@@ -2266,7 +3708,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[20]
+	mi := &file_downex_v1_downex_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2278,7 +3720,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[20]
+	mi := &file_downex_v1_downex_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2291,7 +3733,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{20}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetRequest) GetId() int64 {
@@ -2310,7 +3752,7 @@ type GetResponse struct {
 
 func (x *GetResponse) Reset() {
 	*x = GetResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[21]
+	mi := &file_downex_v1_downex_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2322,7 +3764,7 @@ func (x *GetResponse) String() string {
 func (*GetResponse) ProtoMessage() {}
 
 func (x *GetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[21]
+	mi := &file_downex_v1_downex_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2335,7 +3777,7 @@ func (x *GetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
 func (*GetResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{21}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GetResponse) GetDownload() *Download {
@@ -2354,7 +3796,7 @@ type PauseRequest struct {
 
 func (x *PauseRequest) Reset() {
 	*x = PauseRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[22]
+	mi := &file_downex_v1_downex_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2366,7 +3808,7 @@ func (x *PauseRequest) String() string {
 func (*PauseRequest) ProtoMessage() {}
 
 func (x *PauseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[22]
+	mi := &file_downex_v1_downex_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2379,7 +3821,7 @@ func (x *PauseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseRequest.ProtoReflect.Descriptor instead.
 func (*PauseRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{22}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PauseRequest) GetId() int64 {
@@ -2398,7 +3840,7 @@ type PauseResponse struct {
 
 func (x *PauseResponse) Reset() {
 	*x = PauseResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[23]
+	mi := &file_downex_v1_downex_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2410,7 +3852,7 @@ func (x *PauseResponse) String() string {
 func (*PauseResponse) ProtoMessage() {}
 
 func (x *PauseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[23]
+	mi := &file_downex_v1_downex_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2423,7 +3865,7 @@ func (x *PauseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseResponse.ProtoReflect.Descriptor instead.
 func (*PauseResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{23}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *PauseResponse) GetDownload() *Download {
@@ -2442,13 +3884,18 @@ type ResumeRequest struct {
 	MaxConnections *int32       `protobuf:"varint,3,opt,name=max_connections,json=maxConnections,proto3,oneof" json:"max_connections,omitempty"`
 	SpeedLimit     *int64       `protobuf:"varint,4,opt,name=speed_limit,json=speedLimit,proto3,oneof" json:"speed_limit,omitempty"`
 	ExistingFile   ExistingFile `protobuf:"varint,5,opt,name=existing_file,json=existingFile,proto3,enum=downex.v1.ExistingFile" json:"existing_file,omitempty"` // only together with restart (else InvalidArgument)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The first start of a rescue stored paused for the browser relay (DAEMON-SPEC §3
+	// "Rescue"): refused (FailedPrecondition) unless id is such a rescue, never started yet,
+	// created at most 10 minutes ago. With show_progress_window on, its progress window
+	// opens when it starts at once. Not combinable with restart.
+	RescueStart   bool `protobuf:"varint,6,opt,name=rescue_start,json=rescueStart,proto3" json:"rescue_start,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResumeRequest) Reset() {
 	*x = ResumeRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[24]
+	mi := &file_downex_v1_downex_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2460,7 +3907,7 @@ func (x *ResumeRequest) String() string {
 func (*ResumeRequest) ProtoMessage() {}
 
 func (x *ResumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[24]
+	mi := &file_downex_v1_downex_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2473,7 +3920,7 @@ func (x *ResumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeRequest.ProtoReflect.Descriptor instead.
 func (*ResumeRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{24}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ResumeRequest) GetId() int64 {
@@ -2511,6 +3958,13 @@ func (x *ResumeRequest) GetExistingFile() ExistingFile {
 	return ExistingFile_EXISTING_FILE_UNSPECIFIED
 }
 
+func (x *ResumeRequest) GetRescueStart() bool {
+	if x != nil {
+		return x.RescueStart
+	}
+	return false
+}
+
 type ResumeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Download      *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
@@ -2520,7 +3974,7 @@ type ResumeResponse struct {
 
 func (x *ResumeResponse) Reset() {
 	*x = ResumeResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[25]
+	mi := &file_downex_v1_downex_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2532,7 +3986,7 @@ func (x *ResumeResponse) String() string {
 func (*ResumeResponse) ProtoMessage() {}
 
 func (x *ResumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[25]
+	mi := &file_downex_v1_downex_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2545,7 +3999,7 @@ func (x *ResumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeResponse.ProtoReflect.Descriptor instead.
 func (*ResumeResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{25}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ResumeResponse) GetDownload() *Download {
@@ -2565,7 +4019,7 @@ type RemoveRequest struct {
 
 func (x *RemoveRequest) Reset() {
 	*x = RemoveRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[26]
+	mi := &file_downex_v1_downex_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2577,7 +4031,7 @@ func (x *RemoveRequest) String() string {
 func (*RemoveRequest) ProtoMessage() {}
 
 func (x *RemoveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[26]
+	mi := &file_downex_v1_downex_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2590,7 +4044,7 @@ func (x *RemoveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRequest.ProtoReflect.Descriptor instead.
 func (*RemoveRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{26}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *RemoveRequest) GetId() int64 {
@@ -2615,7 +4069,7 @@ type RemoveResponse struct {
 
 func (x *RemoveResponse) Reset() {
 	*x = RemoveResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[27]
+	mi := &file_downex_v1_downex_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2627,7 +4081,7 @@ func (x *RemoveResponse) String() string {
 func (*RemoveResponse) ProtoMessage() {}
 
 func (x *RemoveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[27]
+	mi := &file_downex_v1_downex_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2640,7 +4094,7 @@ func (x *RemoveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveResponse.ProtoReflect.Descriptor instead.
 func (*RemoveResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{27}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{40}
 }
 
 type WatchRequest struct {
@@ -2652,7 +4106,7 @@ type WatchRequest struct {
 
 func (x *WatchRequest) Reset() {
 	*x = WatchRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[28]
+	mi := &file_downex_v1_downex_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2664,7 +4118,7 @@ func (x *WatchRequest) String() string {
 func (*WatchRequest) ProtoMessage() {}
 
 func (x *WatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[28]
+	mi := &file_downex_v1_downex_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2677,7 +4131,7 @@ func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
 func (*WatchRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{28}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *WatchRequest) GetIds() []int64 {
@@ -2699,6 +4153,7 @@ type Event struct {
 	//	*Event_PostAction
 	//	*Event_Tools
 	//	*Event_Update
+	//	*Event_Polite
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2706,7 +4161,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_downex_v1_downex_proto_msgTypes[29]
+	mi := &file_downex_v1_downex_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2718,7 +4173,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[29]
+	mi := &file_downex_v1_downex_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2731,7 +4186,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{29}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *Event) GetKind() isEvent_Kind {
@@ -2813,6 +4268,15 @@ func (x *Event) GetUpdate() *UpdateInfo {
 	return nil
 }
 
+func (x *Event) GetPolite() *PoliteStatus {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_Polite); ok {
+			return x.Polite
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -2852,6 +4316,12 @@ type Event_Update struct {
 	Update *UpdateInfo `protobuf:"bytes,8,opt,name=update,proto3,oneof"`
 }
 
+type Event_Polite struct {
+	// Polite mode (docs/POLITE-SPEC.md §7): Watch without ids only; the first batch ends with
+	// one, later batches carry one when the status changed. Fields 9-19 are left to other features.
+	Polite *PoliteStatus `protobuf:"bytes,20,opt,name=polite,proto3,oneof"`
+}
+
 func (*Event_Snapshot) isEvent_Kind() {}
 
 func (*Event_Updated) isEvent_Kind() {}
@@ -2868,6 +4338,84 @@ func (*Event_Tools) isEvent_Kind() {}
 
 func (*Event_Update) isEvent_Kind() {}
 
+func (*Event_Polite) isEvent_Kind() {}
+
+type PoliteStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	State         PoliteState            `protobuf:"varint,1,opt,name=state,proto3,enum=downex.v1.PoliteState" json:"state,omitempty"`
+	RateLimit     int64                  `protobuf:"varint,2,opt,name=rate_limit,json=rateLimit,proto3" json:"rate_limit,omitempty"` // bytes/s applied now (SLOWED, MEASURING), else 0
+	DelayMs       int32                  `protobuf:"varint,3,opt,name=delay_ms,json=delayMs,proto3" json:"delay_ms,omitempty"`       // latest line delay over the base; -1 unknown
+	BaseMs        int32                  `protobuf:"varint,4,opt,name=base_ms,json=baseMs,proto3" json:"base_ms,omitempty"`          // base RTT of the median anchor; -1 unknown
+	Since         *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=since,proto3" json:"since,omitempty"`                           // when this state began
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PoliteStatus) Reset() {
+	*x = PoliteStatus{}
+	mi := &file_downex_v1_downex_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PoliteStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PoliteStatus) ProtoMessage() {}
+
+func (x *PoliteStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PoliteStatus.ProtoReflect.Descriptor instead.
+func (*PoliteStatus) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *PoliteStatus) GetState() PoliteState {
+	if x != nil {
+		return x.State
+	}
+	return PoliteState_POLITE_STATE_UNSPECIFIED
+}
+
+func (x *PoliteStatus) GetRateLimit() int64 {
+	if x != nil {
+		return x.RateLimit
+	}
+	return 0
+}
+
+func (x *PoliteStatus) GetDelayMs() int32 {
+	if x != nil {
+		return x.DelayMs
+	}
+	return 0
+}
+
+func (x *PoliteStatus) GetBaseMs() int32 {
+	if x != nil {
+		return x.BaseMs
+	}
+	return 0
+}
+
+func (x *PoliteStatus) GetSince() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Since
+	}
+	return nil
+}
+
 // WatchResponse batches events; the daemon sends at most 4 batches per second.
 type WatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2878,7 +4426,7 @@ type WatchResponse struct {
 
 func (x *WatchResponse) Reset() {
 	*x = WatchResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[30]
+	mi := &file_downex_v1_downex_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2890,7 +4438,7 @@ func (x *WatchResponse) String() string {
 func (*WatchResponse) ProtoMessage() {}
 
 func (x *WatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[30]
+	mi := &file_downex_v1_downex_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2903,7 +4451,7 @@ func (x *WatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchResponse.ProtoReflect.Descriptor instead.
 func (*WatchResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{30}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *WatchResponse) GetEvents() []*Event {
@@ -2911,6 +4459,422 @@ func (x *WatchResponse) GetEvents() []*Event {
 		return x.Events
 	}
 	return nil
+}
+
+type RenewLinkRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"` // a file download that is paused, queued or failed
+	// Types that are valid to be assigned to Link:
+	//
+	//	*RenewLinkRequest_Url
+	//	*RenewLinkRequest_FromDownload
+	Link isRenewLinkRequest_Link `protobuf_oneof:"link"`
+	// With url: the headers to send (none = the stored ones, without Cookie, Cookie2 and
+	// Authorization when the new link is on another origin).
+	Headers           []*Header `protobuf:"bytes,4,rep,name=headers,proto3" json:"headers,omitempty"`
+	AllowNameChange   bool      `protobuf:"varint,5,opt,name=allow_name_change,json=allowNameChange,proto3" json:"allow_name_change,omitempty"`       // continue although the new link names the file differently
+	RestartIfUnproven bool      `protobuf:"varint,6,opt,name=restart_if_unproven,json=restartIfUnproven,proto3" json:"restart_if_unproven,omitempty"` // too little to compare: download again from the start
+	Start             bool      `protobuf:"varint,7,opt,name=start,proto3" json:"start,omitempty"`                                                    // queue it at once (else it stays paused)
+	PageUrl           string    `protobuf:"bytes,8,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`                                  // optional: the page the new link was found on
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RenewLinkRequest) Reset() {
+	*x = RenewLinkRequest{}
+	mi := &file_downex_v1_downex_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewLinkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewLinkRequest) ProtoMessage() {}
+
+func (x *RenewLinkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewLinkRequest.ProtoReflect.Descriptor instead.
+func (*RenewLinkRequest) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *RenewLinkRequest) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *RenewLinkRequest) GetLink() isRenewLinkRequest_Link {
+	if x != nil {
+		return x.Link
+	}
+	return nil
+}
+
+func (x *RenewLinkRequest) GetUrl() string {
+	if x != nil {
+		if x, ok := x.Link.(*RenewLinkRequest_Url); ok {
+			return x.Url
+		}
+	}
+	return ""
+}
+
+func (x *RenewLinkRequest) GetFromDownload() int64 {
+	if x != nil {
+		if x, ok := x.Link.(*RenewLinkRequest_FromDownload); ok {
+			return x.FromDownload
+		}
+	}
+	return 0
+}
+
+func (x *RenewLinkRequest) GetHeaders() []*Header {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *RenewLinkRequest) GetAllowNameChange() bool {
+	if x != nil {
+		return x.AllowNameChange
+	}
+	return false
+}
+
+func (x *RenewLinkRequest) GetRestartIfUnproven() bool {
+	if x != nil {
+		return x.RestartIfUnproven
+	}
+	return false
+}
+
+func (x *RenewLinkRequest) GetStart() bool {
+	if x != nil {
+		return x.Start
+	}
+	return false
+}
+
+func (x *RenewLinkRequest) GetPageUrl() string {
+	if x != nil {
+		return x.PageUrl
+	}
+	return ""
+}
+
+type isRenewLinkRequest_Link interface {
+	isRenewLinkRequest_Link()
+}
+
+type RenewLinkRequest_Url struct {
+	Url string `protobuf:"bytes,2,opt,name=url,proto3,oneof"` // a new link (GET)
+}
+
+type RenewLinkRequest_FromDownload struct {
+	FromDownload int64 `protobuf:"varint,3,opt,name=from_download,json=fromDownload,proto3,oneof"` // a download awaiting confirmation whose link to use; removed on success
+}
+
+func (*RenewLinkRequest_Url) isRenewLinkRequest_Link() {}
+
+func (*RenewLinkRequest_FromDownload) isRenewLinkRequest_Link() {}
+
+type RenewLinkResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Download      *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
+	Restarted     bool                   `protobuf:"varint,2,opt,name=restarted,proto3" json:"restarted,omitempty"` // nothing could be kept: it downloads again from byte 0
+	NameDiffers   bool                   `protobuf:"varint,3,opt,name=name_differs,json=nameDiffers,proto3" json:"name_differs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewLinkResponse) Reset() {
+	*x = RenewLinkResponse{}
+	mi := &file_downex_v1_downex_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewLinkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewLinkResponse) ProtoMessage() {}
+
+func (x *RenewLinkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewLinkResponse.ProtoReflect.Descriptor instead.
+func (*RenewLinkResponse) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *RenewLinkResponse) GetDownload() *Download {
+	if x != nil {
+		return x.Download
+	}
+	return nil
+}
+
+func (x *RenewLinkResponse) GetRestarted() bool {
+	if x != nil {
+		return x.Restarted
+	}
+	return false
+}
+
+func (x *RenewLinkResponse) GetNameDiffers() bool {
+	if x != nil {
+		return x.NameDiffers
+	}
+	return false
+}
+
+// RescueRequest adopts a partial file another program (a browser) left unfinished and
+// continues it from its last trusted byte (docs/ENGINE-SPEC.md §7.4). downexd first proves
+// that the server has the same file (range requests over the partial data, its size, the
+// validators); only then is the partial renamed into the download's part file, in its own
+// folder.
+type RescueRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Url     string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`         // http(s); GET; redirects followed as for Add
+	Headers []*Header              `protobuf:"bytes,2,rep,name=headers,proto3" json:"headers,omitempty"` // as AddRequest.headers (DAEMON-SPEC §4)
+	// Absolute path of the partial file; "" = find it from target_path (BROWSER only).
+	PartialPath    string    `protobuf:"bytes,3,opt,name=partial_path,json=partialPath,proto3" json:"partial_path,omitempty"`
+	TargetPath     string    `protobuf:"bytes,4,opt,name=target_path,json=targetPath,proto3" json:"target_path,omitempty"`               // the browser's final path for the file (absolute; BROWSER)
+	BytesReceived  int64     `protobuf:"varint,5,opt,name=bytes_received,json=bytesReceived,proto3" json:"bytes_received,omitempty"`     // the browser's count of good bytes; 0 = unknown
+	ExpectedSize   int64     `protobuf:"varint,6,opt,name=expected_size,json=expectedSize,proto3" json:"expected_size,omitempty"`        // the browser's total; -1 or 0 = unknown
+	Etag           string    `protobuf:"bytes,7,opt,name=etag,proto3" json:"etag,omitempty"`                                             // the original response's ETag ("W/" = weak); "" = unknown
+	LastModified   string    `protobuf:"bytes,8,opt,name=last_modified,json=lastModified,proto3" json:"last_modified,omitempty"`         // the original response's Last-Modified; "" = unknown
+	Filename       string    `protobuf:"bytes,9,opt,name=filename,proto3" json:"filename,omitempty"`                                     // the final name; "" = from the partial's name (ENGINE-SPEC §7.4 A2)
+	Source         AddSource `protobuf:"varint,10,opt,name=source,proto3,enum=downex.v1.AddSource" json:"source,omitempty"`              // BROWSER, UI or CLI
+	QueueId        int64     `protobuf:"varint,11,opt,name=queue_id,json=queueId,proto3" json:"queue_id,omitempty"`                      // 0 = the main queue
+	MaxConnections int32     `protobuf:"varint,12,opt,name=max_connections,json=maxConnections,proto3" json:"max_connections,omitempty"` // 0 = default
+	SpeedLimit     int64     `protobuf:"varint,13,opt,name=speed_limit,json=speedLimit,proto3" json:"speed_limit,omitempty"`             // bytes/s, 0 = unlimited
+	// Store it paused: the extension sets it, erases its own entry, then sends Resume with
+	// rescue_start (DAEMON-SPEC §3 "Rescue").
+	StartPaused   bool   `protobuf:"varint,14,opt,name=start_paused,json=startPaused,proto3" json:"start_paused,omitempty"`
+	StartedAtMs   int64  `protobuf:"varint,15,opt,name=started_at_ms,json=startedAtMs,proto3" json:"started_at_ms,omitempty"` // when the browser download started (Unix ms); 0 = unknown
+	PageUrl       string `protobuf:"bytes,16,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`                // the page the download was started from ("" = unknown)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RescueRequest) Reset() {
+	*x = RescueRequest{}
+	mi := &file_downex_v1_downex_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescueRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescueRequest) ProtoMessage() {}
+
+func (x *RescueRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescueRequest.ProtoReflect.Descriptor instead.
+func (*RescueRequest) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *RescueRequest) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *RescueRequest) GetHeaders() []*Header {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *RescueRequest) GetPartialPath() string {
+	if x != nil {
+		return x.PartialPath
+	}
+	return ""
+}
+
+func (x *RescueRequest) GetTargetPath() string {
+	if x != nil {
+		return x.TargetPath
+	}
+	return ""
+}
+
+func (x *RescueRequest) GetBytesReceived() int64 {
+	if x != nil {
+		return x.BytesReceived
+	}
+	return 0
+}
+
+func (x *RescueRequest) GetExpectedSize() int64 {
+	if x != nil {
+		return x.ExpectedSize
+	}
+	return 0
+}
+
+func (x *RescueRequest) GetEtag() string {
+	if x != nil {
+		return x.Etag
+	}
+	return ""
+}
+
+func (x *RescueRequest) GetLastModified() string {
+	if x != nil {
+		return x.LastModified
+	}
+	return ""
+}
+
+func (x *RescueRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *RescueRequest) GetSource() AddSource {
+	if x != nil {
+		return x.Source
+	}
+	return AddSource_ADD_SOURCE_UNSPECIFIED
+}
+
+func (x *RescueRequest) GetQueueId() int64 {
+	if x != nil {
+		return x.QueueId
+	}
+	return 0
+}
+
+func (x *RescueRequest) GetMaxConnections() int32 {
+	if x != nil {
+		return x.MaxConnections
+	}
+	return 0
+}
+
+func (x *RescueRequest) GetSpeedLimit() int64 {
+	if x != nil {
+		return x.SpeedLimit
+	}
+	return 0
+}
+
+func (x *RescueRequest) GetStartPaused() bool {
+	if x != nil {
+		return x.StartPaused
+	}
+	return false
+}
+
+func (x *RescueRequest) GetStartedAtMs() int64 {
+	if x != nil {
+		return x.StartedAtMs
+	}
+	return 0
+}
+
+func (x *RescueRequest) GetPageUrl() string {
+	if x != nil {
+		return x.PageUrl
+	}
+	return ""
+}
+
+type RescueResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Download      *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
+	RescuedBytes  int64                  `protobuf:"varint,2,opt,name=rescued_bytes,json=rescuedBytes,proto3" json:"rescued_bytes,omitempty"` // bytes kept from the partial file
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RescueResponse) Reset() {
+	*x = RescueResponse{}
+	mi := &file_downex_v1_downex_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescueResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescueResponse) ProtoMessage() {}
+
+func (x *RescueResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_downex_v1_downex_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescueResponse.ProtoReflect.Descriptor instead.
+func (*RescueResponse) Descriptor() ([]byte, []int) {
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *RescueResponse) GetDownload() *Download {
+	if x != nil {
+		return x.Download
+	}
+	return nil
+}
+
+func (x *RescueResponse) GetRescuedBytes() int64 {
+	if x != nil {
+		return x.RescuedBytes
+	}
+	return 0
 }
 
 type SetDownloadOptionsRequest struct {
@@ -2925,7 +4889,7 @@ type SetDownloadOptionsRequest struct {
 
 func (x *SetDownloadOptionsRequest) Reset() {
 	*x = SetDownloadOptionsRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[31]
+	mi := &file_downex_v1_downex_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2937,7 +4901,7 @@ func (x *SetDownloadOptionsRequest) String() string {
 func (*SetDownloadOptionsRequest) ProtoMessage() {}
 
 func (x *SetDownloadOptionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[31]
+	mi := &file_downex_v1_downex_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2950,7 +4914,7 @@ func (x *SetDownloadOptionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDownloadOptionsRequest.ProtoReflect.Descriptor instead.
 func (*SetDownloadOptionsRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{31}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SetDownloadOptionsRequest) GetId() int64 {
@@ -2990,7 +4954,7 @@ type SetDownloadOptionsResponse struct {
 
 func (x *SetDownloadOptionsResponse) Reset() {
 	*x = SetDownloadOptionsResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[32]
+	mi := &file_downex_v1_downex_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3002,7 +4966,7 @@ func (x *SetDownloadOptionsResponse) String() string {
 func (*SetDownloadOptionsResponse) ProtoMessage() {}
 
 func (x *SetDownloadOptionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[32]
+	mi := &file_downex_v1_downex_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3015,7 +4979,7 @@ func (x *SetDownloadOptionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDownloadOptionsResponse.ProtoReflect.Descriptor instead.
 func (*SetDownloadOptionsResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{32}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SetDownloadOptionsResponse) GetDownload() *Download {
@@ -3037,7 +5001,7 @@ type Category struct {
 
 func (x *Category) Reset() {
 	*x = Category{}
-	mi := &file_downex_v1_downex_proto_msgTypes[33]
+	mi := &file_downex_v1_downex_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3049,7 +5013,7 @@ func (x *Category) String() string {
 func (*Category) ProtoMessage() {}
 
 func (x *Category) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[33]
+	mi := &file_downex_v1_downex_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3062,7 +5026,7 @@ func (x *Category) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Category.ProtoReflect.Descriptor instead.
 func (*Category) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{33}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *Category) GetName() string {
@@ -3121,13 +5085,21 @@ type Settings struct {
 	SiteMedia       bool   `protobuf:"varint,24,opt,name=site_media,json=siteMedia,proto3" json:"site_media,omitempty"`                     // default true: resolve video pages with yt-dlp (downloaded on first use)
 	ToolsAutoUpdate bool   `protobuf:"varint,25,opt,name=tools_auto_update,json=toolsAutoUpdate,proto3" json:"tools_auto_update,omitempty"` // default true: daily check; updates only Downex's own yt-dlp and Deno
 	ToolsChannel    string `protobuf:"bytes,26,opt,name=tools_channel,json=toolsChannel,proto3" json:"tools_channel,omitempty"`             // "stable" | "nightly"; "" reads as the default "nightly"
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// File check (docs/DESKTOP-SPEC.md §9.9)
+	CheckDownloadedFiles bool `protobuf:"varint,27,opt,name=check_downloaded_files,json=checkDownloadedFiles,proto3" json:"check_downloaded_files,omitempty"` // default true: warn when a file is not what its name says
+	// Expired links (docs/DESKTOP-SPEC.md §10): what a new link that serves the same file as
+	// a download whose link expired does.
+	RenewLinks RenewLinks `protobuf:"varint,28,opt,name=renew_links,json=renewLinks,proto3,enum=downex.v1.RenewLinks" json:"renew_links,omitempty"`
+	// Polite mode (docs/POLITE-SPEC.md §7). Fields 29-39 are left to other features.
+	PoliteMode     bool  `protobuf:"varint,40,opt,name=polite_mode,json=politeMode,proto3" json:"polite_mode,omitempty"`               // default false: slow down when downloads make the line laggy
+	PoliteTargetMs int32 `protobuf:"varint,41,opt,name=polite_target_ms,json=politeTargetMs,proto3" json:"polite_target_ms,omitempty"` // extra line delay kept under; 0 = the default 30; else 10..200
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Settings) Reset() {
 	*x = Settings{}
-	mi := &file_downex_v1_downex_proto_msgTypes[34]
+	mi := &file_downex_v1_downex_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3139,7 +5111,7 @@ func (x *Settings) String() string {
 func (*Settings) ProtoMessage() {}
 
 func (x *Settings) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[34]
+	mi := &file_downex_v1_downex_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3152,7 +5124,7 @@ func (x *Settings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Settings.ProtoReflect.Descriptor instead.
 func (*Settings) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{34}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *Settings) GetMaxConcurrentDownloads() int32 {
@@ -3337,6 +5309,34 @@ func (x *Settings) GetToolsChannel() string {
 	return ""
 }
 
+func (x *Settings) GetCheckDownloadedFiles() bool {
+	if x != nil {
+		return x.CheckDownloadedFiles
+	}
+	return false
+}
+
+func (x *Settings) GetRenewLinks() RenewLinks {
+	if x != nil {
+		return x.RenewLinks
+	}
+	return RenewLinks_RENEW_LINKS_UNSPECIFIED
+}
+
+func (x *Settings) GetPoliteMode() bool {
+	if x != nil {
+		return x.PoliteMode
+	}
+	return false
+}
+
+func (x *Settings) GetPoliteTargetMs() int32 {
+	if x != nil {
+		return x.PoliteTargetMs
+	}
+	return 0
+}
+
 type StatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -3345,7 +5345,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[35]
+	mi := &file_downex_v1_downex_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3357,7 +5357,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[35]
+	mi := &file_downex_v1_downex_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3370,7 +5370,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{35}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{53}
 }
 
 type StatusResponse struct {
@@ -3388,13 +5388,16 @@ type StatusResponse struct {
 	ToolsDir string `protobuf:"bytes,9,opt,name=tools_dir,json=toolsDir,proto3" json:"tools_dir,omitempty"`
 	// This build can verify and install updates (an update signing key is built in).
 	UpdatesSupported bool `protobuf:"varint,10,opt,name=updates_supported,json=updatesSupported,proto3" json:"updates_supported,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Polite mode (docs/POLITE-SPEC.md §7); unset from an older daemon. Fields 11-19 are left
+	// to other features.
+	Polite        *PoliteStatus `protobuf:"bytes,20,opt,name=polite,proto3" json:"polite,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[36]
+	mi := &file_downex_v1_downex_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3406,7 +5409,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[36]
+	mi := &file_downex_v1_downex_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3419,7 +5422,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{36}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *StatusResponse) GetVersion() string {
@@ -3492,6 +5495,13 @@ func (x *StatusResponse) GetUpdatesSupported() bool {
 	return false
 }
 
+func (x *StatusResponse) GetPolite() *PoliteStatus {
+	if x != nil {
+		return x.Polite
+	}
+	return nil
+}
+
 type GetSettingsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -3500,7 +5510,7 @@ type GetSettingsRequest struct {
 
 func (x *GetSettingsRequest) Reset() {
 	*x = GetSettingsRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[37]
+	mi := &file_downex_v1_downex_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3512,7 +5522,7 @@ func (x *GetSettingsRequest) String() string {
 func (*GetSettingsRequest) ProtoMessage() {}
 
 func (x *GetSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[37]
+	mi := &file_downex_v1_downex_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3525,7 +5535,7 @@ func (x *GetSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{37}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{55}
 }
 
 type GetSettingsResponse struct {
@@ -3537,7 +5547,7 @@ type GetSettingsResponse struct {
 
 func (x *GetSettingsResponse) Reset() {
 	*x = GetSettingsResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[38]
+	mi := &file_downex_v1_downex_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3549,7 +5559,7 @@ func (x *GetSettingsResponse) String() string {
 func (*GetSettingsResponse) ProtoMessage() {}
 
 func (x *GetSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[38]
+	mi := &file_downex_v1_downex_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3562,7 +5572,7 @@ func (x *GetSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSettingsResponse.ProtoReflect.Descriptor instead.
 func (*GetSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{38}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *GetSettingsResponse) GetSettings() *Settings {
@@ -3581,7 +5591,7 @@ type UpdateSettingsRequest struct {
 
 func (x *UpdateSettingsRequest) Reset() {
 	*x = UpdateSettingsRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[39]
+	mi := &file_downex_v1_downex_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3593,7 +5603,7 @@ func (x *UpdateSettingsRequest) String() string {
 func (*UpdateSettingsRequest) ProtoMessage() {}
 
 func (x *UpdateSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[39]
+	mi := &file_downex_v1_downex_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3606,7 +5616,7 @@ func (x *UpdateSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSettingsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{39}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *UpdateSettingsRequest) GetSettings() *Settings {
@@ -3625,7 +5635,7 @@ type UpdateSettingsResponse struct {
 
 func (x *UpdateSettingsResponse) Reset() {
 	*x = UpdateSettingsResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[40]
+	mi := &file_downex_v1_downex_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3637,7 +5647,7 @@ func (x *UpdateSettingsResponse) String() string {
 func (*UpdateSettingsResponse) ProtoMessage() {}
 
 func (x *UpdateSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[40]
+	mi := &file_downex_v1_downex_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3650,7 +5660,7 @@ func (x *UpdateSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSettingsResponse.ProtoReflect.Descriptor instead.
 func (*UpdateSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{40}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *UpdateSettingsResponse) GetSettings() *Settings {
@@ -3668,7 +5678,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[41]
+	mi := &file_downex_v1_downex_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3680,7 +5690,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[41]
+	mi := &file_downex_v1_downex_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3693,7 +5703,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{41}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{59}
 }
 
 type ShutdownResponse struct {
@@ -3704,7 +5714,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[42]
+	mi := &file_downex_v1_downex_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3716,7 +5726,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[42]
+	mi := &file_downex_v1_downex_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3729,7 +5739,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{42}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{60}
 }
 
 // Schedule for a queue, in local time.
@@ -3749,7 +5759,7 @@ type Schedule struct {
 
 func (x *Schedule) Reset() {
 	*x = Schedule{}
-	mi := &file_downex_v1_downex_proto_msgTypes[43]
+	mi := &file_downex_v1_downex_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3761,7 +5771,7 @@ func (x *Schedule) String() string {
 func (*Schedule) ProtoMessage() {}
 
 func (x *Schedule) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[43]
+	mi := &file_downex_v1_downex_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3774,7 +5784,7 @@ func (x *Schedule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Schedule.ProtoReflect.Descriptor instead.
 func (*Schedule) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{43}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *Schedule) GetEnabled() bool {
@@ -3850,7 +5860,7 @@ type Queue struct {
 
 func (x *Queue) Reset() {
 	*x = Queue{}
-	mi := &file_downex_v1_downex_proto_msgTypes[44]
+	mi := &file_downex_v1_downex_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3862,7 +5872,7 @@ func (x *Queue) String() string {
 func (*Queue) ProtoMessage() {}
 
 func (x *Queue) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[44]
+	mi := &file_downex_v1_downex_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3875,7 +5885,7 @@ func (x *Queue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Queue.ProtoReflect.Descriptor instead.
 func (*Queue) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{44}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *Queue) GetId() int64 {
@@ -3953,7 +5963,7 @@ type PostActionPending struct {
 
 func (x *PostActionPending) Reset() {
 	*x = PostActionPending{}
-	mi := &file_downex_v1_downex_proto_msgTypes[45]
+	mi := &file_downex_v1_downex_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3965,7 +5975,7 @@ func (x *PostActionPending) String() string {
 func (*PostActionPending) ProtoMessage() {}
 
 func (x *PostActionPending) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[45]
+	mi := &file_downex_v1_downex_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3978,7 +5988,7 @@ func (x *PostActionPending) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PostActionPending.ProtoReflect.Descriptor instead.
 func (*PostActionPending) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{45}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *PostActionPending) GetQueueId() int64 {
@@ -4017,7 +6027,7 @@ type ListQueuesRequest struct {
 
 func (x *ListQueuesRequest) Reset() {
 	*x = ListQueuesRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[46]
+	mi := &file_downex_v1_downex_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4029,7 +6039,7 @@ func (x *ListQueuesRequest) String() string {
 func (*ListQueuesRequest) ProtoMessage() {}
 
 func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[46]
+	mi := &file_downex_v1_downex_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4042,7 +6052,7 @@ func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueuesRequest.ProtoReflect.Descriptor instead.
 func (*ListQueuesRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{46}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{64}
 }
 
 type ListQueuesResponse struct {
@@ -4054,7 +6064,7 @@ type ListQueuesResponse struct {
 
 func (x *ListQueuesResponse) Reset() {
 	*x = ListQueuesResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[47]
+	mi := &file_downex_v1_downex_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4066,7 +6076,7 @@ func (x *ListQueuesResponse) String() string {
 func (*ListQueuesResponse) ProtoMessage() {}
 
 func (x *ListQueuesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[47]
+	mi := &file_downex_v1_downex_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4079,7 +6089,7 @@ func (x *ListQueuesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueuesResponse.ProtoReflect.Descriptor instead.
 func (*ListQueuesResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{47}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ListQueuesResponse) GetQueues() []*Queue {
@@ -4098,7 +6108,7 @@ type CreateQueueRequest struct {
 
 func (x *CreateQueueRequest) Reset() {
 	*x = CreateQueueRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[48]
+	mi := &file_downex_v1_downex_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4110,7 +6120,7 @@ func (x *CreateQueueRequest) String() string {
 func (*CreateQueueRequest) ProtoMessage() {}
 
 func (x *CreateQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[48]
+	mi := &file_downex_v1_downex_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4123,7 +6133,7 @@ func (x *CreateQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateQueueRequest.ProtoReflect.Descriptor instead.
 func (*CreateQueueRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{48}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *CreateQueueRequest) GetQueue() *Queue {
@@ -4142,7 +6152,7 @@ type CreateQueueResponse struct {
 
 func (x *CreateQueueResponse) Reset() {
 	*x = CreateQueueResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[49]
+	mi := &file_downex_v1_downex_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4154,7 +6164,7 @@ func (x *CreateQueueResponse) String() string {
 func (*CreateQueueResponse) ProtoMessage() {}
 
 func (x *CreateQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[49]
+	mi := &file_downex_v1_downex_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4167,7 +6177,7 @@ func (x *CreateQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateQueueResponse.ProtoReflect.Descriptor instead.
 func (*CreateQueueResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{49}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CreateQueueResponse) GetQueue() *Queue {
@@ -4186,7 +6196,7 @@ type UpdateQueueRequest struct {
 
 func (x *UpdateQueueRequest) Reset() {
 	*x = UpdateQueueRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[50]
+	mi := &file_downex_v1_downex_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4198,7 +6208,7 @@ func (x *UpdateQueueRequest) String() string {
 func (*UpdateQueueRequest) ProtoMessage() {}
 
 func (x *UpdateQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[50]
+	mi := &file_downex_v1_downex_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4211,7 +6221,7 @@ func (x *UpdateQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateQueueRequest.ProtoReflect.Descriptor instead.
 func (*UpdateQueueRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{50}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *UpdateQueueRequest) GetQueue() *Queue {
@@ -4230,7 +6240,7 @@ type UpdateQueueResponse struct {
 
 func (x *UpdateQueueResponse) Reset() {
 	*x = UpdateQueueResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[51]
+	mi := &file_downex_v1_downex_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4242,7 +6252,7 @@ func (x *UpdateQueueResponse) String() string {
 func (*UpdateQueueResponse) ProtoMessage() {}
 
 func (x *UpdateQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[51]
+	mi := &file_downex_v1_downex_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4255,7 +6265,7 @@ func (x *UpdateQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateQueueResponse.ProtoReflect.Descriptor instead.
 func (*UpdateQueueResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{51}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *UpdateQueueResponse) GetQueue() *Queue {
@@ -4274,7 +6284,7 @@ type DeleteQueueRequest struct {
 
 func (x *DeleteQueueRequest) Reset() {
 	*x = DeleteQueueRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[52]
+	mi := &file_downex_v1_downex_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4286,7 +6296,7 @@ func (x *DeleteQueueRequest) String() string {
 func (*DeleteQueueRequest) ProtoMessage() {}
 
 func (x *DeleteQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[52]
+	mi := &file_downex_v1_downex_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4299,7 +6309,7 @@ func (x *DeleteQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteQueueRequest.ProtoReflect.Descriptor instead.
 func (*DeleteQueueRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{52}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *DeleteQueueRequest) GetId() int64 {
@@ -4317,7 +6327,7 @@ type DeleteQueueResponse struct {
 
 func (x *DeleteQueueResponse) Reset() {
 	*x = DeleteQueueResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[53]
+	mi := &file_downex_v1_downex_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4329,7 +6339,7 @@ func (x *DeleteQueueResponse) String() string {
 func (*DeleteQueueResponse) ProtoMessage() {}
 
 func (x *DeleteQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[53]
+	mi := &file_downex_v1_downex_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4342,7 +6352,7 @@ func (x *DeleteQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteQueueResponse.ProtoReflect.Descriptor instead.
 func (*DeleteQueueResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{53}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{71}
 }
 
 type StartQueueRequest struct {
@@ -4354,7 +6364,7 @@ type StartQueueRequest struct {
 
 func (x *StartQueueRequest) Reset() {
 	*x = StartQueueRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[54]
+	mi := &file_downex_v1_downex_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4366,7 +6376,7 @@ func (x *StartQueueRequest) String() string {
 func (*StartQueueRequest) ProtoMessage() {}
 
 func (x *StartQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[54]
+	mi := &file_downex_v1_downex_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4379,7 +6389,7 @@ func (x *StartQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartQueueRequest.ProtoReflect.Descriptor instead.
 func (*StartQueueRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{54}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *StartQueueRequest) GetId() int64 {
@@ -4398,7 +6408,7 @@ type StartQueueResponse struct {
 
 func (x *StartQueueResponse) Reset() {
 	*x = StartQueueResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[55]
+	mi := &file_downex_v1_downex_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4410,7 +6420,7 @@ func (x *StartQueueResponse) String() string {
 func (*StartQueueResponse) ProtoMessage() {}
 
 func (x *StartQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[55]
+	mi := &file_downex_v1_downex_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4423,7 +6433,7 @@ func (x *StartQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartQueueResponse.ProtoReflect.Descriptor instead.
 func (*StartQueueResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{55}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *StartQueueResponse) GetQueue() *Queue {
@@ -4442,7 +6452,7 @@ type StopQueueRequest struct {
 
 func (x *StopQueueRequest) Reset() {
 	*x = StopQueueRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[56]
+	mi := &file_downex_v1_downex_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4454,7 +6464,7 @@ func (x *StopQueueRequest) String() string {
 func (*StopQueueRequest) ProtoMessage() {}
 
 func (x *StopQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[56]
+	mi := &file_downex_v1_downex_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4467,7 +6477,7 @@ func (x *StopQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopQueueRequest.ProtoReflect.Descriptor instead.
 func (*StopQueueRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{56}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *StopQueueRequest) GetId() int64 {
@@ -4486,7 +6496,7 @@ type StopQueueResponse struct {
 
 func (x *StopQueueResponse) Reset() {
 	*x = StopQueueResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[57]
+	mi := &file_downex_v1_downex_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4498,7 +6508,7 @@ func (x *StopQueueResponse) String() string {
 func (*StopQueueResponse) ProtoMessage() {}
 
 func (x *StopQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[57]
+	mi := &file_downex_v1_downex_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4511,7 +6521,7 @@ func (x *StopQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopQueueResponse.ProtoReflect.Descriptor instead.
 func (*StopQueueResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{57}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *StopQueueResponse) GetQueue() *Queue {
@@ -4532,7 +6542,7 @@ type MoveDownloadsRequest struct {
 
 func (x *MoveDownloadsRequest) Reset() {
 	*x = MoveDownloadsRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[58]
+	mi := &file_downex_v1_downex_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4544,7 +6554,7 @@ func (x *MoveDownloadsRequest) String() string {
 func (*MoveDownloadsRequest) ProtoMessage() {}
 
 func (x *MoveDownloadsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[58]
+	mi := &file_downex_v1_downex_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4557,7 +6567,7 @@ func (x *MoveDownloadsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveDownloadsRequest.ProtoReflect.Descriptor instead.
 func (*MoveDownloadsRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{58}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *MoveDownloadsRequest) GetIds() []int64 {
@@ -4590,7 +6600,7 @@ type MoveDownloadsResponse struct {
 
 func (x *MoveDownloadsResponse) Reset() {
 	*x = MoveDownloadsResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[59]
+	mi := &file_downex_v1_downex_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4602,7 +6612,7 @@ func (x *MoveDownloadsResponse) String() string {
 func (*MoveDownloadsResponse) ProtoMessage() {}
 
 func (x *MoveDownloadsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[59]
+	mi := &file_downex_v1_downex_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4615,7 +6625,7 @@ func (x *MoveDownloadsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveDownloadsResponse.ProtoReflect.Descriptor instead.
 func (*MoveDownloadsResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{59}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *MoveDownloadsResponse) GetQueue() *Queue {
@@ -4641,7 +6651,7 @@ type ProxySettings struct {
 
 func (x *ProxySettings) Reset() {
 	*x = ProxySettings{}
-	mi := &file_downex_v1_downex_proto_msgTypes[60]
+	mi := &file_downex_v1_downex_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4653,7 +6663,7 @@ func (x *ProxySettings) String() string {
 func (*ProxySettings) ProtoMessage() {}
 
 func (x *ProxySettings) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[60]
+	mi := &file_downex_v1_downex_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4666,7 +6676,7 @@ func (x *ProxySettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxySettings.ProtoReflect.Descriptor instead.
 func (*ProxySettings) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{60}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ProxySettings) GetMode() ProxyMode {
@@ -4737,7 +6747,7 @@ type HostRule struct {
 
 func (x *HostRule) Reset() {
 	*x = HostRule{}
-	mi := &file_downex_v1_downex_proto_msgTypes[61]
+	mi := &file_downex_v1_downex_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4749,7 +6759,7 @@ func (x *HostRule) String() string {
 func (*HostRule) ProtoMessage() {}
 
 func (x *HostRule) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[61]
+	mi := &file_downex_v1_downex_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4762,7 +6772,7 @@ func (x *HostRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostRule.ProtoReflect.Descriptor instead.
 func (*HostRule) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{61}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *HostRule) GetPattern() string {
@@ -4805,7 +6815,7 @@ type SiteLogin struct {
 
 func (x *SiteLogin) Reset() {
 	*x = SiteLogin{}
-	mi := &file_downex_v1_downex_proto_msgTypes[62]
+	mi := &file_downex_v1_downex_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4817,7 +6827,7 @@ func (x *SiteLogin) String() string {
 func (*SiteLogin) ProtoMessage() {}
 
 func (x *SiteLogin) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[62]
+	mi := &file_downex_v1_downex_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4830,7 +6840,7 @@ func (x *SiteLogin) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SiteLogin.ProtoReflect.Descriptor instead.
 func (*SiteLogin) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{62}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *SiteLogin) GetId() string {
@@ -4872,7 +6882,7 @@ type SetSecretRequest struct {
 
 func (x *SetSecretRequest) Reset() {
 	*x = SetSecretRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[63]
+	mi := &file_downex_v1_downex_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4884,7 +6894,7 @@ func (x *SetSecretRequest) String() string {
 func (*SetSecretRequest) ProtoMessage() {}
 
 func (x *SetSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[63]
+	mi := &file_downex_v1_downex_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4897,7 +6907,7 @@ func (x *SetSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSecretRequest.ProtoReflect.Descriptor instead.
 func (*SetSecretRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{63}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *SetSecretRequest) GetKind() string {
@@ -4929,7 +6939,7 @@ type SetSecretResponse struct {
 
 func (x *SetSecretResponse) Reset() {
 	*x = SetSecretResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[64]
+	mi := &file_downex_v1_downex_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4941,7 +6951,7 @@ func (x *SetSecretResponse) String() string {
 func (*SetSecretResponse) ProtoMessage() {}
 
 func (x *SetSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[64]
+	mi := &file_downex_v1_downex_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4954,7 +6964,7 @@ func (x *SetSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSecretResponse.ProtoReflect.Descriptor instead.
 func (*SetSecretResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{64}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{82}
 }
 
 type ClearSecretRequest struct {
@@ -4967,7 +6977,7 @@ type ClearSecretRequest struct {
 
 func (x *ClearSecretRequest) Reset() {
 	*x = ClearSecretRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[65]
+	mi := &file_downex_v1_downex_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4979,7 +6989,7 @@ func (x *ClearSecretRequest) String() string {
 func (*ClearSecretRequest) ProtoMessage() {}
 
 func (x *ClearSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[65]
+	mi := &file_downex_v1_downex_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4992,7 +7002,7 @@ func (x *ClearSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearSecretRequest.ProtoReflect.Descriptor instead.
 func (*ClearSecretRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{65}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ClearSecretRequest) GetKind() string {
@@ -5017,7 +7027,7 @@ type ClearSecretResponse struct {
 
 func (x *ClearSecretResponse) Reset() {
 	*x = ClearSecretResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[66]
+	mi := &file_downex_v1_downex_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5029,7 +7039,7 @@ func (x *ClearSecretResponse) String() string {
 func (*ClearSecretResponse) ProtoMessage() {}
 
 func (x *ClearSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[66]
+	mi := &file_downex_v1_downex_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5042,7 +7052,7 @@ func (x *ClearSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearSecretResponse.ProtoReflect.Descriptor instead.
 func (*ClearSecretResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{66}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{84}
 }
 
 type UpdateInfo struct {
@@ -5059,7 +7069,7 @@ type UpdateInfo struct {
 
 func (x *UpdateInfo) Reset() {
 	*x = UpdateInfo{}
-	mi := &file_downex_v1_downex_proto_msgTypes[67]
+	mi := &file_downex_v1_downex_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5071,7 +7081,7 @@ func (x *UpdateInfo) String() string {
 func (*UpdateInfo) ProtoMessage() {}
 
 func (x *UpdateInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[67]
+	mi := &file_downex_v1_downex_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5084,7 +7094,7 @@ func (x *UpdateInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateInfo.ProtoReflect.Descriptor instead.
 func (*UpdateInfo) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{67}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *UpdateInfo) GetCurrentVersion() string {
@@ -5137,7 +7147,7 @@ type CheckForUpdateRequest struct {
 
 func (x *CheckForUpdateRequest) Reset() {
 	*x = CheckForUpdateRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[68]
+	mi := &file_downex_v1_downex_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5149,7 +7159,7 @@ func (x *CheckForUpdateRequest) String() string {
 func (*CheckForUpdateRequest) ProtoMessage() {}
 
 func (x *CheckForUpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[68]
+	mi := &file_downex_v1_downex_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5162,7 +7172,7 @@ func (x *CheckForUpdateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckForUpdateRequest.ProtoReflect.Descriptor instead.
 func (*CheckForUpdateRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{68}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{86}
 }
 
 type CheckForUpdateResponse struct {
@@ -5174,7 +7184,7 @@ type CheckForUpdateResponse struct {
 
 func (x *CheckForUpdateResponse) Reset() {
 	*x = CheckForUpdateResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[69]
+	mi := &file_downex_v1_downex_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5186,7 +7196,7 @@ func (x *CheckForUpdateResponse) String() string {
 func (*CheckForUpdateResponse) ProtoMessage() {}
 
 func (x *CheckForUpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[69]
+	mi := &file_downex_v1_downex_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5199,7 +7209,7 @@ func (x *CheckForUpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckForUpdateResponse.ProtoReflect.Descriptor instead.
 func (*CheckForUpdateResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{69}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *CheckForUpdateResponse) GetInfo() *UpdateInfo {
@@ -5217,7 +7227,7 @@ type InstallUpdateRequest struct {
 
 func (x *InstallUpdateRequest) Reset() {
 	*x = InstallUpdateRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[70]
+	mi := &file_downex_v1_downex_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5229,7 +7239,7 @@ func (x *InstallUpdateRequest) String() string {
 func (*InstallUpdateRequest) ProtoMessage() {}
 
 func (x *InstallUpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[70]
+	mi := &file_downex_v1_downex_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5242,7 +7252,7 @@ func (x *InstallUpdateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallUpdateRequest.ProtoReflect.Descriptor instead.
 func (*InstallUpdateRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{70}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{88}
 }
 
 type InstallUpdateResponse struct {
@@ -5254,7 +7264,7 @@ type InstallUpdateResponse struct {
 
 func (x *InstallUpdateResponse) Reset() {
 	*x = InstallUpdateResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[71]
+	mi := &file_downex_v1_downex_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5266,7 +7276,7 @@ func (x *InstallUpdateResponse) String() string {
 func (*InstallUpdateResponse) ProtoMessage() {}
 
 func (x *InstallUpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[71]
+	mi := &file_downex_v1_downex_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5279,7 +7289,7 @@ func (x *InstallUpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallUpdateResponse.ProtoReflect.Descriptor instead.
 func (*InstallUpdateResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{71}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *InstallUpdateResponse) GetInfo() *UpdateInfo {
@@ -5298,7 +7308,7 @@ type CancelPostActionRequest struct {
 
 func (x *CancelPostActionRequest) Reset() {
 	*x = CancelPostActionRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[72]
+	mi := &file_downex_v1_downex_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5310,7 +7320,7 @@ func (x *CancelPostActionRequest) String() string {
 func (*CancelPostActionRequest) ProtoMessage() {}
 
 func (x *CancelPostActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[72]
+	mi := &file_downex_v1_downex_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5323,7 +7333,7 @@ func (x *CancelPostActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelPostActionRequest.ProtoReflect.Descriptor instead.
 func (*CancelPostActionRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{72}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *CancelPostActionRequest) GetQueueId() int64 {
@@ -5341,7 +7351,7 @@ type CancelPostActionResponse struct {
 
 func (x *CancelPostActionResponse) Reset() {
 	*x = CancelPostActionResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[73]
+	mi := &file_downex_v1_downex_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5353,7 +7363,7 @@ func (x *CancelPostActionResponse) String() string {
 func (*CancelPostActionResponse) ProtoMessage() {}
 
 func (x *CancelPostActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[73]
+	mi := &file_downex_v1_downex_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5366,7 +7376,7 @@ func (x *CancelPostActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelPostActionResponse.ProtoReflect.Descriptor instead.
 func (*CancelPostActionResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{73}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{91}
 }
 
 type ToolInfo struct {
@@ -5389,7 +7399,7 @@ type ToolInfo struct {
 
 func (x *ToolInfo) Reset() {
 	*x = ToolInfo{}
-	mi := &file_downex_v1_downex_proto_msgTypes[74]
+	mi := &file_downex_v1_downex_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5401,7 +7411,7 @@ func (x *ToolInfo) String() string {
 func (*ToolInfo) ProtoMessage() {}
 
 func (x *ToolInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[74]
+	mi := &file_downex_v1_downex_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5414,7 +7424,7 @@ func (x *ToolInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolInfo.ProtoReflect.Descriptor instead.
 func (*ToolInfo) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{74}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *ToolInfo) GetName() string {
@@ -5512,7 +7522,7 @@ type ToolsStatus struct {
 
 func (x *ToolsStatus) Reset() {
 	*x = ToolsStatus{}
-	mi := &file_downex_v1_downex_proto_msgTypes[75]
+	mi := &file_downex_v1_downex_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5524,7 +7534,7 @@ func (x *ToolsStatus) String() string {
 func (*ToolsStatus) ProtoMessage() {}
 
 func (x *ToolsStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[75]
+	mi := &file_downex_v1_downex_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5537,7 +7547,7 @@ func (x *ToolsStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolsStatus.ProtoReflect.Descriptor instead.
 func (*ToolsStatus) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{75}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *ToolsStatus) GetTools() []*ToolInfo {
@@ -5569,7 +7579,7 @@ type GetToolsRequest struct {
 
 func (x *GetToolsRequest) Reset() {
 	*x = GetToolsRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[76]
+	mi := &file_downex_v1_downex_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5581,7 +7591,7 @@ func (x *GetToolsRequest) String() string {
 func (*GetToolsRequest) ProtoMessage() {}
 
 func (x *GetToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[76]
+	mi := &file_downex_v1_downex_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5594,7 +7604,7 @@ func (x *GetToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetToolsRequest.ProtoReflect.Descriptor instead.
 func (*GetToolsRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{76}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{94}
 }
 
 type GetToolsResponse struct {
@@ -5606,7 +7616,7 @@ type GetToolsResponse struct {
 
 func (x *GetToolsResponse) Reset() {
 	*x = GetToolsResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[77]
+	mi := &file_downex_v1_downex_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5618,7 +7628,7 @@ func (x *GetToolsResponse) String() string {
 func (*GetToolsResponse) ProtoMessage() {}
 
 func (x *GetToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[77]
+	mi := &file_downex_v1_downex_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5631,7 +7641,7 @@ func (x *GetToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetToolsResponse.ProtoReflect.Descriptor instead.
 func (*GetToolsResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{77}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *GetToolsResponse) GetStatus() *ToolsStatus {
@@ -5650,7 +7660,7 @@ type InstallToolsRequest struct {
 
 func (x *InstallToolsRequest) Reset() {
 	*x = InstallToolsRequest{}
-	mi := &file_downex_v1_downex_proto_msgTypes[78]
+	mi := &file_downex_v1_downex_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5662,7 +7672,7 @@ func (x *InstallToolsRequest) String() string {
 func (*InstallToolsRequest) ProtoMessage() {}
 
 func (x *InstallToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[78]
+	mi := &file_downex_v1_downex_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5675,7 +7685,7 @@ func (x *InstallToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallToolsRequest.ProtoReflect.Descriptor instead.
 func (*InstallToolsRequest) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{78}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *InstallToolsRequest) GetUpdate() bool {
@@ -5694,7 +7704,7 @@ type InstallToolsResponse struct {
 
 func (x *InstallToolsResponse) Reset() {
 	*x = InstallToolsResponse{}
-	mi := &file_downex_v1_downex_proto_msgTypes[79]
+	mi := &file_downex_v1_downex_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5706,7 +7716,7 @@ func (x *InstallToolsResponse) String() string {
 func (*InstallToolsResponse) ProtoMessage() {}
 
 func (x *InstallToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_downex_v1_downex_proto_msgTypes[79]
+	mi := &file_downex_v1_downex_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5719,7 +7729,7 @@ func (x *InstallToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallToolsResponse.ProtoReflect.Descriptor instead.
 func (*InstallToolsResponse) Descriptor() ([]byte, []int) {
-	return file_downex_v1_downex_proto_rawDescGZIP(), []int{79}
+	return file_downex_v1_downex_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *InstallToolsResponse) GetStatus() *ToolsStatus {
@@ -5733,7 +7743,23 @@ var File_downex_v1_downex_proto protoreflect.FileDescriptor
 
 const file_downex_v1_downex_proto_rawDesc = "" +
 	"\n" +
-	"\x16downex/v1/downex.proto\x12\tdownex.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xaa\x02\n" +
+	"\x16downex/v1/downex.proto\x12\tdownex.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x88\x01\n" +
+	"\x0ePlayedResource\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04head\x18\x05 \x01(\fR\x04head\x12\x18\n" +
+	"\abrowser\x18\x06 \x01(\bR\abrowser\"\xf7\x01\n" +
+	"\fPlayedSource\x127\n" +
+	"\tresources\x18\x01 \x03(\v2\x19.downex.v1.PlayedResourceR\tresources\x12\x1f\n" +
+	"\vduration_ms\x18\x02 \x01(\x03R\n" +
+	"durationMs\x12\x1f\n" +
+	"\vvideo_width\x18\x03 \x01(\x05R\n" +
+	"videoWidth\x12!\n" +
+	"\fvideo_height\x18\x04 \x01(\x05R\vvideoHeight\x12\x1b\n" +
+	"\thas_audio\x18\x05 \x01(\x05R\bhasAudio\x12,\n" +
+	"\x12other_durations_ms\x18\x06 \x03(\x03R\x10otherDurationsMs\"\xaa\x02\n" +
 	"\n" +
 	"MediaTrack\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -5750,7 +7776,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	" \x01(\x03R\x04size\x12\x1f\n" +
 	"\vsize_approx\x18\v \x01(\bR\n" +
 	"sizeApprox\x12\x10\n" +
-	"\x03ext\x18\f \x01(\tR\x03ext\"\xc7\x03\n" +
+	"\x03ext\x18\f \x01(\tR\x03ext\"\xb3\x05\n" +
 	"\tMediaInfo\x12!\n" +
 	"\fmanifest_url\x18\x01 \x01(\tR\vmanifestUrl\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12-\n" +
@@ -5766,14 +7792,41 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	" \x01(\tR\x05title\x12.\n" +
 	"\x06origin\x18\v \x01(\x0e2\x16.downex.v1.MediaOriginR\x06origin\x12\x12\n" +
 	"\x04site\x18\f \x01(\tR\x04site\x12\x19\n" +
-	"\bpage_url\x18\r \x01(\tR\apageUrl\"2\n" +
+	"\bpage_url\x18\r \x01(\tR\apageUrl\x12.\n" +
+	"\bchapters\x18\x0e \x03(\v2\x12.downex.v1.ChapterR\bchapters\x12(\n" +
+	"\x04clip\x18\x0f \x01(\v2\x14.downex.v1.MediaClipR\x04clip\x12*\n" +
+	"\x05items\x18\x10 \x03(\v2\x14.downex.v1.MediaItemR\x05items\x12\x19\n" +
+	"\bentry_id\x18\x11 \x01(\tR\aentryId\x12$\n" +
+	"\x0eitems_left_out\x18\x12 \x01(\x05R\fitemsLeftOut\x12#\n" +
+	"\rbrowser_fetch\x18\x13 \x01(\bR\fbrowserFetch\"p\n" +
+	"\tMediaItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1f\n" +
+	"\vduration_ms\x18\x03 \x01(\x03R\n" +
+	"durationMs\x12\x1c\n" +
+	"\tthumbnail\x18\x04 \x01(\tR\tthumbnail\"Q\n" +
+	"\aChapter\x12\x19\n" +
+	"\bstart_ms\x18\x01 \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\x02 \x01(\x03R\x05endMs\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\"\xe5\x01\n" +
+	"\tMediaClip\x12\x19\n" +
+	"\bstart_ms\x18\x01 \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\x02 \x01(\x03R\x05endMs\x12\x18\n" +
+	"\achapter\x18\x03 \x01(\tR\achapter\x12\x1f\n" +
+	"\vkeyframe_ms\x18\x04 \x01(\x03R\n" +
+	"keyframeMs\x12$\n" +
+	"\x0efetch_start_ms\x18\x05 \x01(\x03R\ffetchStartMs\x12 \n" +
+	"\ffetch_end_ms\x18\x06 \x01(\x03R\n" +
+	"fetchEndMs\x12#\n" +
+	"\rfetched_whole\x18\a \x01(\bR\ffetchedWhole\"2\n" +
 	"\x06Header\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"M\n" +
 	"\aSegment\x12\x14\n" +
 	"\x05start\x18\x01 \x01(\x03R\x05start\x12\x10\n" +
 	"\x03end\x18\x02 \x01(\x03R\x03end\x12\x1a\n" +
-	"\breceived\x18\x03 \x01(\x03R\breceived\"\xa7\t\n" +
+	"\breceived\x18\x03 \x01(\x03R\breceived\"\xf5\n" +
+	"\n" +
 	"\bDownload\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x1b\n" +
@@ -5813,7 +7866,39 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"started_at\x18\x1e \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12\x19\n" +
 	"\bqueue_id\x18\x1f \x01(\x03R\aqueueId\x12\x1f\n" +
 	"\vsize_approx\x18  \x01(\bR\n" +
-	"sizeApprox\"\xed\x01\n" +
+	"sizeApprox\x123\n" +
+	"\n" +
+	"file_check\x18! \x01(\v2\x14.downex.v1.FileCheckR\tfileCheck\x12\x19\n" +
+	"\bpage_url\x18\" \x01(\tR\apageUrl\x126\n" +
+	"\vrenew_offer\x18# \x01(\v2\x15.downex.v1.RenewOfferR\n" +
+	"renewOffer\x12\x1f\n" +
+	"\vrenew_check\x18$ \x01(\bR\n" +
+	"renewCheck\x12#\n" +
+	"\rrescued_bytes\x18% \x01(\x03R\frescuedBytes\"\x9c\x01\n" +
+	"\n" +
+	"RenewOffer\x12\x1f\n" +
+	"\vdownload_id\x18\x01 \x01(\x03R\n" +
+	"downloadId\x12\x1a\n" +
+	"\bfilename\x18\x02 \x01(\tR\bfilename\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x1a\n" +
+	"\breceived\x18\x04 \x01(\x03R\breceived\x12!\n" +
+	"\fname_differs\x18\x05 \x01(\bR\vnameDiffers\"\xa8\x03\n" +
+	"\tFileCheck\x12/\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x19.downex.v1.FileCheckLevelR\x05level\x12/\n" +
+	"\x05stage\x18\x02 \x01(\x0e2\x19.downex.v1.FileCheckStageR\x05stage\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
+	"\acontent\x18\x04 \x01(\tR\acontent\x12#\n" +
+	"\rcontent_label\x18\x05 \x01(\tR\fcontentLabel\x12\x1f\n" +
+	"\vclaim_label\x18\x06 \x01(\tR\n" +
+	"claimLabel\x12\x1f\n" +
+	"\vserved_type\x18\a \x01(\tR\n" +
+	"servedType\x12\x16\n" +
+	"\x06member\x18\b \x01(\tR\x06member\x12'\n" +
+	"\x0fprogram_members\x18\t \x01(\x05R\x0eprogramMembers\x12-\n" +
+	"\x12listing_incomplete\x18\n" +
+	" \x01(\bR\x11listingIncomplete\x12\x18\n" +
+	"\asummary\x18\v \x01(\tR\asummary\x12\x16\n" +
+	"\x06detail\x18\f \x01(\tR\x06detail\"\xed\x01\n" +
 	"\x0eConnectionInfo\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\x05R\x05index\x120\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1a.downex.v1.ConnectionStateR\x05state\x12\x14\n" +
@@ -5822,7 +7907,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\breceived\x18\x05 \x01(\x03R\breceived\x12\x1b\n" +
 	"\tspeed_bps\x18\x06 \x01(\x01R\bspeedBps\x12\x16\n" +
 	"\x06detail\x18\a \x01(\tR\x06detail\x12\x1a\n" +
-	"\bfragment\x18\b \x01(\x05R\bfragment\"\x94\x03\n" +
+	"\bfragment\x18\b \x01(\x05R\bfragment\"\xaf\x03\n" +
 	"\n" +
 	"AddRequest\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
@@ -5839,7 +7924,8 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	" \x01(\x0e2\x14.downex.v1.AddSourceR\x06source\x12#\n" +
 	"\rexpected_size\x18\v \x01(\x03R\fexpectedSize\x12\x12\n" +
 	"\x04mime\x18\f \x01(\tR\x04mime\x12\x19\n" +
-	"\bqueue_id\x18\r \x01(\x03R\aqueueId\"\xb9\x02\n" +
+	"\bqueue_id\x18\r \x01(\x03R\aqueueId\x12\x19\n" +
+	"\bpage_url\x18\x0e \x01(\tR\apageUrl\"\xfe\x02\n" +
 	"\x0eConfirmRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x10\n" +
 	"\x03dir\x18\x02 \x01(\tR\x03dir\x12\x1a\n" +
@@ -5852,9 +7938,12 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"videoTrack\x12\x1f\n" +
 	"\vaudio_track\x18\b \x01(\tR\n" +
 	"audioTrack\x12\x19\n" +
-	"\bqueue_id\x18\t \x01(\x03R\aqueueIdB\x12\n" +
+	"\bqueue_id\x18\t \x01(\x03R\aqueueId\x12(\n" +
+	"\x04clip\x18\n" +
+	" \x01(\v2\x14.downex.v1.MediaClipR\x04clip\x12\x19\n" +
+	"\bentry_id\x18\v \x01(\tR\aentryIdB\x12\n" +
 	"\x10_max_connectionsB\x0e\n" +
-	"\f_speed_limit\"\x9e\x03\n" +
+	"\f_speed_limit\"\xde\x04\n" +
 	"\x0fAddMediaRequest\x12!\n" +
 	"\fmanifest_url\x18\x01 \x01(\tR\vmanifestUrl\x12+\n" +
 	"\aheaders\x18\x02 \x03(\v2\x11.downex.v1.HeaderR\aheaders\x12\x10\n" +
@@ -5870,15 +7959,52 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\fstart_paused\x18\n" +
 	" \x01(\bR\vstartPaused\x12\x19\n" +
 	"\bqueue_id\x18\v \x01(\x03R\aqueueId\x12.\n" +
-	"\x06origin\x18\f \x01(\x0e2\x16.downex.v1.MediaOriginR\x06origin\"C\n" +
+	"\x06origin\x18\f \x01(\x0e2\x16.downex.v1.MediaOriginR\x06origin\x12(\n" +
+	"\x04clip\x18\r \x01(\v2\x14.downex.v1.MediaClipR\x04clip\x12\x19\n" +
+	"\bentry_id\x18\x0e \x01(\tR\aentryId\x12#\n" +
+	"\rcookie_domain\x18\x0f \x01(\tR\fcookieDomain\x12#\n" +
+	"\rbrowser_fetch\x18\x10 \x01(\bR\fbrowserFetch\x12/\n" +
+	"\x06played\x18\x11 \x01(\v2\x17.downex.v1.PlayedSourceR\x06played\"f\n" +
 	"\x10AddMediaResponse\x12/\n" +
-	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\"\xca\x01\n" +
+	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\x12!\n" +
+	"\ffetch_ticket\x18\x02 \x01(\tR\vfetchTicket\"L\n" +
+	"\x17TakeBrowserFetchRequest\x12\x18\n" +
+	"\atickets\x18\x01 \x03(\tR\atickets\x12\x17\n" +
+	"\await_ms\x18\x02 \x01(\x05R\x06waitMs\"n\n" +
+	"\x18TakeBrowserFetchResponse\x12-\n" +
+	"\x05fetch\x18\x01 \x01(\v2\x17.downex.v1.BrowserFetchR\x05fetch\x12#\n" +
+	"\rended_tickets\x18\x02 \x03(\tR\fendedTickets\"\x91\x01\n" +
+	"\fBrowserFetch\x12\x16\n" +
+	"\x06ticket\x18\x01 \x01(\tR\x06ticket\x12\x19\n" +
+	"\bfetch_id\x18\x02 \x01(\tR\afetchId\x12\x10\n" +
+	"\x03url\x18\x03 \x01(\tR\x03url\x12\x14\n" +
+	"\x05start\x18\x04 \x01(\x03R\x05start\x12\x10\n" +
+	"\x03end\x18\x05 \x01(\x03R\x03end\x12\x14\n" +
+	"\x05total\x18\x06 \x01(\x03R\x05total\"\xca\x01\n" +
+	"\x16PutBrowserFetchRequest\x12\x16\n" +
+	"\x06ticket\x18\x01 \x01(\tR\x06ticket\x12\x19\n" +
+	"\bfetch_id\x18\x02 \x01(\tR\afetchId\x12\x10\n" +
+	"\x03seq\x18\x03 \x01(\x03R\x03seq\x12/\n" +
+	"\x04head\x18\x04 \x01(\v2\x1b.downex.v1.BrowserFetchHeadR\x04head\x12\x12\n" +
+	"\x04data\x18\x05 \x01(\fR\x04data\x12\x10\n" +
+	"\x03end\x18\x06 \x01(\bR\x03end\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error\"\x99\x01\n" +
+	"\x10BrowserFetchHead\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\x05R\x06status\x12!\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12#\n" +
+	"\rcontent_range\x18\x03 \x01(\tR\fcontentRange\x12%\n" +
+	"\x0econtent_length\x18\x04 \x01(\x03R\rcontentLength\"-\n" +
+	"\x17PutBrowserFetchResponse\x12\x12\n" +
+	"\x04stop\x18\x01 \x01(\bR\x04stop\"\xbb\x02\n" +
 	"\x11ProbeMediaRequest\x12!\n" +
 	"\fmanifest_url\x18\x01 \x01(\tR\vmanifestUrl\x12+\n" +
 	"\aheaders\x18\x02 \x03(\v2\x11.downex.v1.HeaderR\aheaders\x12\x19\n" +
 	"\bpage_url\x18\x03 \x01(\tR\apageUrl\x12.\n" +
 	"\x06origin\x18\x04 \x01(\x0e2\x16.downex.v1.MediaOriginR\x06origin\x12\x1a\n" +
-	"\bprefetch\x18\x05 \x01(\bR\bprefetch\"@\n" +
+	"\bprefetch\x18\x05 \x01(\bR\bprefetch\x12\x19\n" +
+	"\bentry_id\x18\x06 \x01(\tR\aentryId\x12#\n" +
+	"\rcookie_domain\x18\a \x01(\tR\fcookieDomain\x12/\n" +
+	"\x06played\x18\b \x01(\v2\x17.downex.v1.PlayedSourceR\x06played\"@\n" +
 	"\x12ProbeMediaResponse\x12*\n" +
 	"\x05media\x18\x01 \x01(\v2\x14.downex.v1.MediaInfoR\x05media\"B\n" +
 	"\x0fConfirmResponse\x12/\n" +
@@ -5902,14 +8028,15 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\fPauseRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\"@\n" +
 	"\rPauseResponse\x12/\n" +
-	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\"\xef\x01\n" +
+	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\"\x92\x02\n" +
 	"\rResumeRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x18\n" +
 	"\arestart\x18\x02 \x01(\bR\arestart\x12,\n" +
 	"\x0fmax_connections\x18\x03 \x01(\x05H\x00R\x0emaxConnections\x88\x01\x01\x12$\n" +
 	"\vspeed_limit\x18\x04 \x01(\x03H\x01R\n" +
 	"speedLimit\x88\x01\x01\x12<\n" +
-	"\rexisting_file\x18\x05 \x01(\x0e2\x17.downex.v1.ExistingFileR\fexistingFileB\x12\n" +
+	"\rexisting_file\x18\x05 \x01(\x0e2\x17.downex.v1.ExistingFileR\fexistingFile\x12!\n" +
+	"\frescue_start\x18\x06 \x01(\bR\vrescueStartB\x12\n" +
 	"\x10_max_connectionsB\x0e\n" +
 	"\f_speed_limit\"A\n" +
 	"\x0eResumeResponse\x12/\n" +
@@ -5920,7 +8047,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"deleteFile\"\x10\n" +
 	"\x0eRemoveResponse\" \n" +
 	"\fWatchRequest\x12\x10\n" +
-	"\x03ids\x18\x01 \x03(\x03R\x03ids\"\x91\x03\n" +
+	"\x03ids\x18\x01 \x03(\x03R\x03ids\"\xc4\x03\n" +
 	"\x05Event\x121\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x13.downex.v1.DownloadH\x00R\bsnapshot\x12/\n" +
 	"\aupdated\x18\x02 \x01(\v2\x13.downex.v1.DownloadH\x00R\aupdated\x12\x1a\n" +
@@ -5930,10 +8057,55 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\vpost_action\x18\x06 \x01(\v2\x1c.downex.v1.PostActionPendingH\x00R\n" +
 	"postAction\x12.\n" +
 	"\x05tools\x18\a \x01(\v2\x16.downex.v1.ToolsStatusH\x00R\x05tools\x12/\n" +
-	"\x06update\x18\b \x01(\v2\x15.downex.v1.UpdateInfoH\x00R\x06updateB\x06\n" +
-	"\x04kind\"9\n" +
+	"\x06update\x18\b \x01(\v2\x15.downex.v1.UpdateInfoH\x00R\x06update\x121\n" +
+	"\x06polite\x18\x14 \x01(\v2\x17.downex.v1.PoliteStatusH\x00R\x06politeB\x06\n" +
+	"\x04kind\"\xc1\x01\n" +
+	"\fPoliteStatus\x12,\n" +
+	"\x05state\x18\x01 \x01(\x0e2\x16.downex.v1.PoliteStateR\x05state\x12\x1d\n" +
+	"\n" +
+	"rate_limit\x18\x02 \x01(\x03R\trateLimit\x12\x19\n" +
+	"\bdelay_ms\x18\x03 \x01(\x05R\adelayMs\x12\x17\n" +
+	"\abase_ms\x18\x04 \x01(\x05R\x06baseMs\x120\n" +
+	"\x05since\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\"9\n" +
 	"\rWatchResponse\x12(\n" +
-	"\x06events\x18\x01 \x03(\v2\x10.downex.v1.EventR\x06events\"\xeb\x01\n" +
+	"\x06events\x18\x01 \x03(\v2\x10.downex.v1.EventR\x06events\"\x9f\x02\n" +
+	"\x10RenewLinkRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x03url\x18\x02 \x01(\tH\x00R\x03url\x12%\n" +
+	"\rfrom_download\x18\x03 \x01(\x03H\x00R\ffromDownload\x12+\n" +
+	"\aheaders\x18\x04 \x03(\v2\x11.downex.v1.HeaderR\aheaders\x12*\n" +
+	"\x11allow_name_change\x18\x05 \x01(\bR\x0fallowNameChange\x12.\n" +
+	"\x13restart_if_unproven\x18\x06 \x01(\bR\x11restartIfUnproven\x12\x14\n" +
+	"\x05start\x18\a \x01(\bR\x05start\x12\x19\n" +
+	"\bpage_url\x18\b \x01(\tR\apageUrlB\x06\n" +
+	"\x04link\"\x85\x01\n" +
+	"\x11RenewLinkResponse\x12/\n" +
+	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\x12\x1c\n" +
+	"\trestarted\x18\x02 \x01(\bR\trestarted\x12!\n" +
+	"\fname_differs\x18\x03 \x01(\bR\vnameDiffers\"\xa8\x04\n" +
+	"\rRescueRequest\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12+\n" +
+	"\aheaders\x18\x02 \x03(\v2\x11.downex.v1.HeaderR\aheaders\x12!\n" +
+	"\fpartial_path\x18\x03 \x01(\tR\vpartialPath\x12\x1f\n" +
+	"\vtarget_path\x18\x04 \x01(\tR\n" +
+	"targetPath\x12%\n" +
+	"\x0ebytes_received\x18\x05 \x01(\x03R\rbytesReceived\x12#\n" +
+	"\rexpected_size\x18\x06 \x01(\x03R\fexpectedSize\x12\x12\n" +
+	"\x04etag\x18\a \x01(\tR\x04etag\x12#\n" +
+	"\rlast_modified\x18\b \x01(\tR\flastModified\x12\x1a\n" +
+	"\bfilename\x18\t \x01(\tR\bfilename\x12,\n" +
+	"\x06source\x18\n" +
+	" \x01(\x0e2\x14.downex.v1.AddSourceR\x06source\x12\x19\n" +
+	"\bqueue_id\x18\v \x01(\x03R\aqueueId\x12'\n" +
+	"\x0fmax_connections\x18\f \x01(\x05R\x0emaxConnections\x12\x1f\n" +
+	"\vspeed_limit\x18\r \x01(\x03R\n" +
+	"speedLimit\x12!\n" +
+	"\fstart_paused\x18\x0e \x01(\bR\vstartPaused\x12\"\n" +
+	"\rstarted_at_ms\x18\x0f \x01(\x03R\vstartedAtMs\x12\x19\n" +
+	"\bpage_url\x18\x10 \x01(\tR\apageUrl\"f\n" +
+	"\x0eRescueResponse\x12/\n" +
+	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\x12#\n" +
+	"\rrescued_bytes\x18\x02 \x01(\x03R\frescuedBytes\"\xeb\x01\n" +
 	"\x19SetDownloadOptionsRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12$\n" +
 	"\vspeed_limit\x18\x02 \x01(\x03H\x00R\n" +
@@ -5950,7 +8122,8 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\n" +
 	"extensions\x18\x02 \x03(\tR\n" +
 	"extensions\x12\x10\n" +
-	"\x03dir\x18\x03 \x01(\tR\x03dir\"\xae\t\n" +
+	"\x03dir\x18\x03 \x01(\tR\x03dir\"\xe7\n" +
+	"\n" +
 	"\bSettings\x128\n" +
 	"\x18max_concurrent_downloads\x18\x01 \x01(\x05R\x16maxConcurrentDownloads\x12,\n" +
 	"\x12global_speed_limit\x18\x02 \x01(\x03R\x10globalSpeedLimit\x12\x1f\n" +
@@ -5985,8 +8158,14 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\n" +
 	"site_media\x18\x18 \x01(\bR\tsiteMedia\x12*\n" +
 	"\x11tools_auto_update\x18\x19 \x01(\bR\x0ftoolsAutoUpdate\x12#\n" +
-	"\rtools_channel\x18\x1a \x01(\tR\ftoolsChannel\"\x0f\n" +
-	"\rStatusRequest\"\xc1\x02\n" +
+	"\rtools_channel\x18\x1a \x01(\tR\ftoolsChannel\x124\n" +
+	"\x16check_downloaded_files\x18\x1b \x01(\bR\x14checkDownloadedFiles\x126\n" +
+	"\vrenew_links\x18\x1c \x01(\x0e2\x15.downex.v1.RenewLinksR\n" +
+	"renewLinks\x12\x1f\n" +
+	"\vpolite_mode\x18( \x01(\bR\n" +
+	"politeMode\x12(\n" +
+	"\x10polite_target_ms\x18) \x01(\x05R\x0epoliteTargetMs\"\x0f\n" +
+	"\rStatusRequest\"\xf2\x02\n" +
 	"\x0eStatusResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x10\n" +
 	"\x03pid\x18\x02 \x01(\x05R\x03pid\x129\n" +
@@ -5999,7 +8178,8 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\alog_dir\x18\b \x01(\tR\x06logDir\x12\x1b\n" +
 	"\ttools_dir\x18\t \x01(\tR\btoolsDir\x12+\n" +
 	"\x11updates_supported\x18\n" +
-	" \x01(\bR\x10updatesSupported\"\x14\n" +
+	" \x01(\bR\x10updatesSupported\x12/\n" +
+	"\x06polite\x18\x14 \x01(\v2\x17.downex.v1.PoliteStatusR\x06polite\"\x14\n" +
 	"\x12GetSettingsRequest\"F\n" +
 	"\x13GetSettingsResponse\x12/\n" +
 	"\bsettings\x18\x01 \x01(\v2\x13.downex.v1.SettingsR\bsettings\"H\n" +
@@ -6157,11 +8337,12 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\fDownloadKind\x12\x1d\n" +
 	"\x19DOWNLOAD_KIND_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12DOWNLOAD_KIND_FILE\x10\x01\x12\x17\n" +
-	"\x13DOWNLOAD_KIND_MEDIA\x10\x02*]\n" +
+	"\x13DOWNLOAD_KIND_MEDIA\x10\x02*v\n" +
 	"\vMediaOrigin\x12\x1c\n" +
 	"\x18MEDIA_ORIGIN_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15MEDIA_ORIGIN_MANIFEST\x10\x01\x12\x15\n" +
-	"\x11MEDIA_ORIGIN_SITE\x10\x02*\x80\x01\n" +
+	"\x11MEDIA_ORIGIN_SITE\x10\x02\x12\x17\n" +
+	"\x13MEDIA_ORIGIN_PLAYED\x10\x03*\x80\x01\n" +
 	"\tAddSource\x12\x1a\n" +
 	"\x16ADD_SOURCE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eADD_SOURCE_CLI\x10\x01\x12\x11\n" +
@@ -6171,7 +8352,17 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x04Mode\x12\x14\n" +
 	"\x10MODE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vMODE_RANGED\x10\x01\x12\x0f\n" +
-	"\vMODE_SINGLE\x10\x02*\x86\x02\n" +
+	"\vMODE_SINGLE\x10\x02*\x88\x01\n" +
+	"\x0eFileCheckLevel\x12 \n" +
+	"\x1cFILE_CHECK_LEVEL_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15FILE_CHECK_LEVEL_NOTE\x10\x01\x12\x1c\n" +
+	"\x18FILE_CHECK_LEVEL_CAUTION\x10\x02\x12\x1b\n" +
+	"\x17FILE_CHECK_LEVEL_DANGER\x10\x03*\x85\x01\n" +
+	"\x0eFileCheckStage\x12 \n" +
+	"\x1cFILE_CHECK_STAGE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15FILE_CHECK_STAGE_NAME\x10\x01\x12\x1a\n" +
+	"\x16FILE_CHECK_STAGE_EARLY\x10\x02\x12\x1a\n" +
+	"\x16FILE_CHECK_STAGE_FINAL\x10\x03*\x86\x02\n" +
 	"\x0fConnectionState\x12 \n" +
 	"\x1cCONNECTION_STATE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCONNECTION_STATE_CONNECTING\x10\x01\x12\x1f\n" +
@@ -6184,7 +8375,22 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\fExistingFile\x12\x1d\n" +
 	"\x19EXISTING_FILE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EXISTING_FILE_KEEP_BOTH\x10\x01\x12\x19\n" +
-	"\x15EXISTING_FILE_REPLACE\x10\x02*\x92\x01\n" +
+	"\x15EXISTING_FILE_REPLACE\x10\x02*\xe2\x01\n" +
+	"\vPoliteState\x12\x1c\n" +
+	"\x18POLITE_STATE_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10POLITE_STATE_OFF\x10\x01\x12\x15\n" +
+	"\x11POLITE_STATE_IDLE\x10\x02\x12\x19\n" +
+	"\x15POLITE_STATE_WATCHING\x10\x03\x12\x17\n" +
+	"\x13POLITE_STATE_SLOWED\x10\x04\x12\x1a\n" +
+	"\x16POLITE_STATE_MEASURING\x10\x05\x12\x1a\n" +
+	"\x16POLITE_STATE_NO_SIGNAL\x10\x06\x12\x1c\n" +
+	"\x18POLITE_STATE_UNAVAILABLE\x10\a*i\n" +
+	"\n" +
+	"RenewLinks\x12\x1b\n" +
+	"\x17RENEW_LINKS_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10RENEW_LINKS_AUTO\x10\x01\x12\x13\n" +
+	"\x0fRENEW_LINKS_ASK\x10\x02\x12\x13\n" +
+	"\x0fRENEW_LINKS_OFF\x10\x03*\x92\x01\n" +
 	"\n" +
 	"PostAction\x12\x1b\n" +
 	"\x17POST_ACTION_UNSPECIFIED\x10\x00\x12\x1b\n" +
@@ -6204,7 +8410,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x15TOOL_STATE_INSTALLING\x10\x02\x12\x14\n" +
 	"\x10TOOL_STATE_READY\x10\x03\x12\x15\n" +
 	"\x11TOOL_STATE_FAILED\x10\x04\x12\x17\n" +
-	"\x13TOOL_STATE_DISABLED\x10\x052\xf0\x06\n" +
+	"\x13TOOL_STATE_DISABLED\x10\x052\xae\t\n" +
 	"\x0fDownloadService\x124\n" +
 	"\x03Add\x12\x15.downex.v1.AddRequest\x1a\x16.downex.v1.AddResponse\x127\n" +
 	"\x04List\x12\x16.downex.v1.ListRequest\x1a\x17.downex.v1.ListResponse\x124\n" +
@@ -6219,7 +8425,11 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\bAddMedia\x12\x1a.downex.v1.AddMediaRequest\x1a\x1b.downex.v1.AddMediaResponse\x12I\n" +
 	"\n" +
 	"ProbeMedia\x12\x1c.downex.v1.ProbeMediaRequest\x1a\x1d.downex.v1.ProbeMediaResponse\x12a\n" +
-	"\x12SetDownloadOptions\x12$.downex.v1.SetDownloadOptionsRequest\x1a%.downex.v1.SetDownloadOptionsResponse2\xec\x06\n" +
+	"\x12SetDownloadOptions\x12$.downex.v1.SetDownloadOptionsRequest\x1a%.downex.v1.SetDownloadOptionsResponse\x12F\n" +
+	"\tRenewLink\x12\x1b.downex.v1.RenewLinkRequest\x1a\x1c.downex.v1.RenewLinkResponse\x12=\n" +
+	"\x06Rescue\x12\x18.downex.v1.RescueRequest\x1a\x19.downex.v1.RescueResponse\x12[\n" +
+	"\x10TakeBrowserFetch\x12\".downex.v1.TakeBrowserFetchRequest\x1a#.downex.v1.TakeBrowserFetchResponse\x12X\n" +
+	"\x0fPutBrowserFetch\x12!.downex.v1.PutBrowserFetchRequest\x1a\".downex.v1.PutBrowserFetchResponse2\xec\x06\n" +
 	"\rDaemonService\x12=\n" +
 	"\x06Status\x12\x18.downex.v1.StatusRequest\x1a\x19.downex.v1.StatusResponse\x12L\n" +
 	"\vGetSettings\x12\x1d.downex.v1.GetSettingsRequest\x1a\x1e.downex.v1.GetSettingsResponse\x12U\n" +
@@ -6255,237 +8465,291 @@ func file_downex_v1_downex_proto_rawDescGZIP() []byte {
 	return file_downex_v1_downex_proto_rawDescData
 }
 
-var file_downex_v1_downex_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
-var file_downex_v1_downex_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
+var file_downex_v1_downex_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
+var file_downex_v1_downex_proto_msgTypes = make([]protoimpl.MessageInfo, 98)
 var file_downex_v1_downex_proto_goTypes = []any{
 	(DownloadState)(0),                 // 0: downex.v1.DownloadState
 	(DownloadKind)(0),                  // 1: downex.v1.DownloadKind
 	(MediaOrigin)(0),                   // 2: downex.v1.MediaOrigin
 	(AddSource)(0),                     // 3: downex.v1.AddSource
 	(Mode)(0),                          // 4: downex.v1.Mode
-	(ConnectionState)(0),               // 5: downex.v1.ConnectionState
-	(ExistingFile)(0),                  // 6: downex.v1.ExistingFile
-	(PostAction)(0),                    // 7: downex.v1.PostAction
-	(ProxyMode)(0),                     // 8: downex.v1.ProxyMode
-	(ToolState)(0),                     // 9: downex.v1.ToolState
-	(*MediaTrack)(nil),                 // 10: downex.v1.MediaTrack
-	(*MediaInfo)(nil),                  // 11: downex.v1.MediaInfo
-	(*Header)(nil),                     // 12: downex.v1.Header
-	(*Segment)(nil),                    // 13: downex.v1.Segment
-	(*Download)(nil),                   // 14: downex.v1.Download
-	(*ConnectionInfo)(nil),             // 15: downex.v1.ConnectionInfo
-	(*AddRequest)(nil),                 // 16: downex.v1.AddRequest
-	(*ConfirmRequest)(nil),             // 17: downex.v1.ConfirmRequest
-	(*AddMediaRequest)(nil),            // 18: downex.v1.AddMediaRequest
-	(*AddMediaResponse)(nil),           // 19: downex.v1.AddMediaResponse
-	(*ProbeMediaRequest)(nil),          // 20: downex.v1.ProbeMediaRequest
-	(*ProbeMediaResponse)(nil),         // 21: downex.v1.ProbeMediaResponse
-	(*ConfirmResponse)(nil),            // 22: downex.v1.ConfirmResponse
-	(*PauseAllRequest)(nil),            // 23: downex.v1.PauseAllRequest
-	(*PauseAllResponse)(nil),           // 24: downex.v1.PauseAllResponse
-	(*ResumeAllRequest)(nil),           // 25: downex.v1.ResumeAllRequest
-	(*ResumeAllResponse)(nil),          // 26: downex.v1.ResumeAllResponse
-	(*AddResponse)(nil),                // 27: downex.v1.AddResponse
-	(*ListRequest)(nil),                // 28: downex.v1.ListRequest
-	(*ListResponse)(nil),               // 29: downex.v1.ListResponse
-	(*GetRequest)(nil),                 // 30: downex.v1.GetRequest
-	(*GetResponse)(nil),                // 31: downex.v1.GetResponse
-	(*PauseRequest)(nil),               // 32: downex.v1.PauseRequest
-	(*PauseResponse)(nil),              // 33: downex.v1.PauseResponse
-	(*ResumeRequest)(nil),              // 34: downex.v1.ResumeRequest
-	(*ResumeResponse)(nil),             // 35: downex.v1.ResumeResponse
-	(*RemoveRequest)(nil),              // 36: downex.v1.RemoveRequest
-	(*RemoveResponse)(nil),             // 37: downex.v1.RemoveResponse
-	(*WatchRequest)(nil),               // 38: downex.v1.WatchRequest
-	(*Event)(nil),                      // 39: downex.v1.Event
-	(*WatchResponse)(nil),              // 40: downex.v1.WatchResponse
-	(*SetDownloadOptionsRequest)(nil),  // 41: downex.v1.SetDownloadOptionsRequest
-	(*SetDownloadOptionsResponse)(nil), // 42: downex.v1.SetDownloadOptionsResponse
-	(*Category)(nil),                   // 43: downex.v1.Category
-	(*Settings)(nil),                   // 44: downex.v1.Settings
-	(*StatusRequest)(nil),              // 45: downex.v1.StatusRequest
-	(*StatusResponse)(nil),             // 46: downex.v1.StatusResponse
-	(*GetSettingsRequest)(nil),         // 47: downex.v1.GetSettingsRequest
-	(*GetSettingsResponse)(nil),        // 48: downex.v1.GetSettingsResponse
-	(*UpdateSettingsRequest)(nil),      // 49: downex.v1.UpdateSettingsRequest
-	(*UpdateSettingsResponse)(nil),     // 50: downex.v1.UpdateSettingsResponse
-	(*ShutdownRequest)(nil),            // 51: downex.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),           // 52: downex.v1.ShutdownResponse
-	(*Schedule)(nil),                   // 53: downex.v1.Schedule
-	(*Queue)(nil),                      // 54: downex.v1.Queue
-	(*PostActionPending)(nil),          // 55: downex.v1.PostActionPending
-	(*ListQueuesRequest)(nil),          // 56: downex.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),         // 57: downex.v1.ListQueuesResponse
-	(*CreateQueueRequest)(nil),         // 58: downex.v1.CreateQueueRequest
-	(*CreateQueueResponse)(nil),        // 59: downex.v1.CreateQueueResponse
-	(*UpdateQueueRequest)(nil),         // 60: downex.v1.UpdateQueueRequest
-	(*UpdateQueueResponse)(nil),        // 61: downex.v1.UpdateQueueResponse
-	(*DeleteQueueRequest)(nil),         // 62: downex.v1.DeleteQueueRequest
-	(*DeleteQueueResponse)(nil),        // 63: downex.v1.DeleteQueueResponse
-	(*StartQueueRequest)(nil),          // 64: downex.v1.StartQueueRequest
-	(*StartQueueResponse)(nil),         // 65: downex.v1.StartQueueResponse
-	(*StopQueueRequest)(nil),           // 66: downex.v1.StopQueueRequest
-	(*StopQueueResponse)(nil),          // 67: downex.v1.StopQueueResponse
-	(*MoveDownloadsRequest)(nil),       // 68: downex.v1.MoveDownloadsRequest
-	(*MoveDownloadsResponse)(nil),      // 69: downex.v1.MoveDownloadsResponse
-	(*ProxySettings)(nil),              // 70: downex.v1.ProxySettings
-	(*HostRule)(nil),                   // 71: downex.v1.HostRule
-	(*SiteLogin)(nil),                  // 72: downex.v1.SiteLogin
-	(*SetSecretRequest)(nil),           // 73: downex.v1.SetSecretRequest
-	(*SetSecretResponse)(nil),          // 74: downex.v1.SetSecretResponse
-	(*ClearSecretRequest)(nil),         // 75: downex.v1.ClearSecretRequest
-	(*ClearSecretResponse)(nil),        // 76: downex.v1.ClearSecretResponse
-	(*UpdateInfo)(nil),                 // 77: downex.v1.UpdateInfo
-	(*CheckForUpdateRequest)(nil),      // 78: downex.v1.CheckForUpdateRequest
-	(*CheckForUpdateResponse)(nil),     // 79: downex.v1.CheckForUpdateResponse
-	(*InstallUpdateRequest)(nil),       // 80: downex.v1.InstallUpdateRequest
-	(*InstallUpdateResponse)(nil),      // 81: downex.v1.InstallUpdateResponse
-	(*CancelPostActionRequest)(nil),    // 82: downex.v1.CancelPostActionRequest
-	(*CancelPostActionResponse)(nil),   // 83: downex.v1.CancelPostActionResponse
-	(*ToolInfo)(nil),                   // 84: downex.v1.ToolInfo
-	(*ToolsStatus)(nil),                // 85: downex.v1.ToolsStatus
-	(*GetToolsRequest)(nil),            // 86: downex.v1.GetToolsRequest
-	(*GetToolsResponse)(nil),           // 87: downex.v1.GetToolsResponse
-	(*InstallToolsRequest)(nil),        // 88: downex.v1.InstallToolsRequest
-	(*InstallToolsResponse)(nil),       // 89: downex.v1.InstallToolsResponse
-	(*timestamppb.Timestamp)(nil),      // 90: google.protobuf.Timestamp
+	(FileCheckLevel)(0),                // 5: downex.v1.FileCheckLevel
+	(FileCheckStage)(0),                // 6: downex.v1.FileCheckStage
+	(ConnectionState)(0),               // 7: downex.v1.ConnectionState
+	(ExistingFile)(0),                  // 8: downex.v1.ExistingFile
+	(PoliteState)(0),                   // 9: downex.v1.PoliteState
+	(RenewLinks)(0),                    // 10: downex.v1.RenewLinks
+	(PostAction)(0),                    // 11: downex.v1.PostAction
+	(ProxyMode)(0),                     // 12: downex.v1.ProxyMode
+	(ToolState)(0),                     // 13: downex.v1.ToolState
+	(*PlayedResource)(nil),             // 14: downex.v1.PlayedResource
+	(*PlayedSource)(nil),               // 15: downex.v1.PlayedSource
+	(*MediaTrack)(nil),                 // 16: downex.v1.MediaTrack
+	(*MediaInfo)(nil),                  // 17: downex.v1.MediaInfo
+	(*MediaItem)(nil),                  // 18: downex.v1.MediaItem
+	(*Chapter)(nil),                    // 19: downex.v1.Chapter
+	(*MediaClip)(nil),                  // 20: downex.v1.MediaClip
+	(*Header)(nil),                     // 21: downex.v1.Header
+	(*Segment)(nil),                    // 22: downex.v1.Segment
+	(*Download)(nil),                   // 23: downex.v1.Download
+	(*RenewOffer)(nil),                 // 24: downex.v1.RenewOffer
+	(*FileCheck)(nil),                  // 25: downex.v1.FileCheck
+	(*ConnectionInfo)(nil),             // 26: downex.v1.ConnectionInfo
+	(*AddRequest)(nil),                 // 27: downex.v1.AddRequest
+	(*ConfirmRequest)(nil),             // 28: downex.v1.ConfirmRequest
+	(*AddMediaRequest)(nil),            // 29: downex.v1.AddMediaRequest
+	(*AddMediaResponse)(nil),           // 30: downex.v1.AddMediaResponse
+	(*TakeBrowserFetchRequest)(nil),    // 31: downex.v1.TakeBrowserFetchRequest
+	(*TakeBrowserFetchResponse)(nil),   // 32: downex.v1.TakeBrowserFetchResponse
+	(*BrowserFetch)(nil),               // 33: downex.v1.BrowserFetch
+	(*PutBrowserFetchRequest)(nil),     // 34: downex.v1.PutBrowserFetchRequest
+	(*BrowserFetchHead)(nil),           // 35: downex.v1.BrowserFetchHead
+	(*PutBrowserFetchResponse)(nil),    // 36: downex.v1.PutBrowserFetchResponse
+	(*ProbeMediaRequest)(nil),          // 37: downex.v1.ProbeMediaRequest
+	(*ProbeMediaResponse)(nil),         // 38: downex.v1.ProbeMediaResponse
+	(*ConfirmResponse)(nil),            // 39: downex.v1.ConfirmResponse
+	(*PauseAllRequest)(nil),            // 40: downex.v1.PauseAllRequest
+	(*PauseAllResponse)(nil),           // 41: downex.v1.PauseAllResponse
+	(*ResumeAllRequest)(nil),           // 42: downex.v1.ResumeAllRequest
+	(*ResumeAllResponse)(nil),          // 43: downex.v1.ResumeAllResponse
+	(*AddResponse)(nil),                // 44: downex.v1.AddResponse
+	(*ListRequest)(nil),                // 45: downex.v1.ListRequest
+	(*ListResponse)(nil),               // 46: downex.v1.ListResponse
+	(*GetRequest)(nil),                 // 47: downex.v1.GetRequest
+	(*GetResponse)(nil),                // 48: downex.v1.GetResponse
+	(*PauseRequest)(nil),               // 49: downex.v1.PauseRequest
+	(*PauseResponse)(nil),              // 50: downex.v1.PauseResponse
+	(*ResumeRequest)(nil),              // 51: downex.v1.ResumeRequest
+	(*ResumeResponse)(nil),             // 52: downex.v1.ResumeResponse
+	(*RemoveRequest)(nil),              // 53: downex.v1.RemoveRequest
+	(*RemoveResponse)(nil),             // 54: downex.v1.RemoveResponse
+	(*WatchRequest)(nil),               // 55: downex.v1.WatchRequest
+	(*Event)(nil),                      // 56: downex.v1.Event
+	(*PoliteStatus)(nil),               // 57: downex.v1.PoliteStatus
+	(*WatchResponse)(nil),              // 58: downex.v1.WatchResponse
+	(*RenewLinkRequest)(nil),           // 59: downex.v1.RenewLinkRequest
+	(*RenewLinkResponse)(nil),          // 60: downex.v1.RenewLinkResponse
+	(*RescueRequest)(nil),              // 61: downex.v1.RescueRequest
+	(*RescueResponse)(nil),             // 62: downex.v1.RescueResponse
+	(*SetDownloadOptionsRequest)(nil),  // 63: downex.v1.SetDownloadOptionsRequest
+	(*SetDownloadOptionsResponse)(nil), // 64: downex.v1.SetDownloadOptionsResponse
+	(*Category)(nil),                   // 65: downex.v1.Category
+	(*Settings)(nil),                   // 66: downex.v1.Settings
+	(*StatusRequest)(nil),              // 67: downex.v1.StatusRequest
+	(*StatusResponse)(nil),             // 68: downex.v1.StatusResponse
+	(*GetSettingsRequest)(nil),         // 69: downex.v1.GetSettingsRequest
+	(*GetSettingsResponse)(nil),        // 70: downex.v1.GetSettingsResponse
+	(*UpdateSettingsRequest)(nil),      // 71: downex.v1.UpdateSettingsRequest
+	(*UpdateSettingsResponse)(nil),     // 72: downex.v1.UpdateSettingsResponse
+	(*ShutdownRequest)(nil),            // 73: downex.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),           // 74: downex.v1.ShutdownResponse
+	(*Schedule)(nil),                   // 75: downex.v1.Schedule
+	(*Queue)(nil),                      // 76: downex.v1.Queue
+	(*PostActionPending)(nil),          // 77: downex.v1.PostActionPending
+	(*ListQueuesRequest)(nil),          // 78: downex.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),         // 79: downex.v1.ListQueuesResponse
+	(*CreateQueueRequest)(nil),         // 80: downex.v1.CreateQueueRequest
+	(*CreateQueueResponse)(nil),        // 81: downex.v1.CreateQueueResponse
+	(*UpdateQueueRequest)(nil),         // 82: downex.v1.UpdateQueueRequest
+	(*UpdateQueueResponse)(nil),        // 83: downex.v1.UpdateQueueResponse
+	(*DeleteQueueRequest)(nil),         // 84: downex.v1.DeleteQueueRequest
+	(*DeleteQueueResponse)(nil),        // 85: downex.v1.DeleteQueueResponse
+	(*StartQueueRequest)(nil),          // 86: downex.v1.StartQueueRequest
+	(*StartQueueResponse)(nil),         // 87: downex.v1.StartQueueResponse
+	(*StopQueueRequest)(nil),           // 88: downex.v1.StopQueueRequest
+	(*StopQueueResponse)(nil),          // 89: downex.v1.StopQueueResponse
+	(*MoveDownloadsRequest)(nil),       // 90: downex.v1.MoveDownloadsRequest
+	(*MoveDownloadsResponse)(nil),      // 91: downex.v1.MoveDownloadsResponse
+	(*ProxySettings)(nil),              // 92: downex.v1.ProxySettings
+	(*HostRule)(nil),                   // 93: downex.v1.HostRule
+	(*SiteLogin)(nil),                  // 94: downex.v1.SiteLogin
+	(*SetSecretRequest)(nil),           // 95: downex.v1.SetSecretRequest
+	(*SetSecretResponse)(nil),          // 96: downex.v1.SetSecretResponse
+	(*ClearSecretRequest)(nil),         // 97: downex.v1.ClearSecretRequest
+	(*ClearSecretResponse)(nil),        // 98: downex.v1.ClearSecretResponse
+	(*UpdateInfo)(nil),                 // 99: downex.v1.UpdateInfo
+	(*CheckForUpdateRequest)(nil),      // 100: downex.v1.CheckForUpdateRequest
+	(*CheckForUpdateResponse)(nil),     // 101: downex.v1.CheckForUpdateResponse
+	(*InstallUpdateRequest)(nil),       // 102: downex.v1.InstallUpdateRequest
+	(*InstallUpdateResponse)(nil),      // 103: downex.v1.InstallUpdateResponse
+	(*CancelPostActionRequest)(nil),    // 104: downex.v1.CancelPostActionRequest
+	(*CancelPostActionResponse)(nil),   // 105: downex.v1.CancelPostActionResponse
+	(*ToolInfo)(nil),                   // 106: downex.v1.ToolInfo
+	(*ToolsStatus)(nil),                // 107: downex.v1.ToolsStatus
+	(*GetToolsRequest)(nil),            // 108: downex.v1.GetToolsRequest
+	(*GetToolsResponse)(nil),           // 109: downex.v1.GetToolsResponse
+	(*InstallToolsRequest)(nil),        // 110: downex.v1.InstallToolsRequest
+	(*InstallToolsResponse)(nil),       // 111: downex.v1.InstallToolsResponse
+	(*timestamppb.Timestamp)(nil),      // 112: google.protobuf.Timestamp
 }
 var file_downex_v1_downex_proto_depIdxs = []int32{
-	10, // 0: downex.v1.MediaInfo.tracks:type_name -> downex.v1.MediaTrack
-	2,  // 1: downex.v1.MediaInfo.origin:type_name -> downex.v1.MediaOrigin
-	0,  // 2: downex.v1.Download.state:type_name -> downex.v1.DownloadState
-	4,  // 3: downex.v1.Download.mode:type_name -> downex.v1.Mode
-	90, // 4: downex.v1.Download.created_at:type_name -> google.protobuf.Timestamp
-	90, // 5: downex.v1.Download.updated_at:type_name -> google.protobuf.Timestamp
-	90, // 6: downex.v1.Download.completed_at:type_name -> google.protobuf.Timestamp
-	13, // 7: downex.v1.Download.segments:type_name -> downex.v1.Segment
-	3,  // 8: downex.v1.Download.source:type_name -> downex.v1.AddSource
-	1,  // 9: downex.v1.Download.kind:type_name -> downex.v1.DownloadKind
-	11, // 10: downex.v1.Download.media:type_name -> downex.v1.MediaInfo
-	15, // 11: downex.v1.Download.connection_info:type_name -> downex.v1.ConnectionInfo
-	90, // 12: downex.v1.Download.started_at:type_name -> google.protobuf.Timestamp
-	5,  // 13: downex.v1.ConnectionInfo.state:type_name -> downex.v1.ConnectionState
-	12, // 14: downex.v1.AddRequest.headers:type_name -> downex.v1.Header
-	3,  // 15: downex.v1.AddRequest.source:type_name -> downex.v1.AddSource
-	12, // 16: downex.v1.AddMediaRequest.headers:type_name -> downex.v1.Header
-	3,  // 17: downex.v1.AddMediaRequest.source:type_name -> downex.v1.AddSource
-	2,  // 18: downex.v1.AddMediaRequest.origin:type_name -> downex.v1.MediaOrigin
-	14, // 19: downex.v1.AddMediaResponse.download:type_name -> downex.v1.Download
-	12, // 20: downex.v1.ProbeMediaRequest.headers:type_name -> downex.v1.Header
-	2,  // 21: downex.v1.ProbeMediaRequest.origin:type_name -> downex.v1.MediaOrigin
-	11, // 22: downex.v1.ProbeMediaResponse.media:type_name -> downex.v1.MediaInfo
-	14, // 23: downex.v1.ConfirmResponse.download:type_name -> downex.v1.Download
-	14, // 24: downex.v1.AddResponse.download:type_name -> downex.v1.Download
-	14, // 25: downex.v1.ListResponse.downloads:type_name -> downex.v1.Download
-	14, // 26: downex.v1.GetResponse.download:type_name -> downex.v1.Download
-	14, // 27: downex.v1.PauseResponse.download:type_name -> downex.v1.Download
-	6,  // 28: downex.v1.ResumeRequest.existing_file:type_name -> downex.v1.ExistingFile
-	14, // 29: downex.v1.ResumeResponse.download:type_name -> downex.v1.Download
-	14, // 30: downex.v1.Event.snapshot:type_name -> downex.v1.Download
-	14, // 31: downex.v1.Event.updated:type_name -> downex.v1.Download
-	54, // 32: downex.v1.Event.queue_updated:type_name -> downex.v1.Queue
-	55, // 33: downex.v1.Event.post_action:type_name -> downex.v1.PostActionPending
-	85, // 34: downex.v1.Event.tools:type_name -> downex.v1.ToolsStatus
-	77, // 35: downex.v1.Event.update:type_name -> downex.v1.UpdateInfo
-	39, // 36: downex.v1.WatchResponse.events:type_name -> downex.v1.Event
-	14, // 37: downex.v1.SetDownloadOptionsResponse.download:type_name -> downex.v1.Download
-	43, // 38: downex.v1.Settings.categories:type_name -> downex.v1.Category
-	70, // 39: downex.v1.Settings.proxy:type_name -> downex.v1.ProxySettings
-	71, // 40: downex.v1.Settings.host_rules:type_name -> downex.v1.HostRule
-	72, // 41: downex.v1.Settings.site_logins:type_name -> downex.v1.SiteLogin
-	90, // 42: downex.v1.StatusResponse.started_at:type_name -> google.protobuf.Timestamp
-	44, // 43: downex.v1.GetSettingsResponse.settings:type_name -> downex.v1.Settings
-	44, // 44: downex.v1.UpdateSettingsRequest.settings:type_name -> downex.v1.Settings
-	44, // 45: downex.v1.UpdateSettingsResponse.settings:type_name -> downex.v1.Settings
-	53, // 46: downex.v1.Queue.schedule:type_name -> downex.v1.Schedule
-	7,  // 47: downex.v1.Queue.post_action:type_name -> downex.v1.PostAction
-	7,  // 48: downex.v1.PostActionPending.action:type_name -> downex.v1.PostAction
-	90, // 49: downex.v1.PostActionPending.deadline:type_name -> google.protobuf.Timestamp
-	54, // 50: downex.v1.ListQueuesResponse.queues:type_name -> downex.v1.Queue
-	54, // 51: downex.v1.CreateQueueRequest.queue:type_name -> downex.v1.Queue
-	54, // 52: downex.v1.CreateQueueResponse.queue:type_name -> downex.v1.Queue
-	54, // 53: downex.v1.UpdateQueueRequest.queue:type_name -> downex.v1.Queue
-	54, // 54: downex.v1.UpdateQueueResponse.queue:type_name -> downex.v1.Queue
-	54, // 55: downex.v1.StartQueueResponse.queue:type_name -> downex.v1.Queue
-	54, // 56: downex.v1.StopQueueResponse.queue:type_name -> downex.v1.Queue
-	54, // 57: downex.v1.MoveDownloadsResponse.queue:type_name -> downex.v1.Queue
-	8,  // 58: downex.v1.ProxySettings.mode:type_name -> downex.v1.ProxyMode
-	90, // 59: downex.v1.UpdateInfo.published_at:type_name -> google.protobuf.Timestamp
-	90, // 60: downex.v1.UpdateInfo.checked_at:type_name -> google.protobuf.Timestamp
-	77, // 61: downex.v1.CheckForUpdateResponse.info:type_name -> downex.v1.UpdateInfo
-	77, // 62: downex.v1.InstallUpdateResponse.info:type_name -> downex.v1.UpdateInfo
-	9,  // 63: downex.v1.ToolInfo.state:type_name -> downex.v1.ToolState
-	90, // 64: downex.v1.ToolInfo.checked_at:type_name -> google.protobuf.Timestamp
-	84, // 65: downex.v1.ToolsStatus.tools:type_name -> downex.v1.ToolInfo
-	85, // 66: downex.v1.GetToolsResponse.status:type_name -> downex.v1.ToolsStatus
-	85, // 67: downex.v1.InstallToolsResponse.status:type_name -> downex.v1.ToolsStatus
-	16, // 68: downex.v1.DownloadService.Add:input_type -> downex.v1.AddRequest
-	28, // 69: downex.v1.DownloadService.List:input_type -> downex.v1.ListRequest
-	30, // 70: downex.v1.DownloadService.Get:input_type -> downex.v1.GetRequest
-	32, // 71: downex.v1.DownloadService.Pause:input_type -> downex.v1.PauseRequest
-	34, // 72: downex.v1.DownloadService.Resume:input_type -> downex.v1.ResumeRequest
-	36, // 73: downex.v1.DownloadService.Remove:input_type -> downex.v1.RemoveRequest
-	38, // 74: downex.v1.DownloadService.Watch:input_type -> downex.v1.WatchRequest
-	17, // 75: downex.v1.DownloadService.Confirm:input_type -> downex.v1.ConfirmRequest
-	23, // 76: downex.v1.DownloadService.PauseAll:input_type -> downex.v1.PauseAllRequest
-	25, // 77: downex.v1.DownloadService.ResumeAll:input_type -> downex.v1.ResumeAllRequest
-	18, // 78: downex.v1.DownloadService.AddMedia:input_type -> downex.v1.AddMediaRequest
-	20, // 79: downex.v1.DownloadService.ProbeMedia:input_type -> downex.v1.ProbeMediaRequest
-	41, // 80: downex.v1.DownloadService.SetDownloadOptions:input_type -> downex.v1.SetDownloadOptionsRequest
-	45, // 81: downex.v1.DaemonService.Status:input_type -> downex.v1.StatusRequest
-	47, // 82: downex.v1.DaemonService.GetSettings:input_type -> downex.v1.GetSettingsRequest
-	49, // 83: downex.v1.DaemonService.UpdateSettings:input_type -> downex.v1.UpdateSettingsRequest
-	51, // 84: downex.v1.DaemonService.Shutdown:input_type -> downex.v1.ShutdownRequest
-	73, // 85: downex.v1.DaemonService.SetSecret:input_type -> downex.v1.SetSecretRequest
-	75, // 86: downex.v1.DaemonService.ClearSecret:input_type -> downex.v1.ClearSecretRequest
-	78, // 87: downex.v1.DaemonService.CheckForUpdate:input_type -> downex.v1.CheckForUpdateRequest
-	80, // 88: downex.v1.DaemonService.InstallUpdate:input_type -> downex.v1.InstallUpdateRequest
-	82, // 89: downex.v1.DaemonService.CancelPostAction:input_type -> downex.v1.CancelPostActionRequest
-	86, // 90: downex.v1.DaemonService.GetTools:input_type -> downex.v1.GetToolsRequest
-	88, // 91: downex.v1.DaemonService.InstallTools:input_type -> downex.v1.InstallToolsRequest
-	56, // 92: downex.v1.QueueService.ListQueues:input_type -> downex.v1.ListQueuesRequest
-	58, // 93: downex.v1.QueueService.CreateQueue:input_type -> downex.v1.CreateQueueRequest
-	60, // 94: downex.v1.QueueService.UpdateQueue:input_type -> downex.v1.UpdateQueueRequest
-	62, // 95: downex.v1.QueueService.DeleteQueue:input_type -> downex.v1.DeleteQueueRequest
-	64, // 96: downex.v1.QueueService.StartQueue:input_type -> downex.v1.StartQueueRequest
-	66, // 97: downex.v1.QueueService.StopQueue:input_type -> downex.v1.StopQueueRequest
-	68, // 98: downex.v1.QueueService.MoveDownloads:input_type -> downex.v1.MoveDownloadsRequest
-	27, // 99: downex.v1.DownloadService.Add:output_type -> downex.v1.AddResponse
-	29, // 100: downex.v1.DownloadService.List:output_type -> downex.v1.ListResponse
-	31, // 101: downex.v1.DownloadService.Get:output_type -> downex.v1.GetResponse
-	33, // 102: downex.v1.DownloadService.Pause:output_type -> downex.v1.PauseResponse
-	35, // 103: downex.v1.DownloadService.Resume:output_type -> downex.v1.ResumeResponse
-	37, // 104: downex.v1.DownloadService.Remove:output_type -> downex.v1.RemoveResponse
-	40, // 105: downex.v1.DownloadService.Watch:output_type -> downex.v1.WatchResponse
-	22, // 106: downex.v1.DownloadService.Confirm:output_type -> downex.v1.ConfirmResponse
-	24, // 107: downex.v1.DownloadService.PauseAll:output_type -> downex.v1.PauseAllResponse
-	26, // 108: downex.v1.DownloadService.ResumeAll:output_type -> downex.v1.ResumeAllResponse
-	19, // 109: downex.v1.DownloadService.AddMedia:output_type -> downex.v1.AddMediaResponse
-	21, // 110: downex.v1.DownloadService.ProbeMedia:output_type -> downex.v1.ProbeMediaResponse
-	42, // 111: downex.v1.DownloadService.SetDownloadOptions:output_type -> downex.v1.SetDownloadOptionsResponse
-	46, // 112: downex.v1.DaemonService.Status:output_type -> downex.v1.StatusResponse
-	48, // 113: downex.v1.DaemonService.GetSettings:output_type -> downex.v1.GetSettingsResponse
-	50, // 114: downex.v1.DaemonService.UpdateSettings:output_type -> downex.v1.UpdateSettingsResponse
-	52, // 115: downex.v1.DaemonService.Shutdown:output_type -> downex.v1.ShutdownResponse
-	74, // 116: downex.v1.DaemonService.SetSecret:output_type -> downex.v1.SetSecretResponse
-	76, // 117: downex.v1.DaemonService.ClearSecret:output_type -> downex.v1.ClearSecretResponse
-	79, // 118: downex.v1.DaemonService.CheckForUpdate:output_type -> downex.v1.CheckForUpdateResponse
-	81, // 119: downex.v1.DaemonService.InstallUpdate:output_type -> downex.v1.InstallUpdateResponse
-	83, // 120: downex.v1.DaemonService.CancelPostAction:output_type -> downex.v1.CancelPostActionResponse
-	87, // 121: downex.v1.DaemonService.GetTools:output_type -> downex.v1.GetToolsResponse
-	89, // 122: downex.v1.DaemonService.InstallTools:output_type -> downex.v1.InstallToolsResponse
-	57, // 123: downex.v1.QueueService.ListQueues:output_type -> downex.v1.ListQueuesResponse
-	59, // 124: downex.v1.QueueService.CreateQueue:output_type -> downex.v1.CreateQueueResponse
-	61, // 125: downex.v1.QueueService.UpdateQueue:output_type -> downex.v1.UpdateQueueResponse
-	63, // 126: downex.v1.QueueService.DeleteQueue:output_type -> downex.v1.DeleteQueueResponse
-	65, // 127: downex.v1.QueueService.StartQueue:output_type -> downex.v1.StartQueueResponse
-	67, // 128: downex.v1.QueueService.StopQueue:output_type -> downex.v1.StopQueueResponse
-	69, // 129: downex.v1.QueueService.MoveDownloads:output_type -> downex.v1.MoveDownloadsResponse
-	99, // [99:130] is the sub-list for method output_type
-	68, // [68:99] is the sub-list for method input_type
-	68, // [68:68] is the sub-list for extension type_name
-	68, // [68:68] is the sub-list for extension extendee
-	0,  // [0:68] is the sub-list for field type_name
+	14,  // 0: downex.v1.PlayedSource.resources:type_name -> downex.v1.PlayedResource
+	16,  // 1: downex.v1.MediaInfo.tracks:type_name -> downex.v1.MediaTrack
+	2,   // 2: downex.v1.MediaInfo.origin:type_name -> downex.v1.MediaOrigin
+	19,  // 3: downex.v1.MediaInfo.chapters:type_name -> downex.v1.Chapter
+	20,  // 4: downex.v1.MediaInfo.clip:type_name -> downex.v1.MediaClip
+	18,  // 5: downex.v1.MediaInfo.items:type_name -> downex.v1.MediaItem
+	0,   // 6: downex.v1.Download.state:type_name -> downex.v1.DownloadState
+	4,   // 7: downex.v1.Download.mode:type_name -> downex.v1.Mode
+	112, // 8: downex.v1.Download.created_at:type_name -> google.protobuf.Timestamp
+	112, // 9: downex.v1.Download.updated_at:type_name -> google.protobuf.Timestamp
+	112, // 10: downex.v1.Download.completed_at:type_name -> google.protobuf.Timestamp
+	22,  // 11: downex.v1.Download.segments:type_name -> downex.v1.Segment
+	3,   // 12: downex.v1.Download.source:type_name -> downex.v1.AddSource
+	1,   // 13: downex.v1.Download.kind:type_name -> downex.v1.DownloadKind
+	17,  // 14: downex.v1.Download.media:type_name -> downex.v1.MediaInfo
+	26,  // 15: downex.v1.Download.connection_info:type_name -> downex.v1.ConnectionInfo
+	112, // 16: downex.v1.Download.started_at:type_name -> google.protobuf.Timestamp
+	25,  // 17: downex.v1.Download.file_check:type_name -> downex.v1.FileCheck
+	24,  // 18: downex.v1.Download.renew_offer:type_name -> downex.v1.RenewOffer
+	5,   // 19: downex.v1.FileCheck.level:type_name -> downex.v1.FileCheckLevel
+	6,   // 20: downex.v1.FileCheck.stage:type_name -> downex.v1.FileCheckStage
+	7,   // 21: downex.v1.ConnectionInfo.state:type_name -> downex.v1.ConnectionState
+	21,  // 22: downex.v1.AddRequest.headers:type_name -> downex.v1.Header
+	3,   // 23: downex.v1.AddRequest.source:type_name -> downex.v1.AddSource
+	20,  // 24: downex.v1.ConfirmRequest.clip:type_name -> downex.v1.MediaClip
+	21,  // 25: downex.v1.AddMediaRequest.headers:type_name -> downex.v1.Header
+	3,   // 26: downex.v1.AddMediaRequest.source:type_name -> downex.v1.AddSource
+	2,   // 27: downex.v1.AddMediaRequest.origin:type_name -> downex.v1.MediaOrigin
+	20,  // 28: downex.v1.AddMediaRequest.clip:type_name -> downex.v1.MediaClip
+	15,  // 29: downex.v1.AddMediaRequest.played:type_name -> downex.v1.PlayedSource
+	23,  // 30: downex.v1.AddMediaResponse.download:type_name -> downex.v1.Download
+	33,  // 31: downex.v1.TakeBrowserFetchResponse.fetch:type_name -> downex.v1.BrowserFetch
+	35,  // 32: downex.v1.PutBrowserFetchRequest.head:type_name -> downex.v1.BrowserFetchHead
+	21,  // 33: downex.v1.ProbeMediaRequest.headers:type_name -> downex.v1.Header
+	2,   // 34: downex.v1.ProbeMediaRequest.origin:type_name -> downex.v1.MediaOrigin
+	15,  // 35: downex.v1.ProbeMediaRequest.played:type_name -> downex.v1.PlayedSource
+	17,  // 36: downex.v1.ProbeMediaResponse.media:type_name -> downex.v1.MediaInfo
+	23,  // 37: downex.v1.ConfirmResponse.download:type_name -> downex.v1.Download
+	23,  // 38: downex.v1.AddResponse.download:type_name -> downex.v1.Download
+	23,  // 39: downex.v1.ListResponse.downloads:type_name -> downex.v1.Download
+	23,  // 40: downex.v1.GetResponse.download:type_name -> downex.v1.Download
+	23,  // 41: downex.v1.PauseResponse.download:type_name -> downex.v1.Download
+	8,   // 42: downex.v1.ResumeRequest.existing_file:type_name -> downex.v1.ExistingFile
+	23,  // 43: downex.v1.ResumeResponse.download:type_name -> downex.v1.Download
+	23,  // 44: downex.v1.Event.snapshot:type_name -> downex.v1.Download
+	23,  // 45: downex.v1.Event.updated:type_name -> downex.v1.Download
+	76,  // 46: downex.v1.Event.queue_updated:type_name -> downex.v1.Queue
+	77,  // 47: downex.v1.Event.post_action:type_name -> downex.v1.PostActionPending
+	107, // 48: downex.v1.Event.tools:type_name -> downex.v1.ToolsStatus
+	99,  // 49: downex.v1.Event.update:type_name -> downex.v1.UpdateInfo
+	57,  // 50: downex.v1.Event.polite:type_name -> downex.v1.PoliteStatus
+	9,   // 51: downex.v1.PoliteStatus.state:type_name -> downex.v1.PoliteState
+	112, // 52: downex.v1.PoliteStatus.since:type_name -> google.protobuf.Timestamp
+	56,  // 53: downex.v1.WatchResponse.events:type_name -> downex.v1.Event
+	21,  // 54: downex.v1.RenewLinkRequest.headers:type_name -> downex.v1.Header
+	23,  // 55: downex.v1.RenewLinkResponse.download:type_name -> downex.v1.Download
+	21,  // 56: downex.v1.RescueRequest.headers:type_name -> downex.v1.Header
+	3,   // 57: downex.v1.RescueRequest.source:type_name -> downex.v1.AddSource
+	23,  // 58: downex.v1.RescueResponse.download:type_name -> downex.v1.Download
+	23,  // 59: downex.v1.SetDownloadOptionsResponse.download:type_name -> downex.v1.Download
+	65,  // 60: downex.v1.Settings.categories:type_name -> downex.v1.Category
+	92,  // 61: downex.v1.Settings.proxy:type_name -> downex.v1.ProxySettings
+	93,  // 62: downex.v1.Settings.host_rules:type_name -> downex.v1.HostRule
+	94,  // 63: downex.v1.Settings.site_logins:type_name -> downex.v1.SiteLogin
+	10,  // 64: downex.v1.Settings.renew_links:type_name -> downex.v1.RenewLinks
+	112, // 65: downex.v1.StatusResponse.started_at:type_name -> google.protobuf.Timestamp
+	57,  // 66: downex.v1.StatusResponse.polite:type_name -> downex.v1.PoliteStatus
+	66,  // 67: downex.v1.GetSettingsResponse.settings:type_name -> downex.v1.Settings
+	66,  // 68: downex.v1.UpdateSettingsRequest.settings:type_name -> downex.v1.Settings
+	66,  // 69: downex.v1.UpdateSettingsResponse.settings:type_name -> downex.v1.Settings
+	75,  // 70: downex.v1.Queue.schedule:type_name -> downex.v1.Schedule
+	11,  // 71: downex.v1.Queue.post_action:type_name -> downex.v1.PostAction
+	11,  // 72: downex.v1.PostActionPending.action:type_name -> downex.v1.PostAction
+	112, // 73: downex.v1.PostActionPending.deadline:type_name -> google.protobuf.Timestamp
+	76,  // 74: downex.v1.ListQueuesResponse.queues:type_name -> downex.v1.Queue
+	76,  // 75: downex.v1.CreateQueueRequest.queue:type_name -> downex.v1.Queue
+	76,  // 76: downex.v1.CreateQueueResponse.queue:type_name -> downex.v1.Queue
+	76,  // 77: downex.v1.UpdateQueueRequest.queue:type_name -> downex.v1.Queue
+	76,  // 78: downex.v1.UpdateQueueResponse.queue:type_name -> downex.v1.Queue
+	76,  // 79: downex.v1.StartQueueResponse.queue:type_name -> downex.v1.Queue
+	76,  // 80: downex.v1.StopQueueResponse.queue:type_name -> downex.v1.Queue
+	76,  // 81: downex.v1.MoveDownloadsResponse.queue:type_name -> downex.v1.Queue
+	12,  // 82: downex.v1.ProxySettings.mode:type_name -> downex.v1.ProxyMode
+	112, // 83: downex.v1.UpdateInfo.published_at:type_name -> google.protobuf.Timestamp
+	112, // 84: downex.v1.UpdateInfo.checked_at:type_name -> google.protobuf.Timestamp
+	99,  // 85: downex.v1.CheckForUpdateResponse.info:type_name -> downex.v1.UpdateInfo
+	99,  // 86: downex.v1.InstallUpdateResponse.info:type_name -> downex.v1.UpdateInfo
+	13,  // 87: downex.v1.ToolInfo.state:type_name -> downex.v1.ToolState
+	112, // 88: downex.v1.ToolInfo.checked_at:type_name -> google.protobuf.Timestamp
+	106, // 89: downex.v1.ToolsStatus.tools:type_name -> downex.v1.ToolInfo
+	107, // 90: downex.v1.GetToolsResponse.status:type_name -> downex.v1.ToolsStatus
+	107, // 91: downex.v1.InstallToolsResponse.status:type_name -> downex.v1.ToolsStatus
+	27,  // 92: downex.v1.DownloadService.Add:input_type -> downex.v1.AddRequest
+	45,  // 93: downex.v1.DownloadService.List:input_type -> downex.v1.ListRequest
+	47,  // 94: downex.v1.DownloadService.Get:input_type -> downex.v1.GetRequest
+	49,  // 95: downex.v1.DownloadService.Pause:input_type -> downex.v1.PauseRequest
+	51,  // 96: downex.v1.DownloadService.Resume:input_type -> downex.v1.ResumeRequest
+	53,  // 97: downex.v1.DownloadService.Remove:input_type -> downex.v1.RemoveRequest
+	55,  // 98: downex.v1.DownloadService.Watch:input_type -> downex.v1.WatchRequest
+	28,  // 99: downex.v1.DownloadService.Confirm:input_type -> downex.v1.ConfirmRequest
+	40,  // 100: downex.v1.DownloadService.PauseAll:input_type -> downex.v1.PauseAllRequest
+	42,  // 101: downex.v1.DownloadService.ResumeAll:input_type -> downex.v1.ResumeAllRequest
+	29,  // 102: downex.v1.DownloadService.AddMedia:input_type -> downex.v1.AddMediaRequest
+	37,  // 103: downex.v1.DownloadService.ProbeMedia:input_type -> downex.v1.ProbeMediaRequest
+	63,  // 104: downex.v1.DownloadService.SetDownloadOptions:input_type -> downex.v1.SetDownloadOptionsRequest
+	59,  // 105: downex.v1.DownloadService.RenewLink:input_type -> downex.v1.RenewLinkRequest
+	61,  // 106: downex.v1.DownloadService.Rescue:input_type -> downex.v1.RescueRequest
+	31,  // 107: downex.v1.DownloadService.TakeBrowserFetch:input_type -> downex.v1.TakeBrowserFetchRequest
+	34,  // 108: downex.v1.DownloadService.PutBrowserFetch:input_type -> downex.v1.PutBrowserFetchRequest
+	67,  // 109: downex.v1.DaemonService.Status:input_type -> downex.v1.StatusRequest
+	69,  // 110: downex.v1.DaemonService.GetSettings:input_type -> downex.v1.GetSettingsRequest
+	71,  // 111: downex.v1.DaemonService.UpdateSettings:input_type -> downex.v1.UpdateSettingsRequest
+	73,  // 112: downex.v1.DaemonService.Shutdown:input_type -> downex.v1.ShutdownRequest
+	95,  // 113: downex.v1.DaemonService.SetSecret:input_type -> downex.v1.SetSecretRequest
+	97,  // 114: downex.v1.DaemonService.ClearSecret:input_type -> downex.v1.ClearSecretRequest
+	100, // 115: downex.v1.DaemonService.CheckForUpdate:input_type -> downex.v1.CheckForUpdateRequest
+	102, // 116: downex.v1.DaemonService.InstallUpdate:input_type -> downex.v1.InstallUpdateRequest
+	104, // 117: downex.v1.DaemonService.CancelPostAction:input_type -> downex.v1.CancelPostActionRequest
+	108, // 118: downex.v1.DaemonService.GetTools:input_type -> downex.v1.GetToolsRequest
+	110, // 119: downex.v1.DaemonService.InstallTools:input_type -> downex.v1.InstallToolsRequest
+	78,  // 120: downex.v1.QueueService.ListQueues:input_type -> downex.v1.ListQueuesRequest
+	80,  // 121: downex.v1.QueueService.CreateQueue:input_type -> downex.v1.CreateQueueRequest
+	82,  // 122: downex.v1.QueueService.UpdateQueue:input_type -> downex.v1.UpdateQueueRequest
+	84,  // 123: downex.v1.QueueService.DeleteQueue:input_type -> downex.v1.DeleteQueueRequest
+	86,  // 124: downex.v1.QueueService.StartQueue:input_type -> downex.v1.StartQueueRequest
+	88,  // 125: downex.v1.QueueService.StopQueue:input_type -> downex.v1.StopQueueRequest
+	90,  // 126: downex.v1.QueueService.MoveDownloads:input_type -> downex.v1.MoveDownloadsRequest
+	44,  // 127: downex.v1.DownloadService.Add:output_type -> downex.v1.AddResponse
+	46,  // 128: downex.v1.DownloadService.List:output_type -> downex.v1.ListResponse
+	48,  // 129: downex.v1.DownloadService.Get:output_type -> downex.v1.GetResponse
+	50,  // 130: downex.v1.DownloadService.Pause:output_type -> downex.v1.PauseResponse
+	52,  // 131: downex.v1.DownloadService.Resume:output_type -> downex.v1.ResumeResponse
+	54,  // 132: downex.v1.DownloadService.Remove:output_type -> downex.v1.RemoveResponse
+	58,  // 133: downex.v1.DownloadService.Watch:output_type -> downex.v1.WatchResponse
+	39,  // 134: downex.v1.DownloadService.Confirm:output_type -> downex.v1.ConfirmResponse
+	41,  // 135: downex.v1.DownloadService.PauseAll:output_type -> downex.v1.PauseAllResponse
+	43,  // 136: downex.v1.DownloadService.ResumeAll:output_type -> downex.v1.ResumeAllResponse
+	30,  // 137: downex.v1.DownloadService.AddMedia:output_type -> downex.v1.AddMediaResponse
+	38,  // 138: downex.v1.DownloadService.ProbeMedia:output_type -> downex.v1.ProbeMediaResponse
+	64,  // 139: downex.v1.DownloadService.SetDownloadOptions:output_type -> downex.v1.SetDownloadOptionsResponse
+	60,  // 140: downex.v1.DownloadService.RenewLink:output_type -> downex.v1.RenewLinkResponse
+	62,  // 141: downex.v1.DownloadService.Rescue:output_type -> downex.v1.RescueResponse
+	32,  // 142: downex.v1.DownloadService.TakeBrowserFetch:output_type -> downex.v1.TakeBrowserFetchResponse
+	36,  // 143: downex.v1.DownloadService.PutBrowserFetch:output_type -> downex.v1.PutBrowserFetchResponse
+	68,  // 144: downex.v1.DaemonService.Status:output_type -> downex.v1.StatusResponse
+	70,  // 145: downex.v1.DaemonService.GetSettings:output_type -> downex.v1.GetSettingsResponse
+	72,  // 146: downex.v1.DaemonService.UpdateSettings:output_type -> downex.v1.UpdateSettingsResponse
+	74,  // 147: downex.v1.DaemonService.Shutdown:output_type -> downex.v1.ShutdownResponse
+	96,  // 148: downex.v1.DaemonService.SetSecret:output_type -> downex.v1.SetSecretResponse
+	98,  // 149: downex.v1.DaemonService.ClearSecret:output_type -> downex.v1.ClearSecretResponse
+	101, // 150: downex.v1.DaemonService.CheckForUpdate:output_type -> downex.v1.CheckForUpdateResponse
+	103, // 151: downex.v1.DaemonService.InstallUpdate:output_type -> downex.v1.InstallUpdateResponse
+	105, // 152: downex.v1.DaemonService.CancelPostAction:output_type -> downex.v1.CancelPostActionResponse
+	109, // 153: downex.v1.DaemonService.GetTools:output_type -> downex.v1.GetToolsResponse
+	111, // 154: downex.v1.DaemonService.InstallTools:output_type -> downex.v1.InstallToolsResponse
+	79,  // 155: downex.v1.QueueService.ListQueues:output_type -> downex.v1.ListQueuesResponse
+	81,  // 156: downex.v1.QueueService.CreateQueue:output_type -> downex.v1.CreateQueueResponse
+	83,  // 157: downex.v1.QueueService.UpdateQueue:output_type -> downex.v1.UpdateQueueResponse
+	85,  // 158: downex.v1.QueueService.DeleteQueue:output_type -> downex.v1.DeleteQueueResponse
+	87,  // 159: downex.v1.QueueService.StartQueue:output_type -> downex.v1.StartQueueResponse
+	89,  // 160: downex.v1.QueueService.StopQueue:output_type -> downex.v1.StopQueueResponse
+	91,  // 161: downex.v1.QueueService.MoveDownloads:output_type -> downex.v1.MoveDownloadsResponse
+	127, // [127:162] is the sub-list for method output_type
+	92,  // [92:127] is the sub-list for method input_type
+	92,  // [92:92] is the sub-list for extension type_name
+	92,  // [92:92] is the sub-list for extension extendee
+	0,   // [0:92] is the sub-list for field type_name
 }
 
 func init() { file_downex_v1_downex_proto_init() }
@@ -6493,9 +8757,9 @@ func file_downex_v1_downex_proto_init() {
 	if File_downex_v1_downex_proto != nil {
 		return
 	}
-	file_downex_v1_downex_proto_msgTypes[7].OneofWrappers = []any{}
-	file_downex_v1_downex_proto_msgTypes[24].OneofWrappers = []any{}
-	file_downex_v1_downex_proto_msgTypes[29].OneofWrappers = []any{
+	file_downex_v1_downex_proto_msgTypes[14].OneofWrappers = []any{}
+	file_downex_v1_downex_proto_msgTypes[37].OneofWrappers = []any{}
+	file_downex_v1_downex_proto_msgTypes[42].OneofWrappers = []any{
 		(*Event_Snapshot)(nil),
 		(*Event_Updated)(nil),
 		(*Event_Removed)(nil),
@@ -6504,15 +8768,20 @@ func file_downex_v1_downex_proto_init() {
 		(*Event_PostAction)(nil),
 		(*Event_Tools)(nil),
 		(*Event_Update)(nil),
+		(*Event_Polite)(nil),
 	}
-	file_downex_v1_downex_proto_msgTypes[31].OneofWrappers = []any{}
+	file_downex_v1_downex_proto_msgTypes[45].OneofWrappers = []any{
+		(*RenewLinkRequest_Url)(nil),
+		(*RenewLinkRequest_FromDownload)(nil),
+	}
+	file_downex_v1_downex_proto_msgTypes[49].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_downex_v1_downex_proto_rawDesc), len(file_downex_v1_downex_proto_rawDesc)),
-			NumEnums:      10,
-			NumMessages:   80,
+			NumEnums:      14,
+			NumMessages:   98,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

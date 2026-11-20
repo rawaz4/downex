@@ -159,6 +159,9 @@ type fileServer struct {
 	reqs   []fileReq
 	active int
 	peak   int
+	// browserOnly refuses (403) every request without the header only the test browser
+	// sends (Sec-Fetch-Mode).
+	browserOnly bool
 }
 
 type fileReq struct{ path, rng string }
@@ -195,6 +198,10 @@ func (s *fileServer) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case status != 0:
 		w.WriteHeader(status)
+	case s.browserOnly && r.Header.Get("Sec-Fetch-Mode") == "":
+		// A video server that answers only browsers (docs/SITE-MEDIA-SPEC.md §2.8): a
+		// header only the browser's requests carry stands for its client.
+		w.WriteHeader(http.StatusForbidden)
 	case !ok:
 		http.NotFound(w, r)
 	default:
@@ -689,6 +696,37 @@ func TestSiteRunRefreshOn403(t *testing.T) {
 	}
 }
 
+// A 403 that comes again from the renewed addresses (a video server that refuses
+// Downex, often bot protection) fails the run as site_error with the same reason as a
+// page refused with 403, not as a raw HTTP status; a 410 again stays http_status.
+func TestSiteRunForbiddenAfterRenewal(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusGone} {
+		srv := newFileServer(t)
+		old, renewed := pairPage(t, srv, "/old"), pairPage(t, srv, "/new")
+		for _, p := range []string{"/old/v.mp4", "/old/a.m4a", "/new/v.mp4", "/new/a.m4a"} {
+			srv.deny[p] = status
+		}
+		res := &fakeResolver{pages: []string{old, renewed}}
+		s := newSiteMedia(res)
+		sel := daemon.SiteSelection{PageURL: srv.url("/watch?v=vid00000001"), Format: "http", VideoTrack: "137",
+			AudioTrack: "140", VideoKey: keyOf(t, old, "137"), AudioKey: keyOf(t, old, "140")}
+		_, err := s.Run(siteContext(t), runOptions(t, daemon.MediaRunOptions{}), sel, nil, nil, nil)
+		var se *mediajob.StatusError
+		switch {
+		case err == nil:
+			t.Fatalf("%d: Run succeeded", status)
+		case status == http.StatusForbidden && (!errors.Is(err, sitemedia.ErrSiteError) ||
+			err.Error() != sitemedia.ErrSiteError.Error()+": "+sitemedia.ReasonForbidden):
+			t.Errorf("403 again: Run = %v, want site_error %q", err, sitemedia.ReasonForbidden)
+		case status == http.StatusGone && (errors.Is(err, sitemedia.ErrSiteError) || !errors.As(err, &se) || se.Code != status):
+			t.Errorf("410 again: Run = %v, want the HTTP status", err)
+		}
+		if got := res.freshness(); !slices.Equal(got, []bool{false, true}) {
+			t.Errorf("%d: resolutions %v, want the run's and one renewal", status, got)
+		}
+	}
+}
+
 // A chosen key the page no longer has is resolved once more past the cache, after the
 // retry delay; still missing, the run fails as media_invalid, never picking another
 // quality. A key that is back on that resolution runs.
@@ -973,5 +1011,116 @@ func TestSiteRunFitsChunks(t *testing.T) {
 	}
 	if want := (len(video.file()) + 2<<20 - 1) / (2 << 20); n != want {
 		t.Errorf("%d video requests, want %d chunks", n, want)
+	}
+}
+
+// ---- pages with several videos (docs/SITE-MEDIA-SPEC.md §3.12) ----------------------
+
+// itemsPage is yt-dlp's -J output for a page with several videos: each entry is a
+// pageJSON whose id is replaced.
+func itemsPage(t *testing.T, entries map[string]string, order ...string) string {
+	t.Helper()
+	var list []json.RawMessage
+	for _, id := range order {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(entries[id]), &m); err != nil {
+			t.Fatal(err)
+		}
+		m["id"], m["title"], m["extractor_key"] = id, "Video "+id, "Instagram"
+		b, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list = append(list, b)
+	}
+	b, err := json.Marshal(map[string]any{"_type": "playlist", "id": "post1", "extractor_key": "Instagram",
+		"title": "Post", "playlist_count": len(order) + 1, "entries": list})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A probe of a page with several videos describes the item named (the first by default)
+// and lists the items; an item the page does not have is site_unavailable.
+func TestSiteProbeItems(t *testing.T) {
+	srv := newFileServer(t)
+	a := pairPage(t, srv, "/a")
+	b := pageJSON(t, videoFormat("v1", srv.url("/b/v.mp4"), 1000), audioFormat("a1", srv.url("/b/a.m4a"), 300))
+	res := &fakeResolver{pages: []string{itemsPage(t, map[string]string{"itemA": a, "itemB": b}, "itemA", "itemB")}}
+	s := newSiteMedia(res)
+	sel := daemon.SiteSelection{PageURL: srv.url("/p/post1/")}
+	p, err := s.Probe(siteContext(t), siteFactory(t), sel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []model.MediaItem{{ID: "itemA", Title: "Video itemA", Duration: 16500 * time.Millisecond},
+		{ID: "itemB", Title: "Video itemB", Duration: 16500 * time.Millisecond}}
+	if p.EntryID != "itemA" || p.Title != "Video itemA" || p.DefaultVideo != "137" || !slices.Equal(p.Items, want) ||
+		p.ItemsLeftOut != 1 || p.Site != "Instagram" {
+		t.Errorf("default item: %+v", p)
+	}
+	sel.EntryID = "itemB"
+	if p, err := s.Probe(siteContext(t), siteFactory(t), sel); err != nil || p.EntryID != "itemB" || p.DefaultVideo != "v1" ||
+		p.Title != "Video itemB" || len(p.Items) != 2 {
+		t.Errorf("item B: %+v, %v", p, err)
+	}
+	sel.EntryID = "itemC"
+	if _, err := s.Probe(siteContext(t), siteFactory(t), sel); !errors.Is(err, sitemedia.ErrItemGone) ||
+		!errors.Is(err, sitemedia.ErrSiteUnavailable) {
+		t.Errorf("a gone item: %v, want site_unavailable", err)
+	}
+}
+
+// A run downloads its item, picked by id wherever the page lists it now; an item the page
+// no longer has fails as site_unavailable after one more resolution, and nothing of
+// another item is fetched.
+func TestSiteRunItem(t *testing.T) {
+	srv := newFileServer(t)
+	other := pageJSON(t, videoFormat("137", srv.url("/x/v.mp4"), 1000), audioFormat("140", srv.url("/x/a.m4a"), 300))
+	mine := pairPage(t, srv, "/b")
+	page := itemsPage(t, map[string]string{"itemA": other, "itemB": mine}, "itemA", "itemB")
+	moved := itemsPage(t, map[string]string{"itemA": other, "itemB": mine}, "itemB", "itemA")
+	entryKey := func(id string) string {
+		info, err := sitemedia.Parse([]byte(page), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range info.Entries {
+			if e.ID == "itemB" {
+				return e.Format(id).Key
+			}
+		}
+		t.Fatal("no item B")
+		return ""
+	}
+	sel := daemon.SiteSelection{PageURL: srv.url("/p/post1/"), Format: "http", VideoTrack: "137", AudioTrack: "140",
+		VideoKey: entryKey("137"), AudioKey: entryKey("140"), EntryID: "itemB"}
+	res := &fakeResolver{pages: []string{moved}}
+	s := newSiteMedia(res)
+	opts := runOptions(t, daemon.MediaRunOptions{})
+	if _, err := s.Run(siteContext(t), opts, sel, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	checkOutput(t, opts.OutPath, pairVideo, pairAudio)
+	for _, r := range srv.requests() {
+		if strings.HasPrefix(r.path, "/x/") {
+			t.Errorf("another item's file was fetched: %s", r.path)
+		}
+	}
+
+	gone := itemsPage(t, map[string]string{"itemA": other}, "itemA")
+	res = &fakeResolver{pages: []string{gone}}
+	s = newSiteMedia(res)
+	s.retryDelay = time.Millisecond
+	before := len(srv.requests())
+	if _, err := s.Run(siteContext(t), runOptions(t, daemon.MediaRunOptions{}), sel, nil, nil, nil); !errors.Is(err, sitemedia.ErrItemGone) {
+		t.Fatalf("Run of a gone item = %v, want site_unavailable", err)
+	}
+	if got := res.freshness(); !slices.Equal(got, []bool{false, true}) {
+		t.Errorf("resolutions %v, want one more past the cache", got)
+	}
+	if n := len(srv.requests()) - before; n != 0 {
+		t.Errorf("%d requests for a gone item", n)
 	}
 }

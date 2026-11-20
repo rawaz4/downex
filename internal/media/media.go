@@ -113,6 +113,13 @@ type Fragment struct {
 	Duration time.Duration
 	// Index is the fragment's position in Plan.Fragments.
 	Index int
+	// Start is the fragment's plan time: the sum of the durations of the media
+	// fragments before it (initialization data gets the start of the media fragment
+	// that follows it). docs/MEDIA-SPEC.md §8 C4.
+	Start time.Duration
+	// FullIndex is the fragment's position in the plan a window was cut from
+	// (Plan.Window); equal to Index in a plan that is not a window.
+	FullIndex int
 	// Init marks initialization data (HLS EXT-X-MAP, DASH Initialization) that the
 	// following media fragments need. HLS plans repeat it only when the map changes;
 	// DASH plans give it once per Period.
@@ -175,7 +182,8 @@ func (p *Plan) finish() error {
 		case f.Duration < 0:
 			return errf(ErrMalformed, "fragment %d has a negative duration", i+1)
 		}
-		f.Index = i
+		f.Index, f.FullIndex = i, i
+		f.Start = total
 		total = addDuration(total, f.Duration)
 	}
 	p.Duration = total

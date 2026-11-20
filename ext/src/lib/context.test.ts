@@ -8,6 +8,7 @@ import {
   encodeRequestBody,
   filterHeaders,
   findContext,
+  MAX_PAGE_URL_BYTES,
   resolveBody,
   type BuildAddDeps,
   type CookieLike,
@@ -187,8 +188,23 @@ describe('buildAddFields', () => {
         ],
         filename: 'f.zip',
         size: 10,
+        // The page the link was found on, for "Open page" (DESKTOP-SPEC §10).
+        pageUrl: 'https://a/page?q=1',
       },
     });
+  });
+
+  it('sends the page the link was found on, only an http(s) one, without credentials', async () => {
+    const page = async (t: Parameters<typeof buildAddFields>[0]) => {
+      const r = await buildAddFields(t, deps());
+      return r.ok ? r.value.pageUrl : 'failed';
+    };
+    expect(await page({ url: 'https://a/f.zip', pageUrl: 'https://u:p@a/top#x', referrer: 'https://a/frame' })).toBe('https://a/top');
+    expect(await page({ url: 'https://a/f.zip', referrer: 'https://a/list?id=1' })).toBe('https://a/list?id=1');
+    expect(await page({ url: 'https://a/f.zip', pageUrl: 'file:///etc/passwd' })).toBeUndefined();
+    expect(await page({ url: 'https://a/f.zip', referrer: 'chrome://downloads' })).toBeUndefined();
+    expect(await page({ url: 'https://a/f.zip', pageUrl: `https://a/${'x'.repeat(MAX_PAGE_URL_BYTES)}` })).toBeUndefined();
+    expect(await page({ url: 'https://a/f.zip' })).toBeUndefined();
   });
 
   it('forwards the Referer the browser actually sent', async () => {

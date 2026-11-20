@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"downex/ui/state/scene"
+	"downex/ui/views"
 	"downex/ui/views/viewstest"
 )
 
@@ -150,7 +151,7 @@ func TestReferenceComparisons(t *testing.T) {
 						if len(problems) > 0 {
 							t.Errorf("fit rule: %v", problems)
 						}
-						if d := deltas[0]; d.Max() > 1 {
+						if d := withoutPart(deltas[0], m); d.Max() > 1 {
 							t.Errorf("dialog box differs by more than 1 DIP: %v", d)
 						}
 						if write && font == 16 {
@@ -164,4 +165,28 @@ func TestReferenceComparisons(t *testing.T) {
 			}
 		}
 	}
+}
+
+// withoutPart takes out of d what the "Save only part of the video" row adds to a dialog,
+// which the references (0.9.2, before parts of a video, docs/MEDIA-SPEC.md §8) do not have:
+// the row's height and the gap before it, the dialog growing about its centre (at most to
+// the room the window has). The rest must still match within 1 DIP.
+func withoutPart(d viewstest.Delta, m views.Modal) viewstest.Delta {
+	var c *ClipSection
+	switch x := m.(type) {
+	case *Add:
+		c = x.Clip
+	case *Confirm:
+		c = x.Clip
+	}
+	if c == nil || c.Base().Style.Hidden || c.Size().H <= 0 {
+		return d
+	}
+	grow := c.Size().H + 24 // the row, and its margin or the column's gap (at most 2 × 12 DIP)
+	switch {
+	case d.DH > 0 && d.DH <= grow+1:
+		d.DY += d.DH / 2
+		d.DH = 0
+	}
+	return d
 }

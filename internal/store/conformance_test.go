@@ -47,6 +47,7 @@ func runConformance(t *testing.T, newStore storeFactory) {
 		{"UpdateKeepsQueueMembership", testUpdateKeepsQueue},
 		{"DeleteQueueMovesDownloadsToMain", testDeleteQueue},
 		{"QueueIDsNeverReused", testQueueIDsNeverReused},
+		{"FileCheckOnlyBySetFileCheck", testFileCheck},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,6 +107,79 @@ func fullDownload(tag string) model.Download {
 		QueueID: model.MainQueueID,
 		// Migration 7: a restart that replaces the completed file.
 		ReplaceFile: true,
+		// Migration 8: the file check's inputs (FileCheck itself is written only by
+		// SetFileCheck: see testFileCheck).
+		ServedType:   "video/mp4",
+		NameControls: true,
+		// Migration 9: expired links.
+		PageURL:    "https://example.test/page/" + tag + "?q=1",
+		RemoteName: "remote " + tag + ".bin",
+		// Migration 10: rescue.
+		RescuedBytes: 1,
+	}
+}
+
+// fullFileCheck returns a file check with every field set.
+func fullFileCheck(tag string) *model.FileCheck {
+	return &model.FileCheck{
+		Level: model.FileCheckDanger, Stage: model.FileCheckStageFinal, Reason: "archive_with_program",
+		Content: "zip", Brand: "ooxml", Claim: "mp4", Served: "video/mp4", Member: "run " + tag + ".exe",
+		ProgramMembers: 3, ListingIncomplete: true, CheckedAt: fixtureTime(3 * time.Hour),
+	}
+}
+
+// testFileCheck: SetFileCheck is the only writer of FileCheck (migration 8): created
+// records have none, UpdateDownload and SaveCheckpoint keep the stored one, nil clears.
+func testFileCheck(t *testing.T, s Store) {
+	ctx := context.Background()
+	in := fullDownload("check")
+	in.FileCheck = fullFileCheck("ignored")
+	d := mustCreate(t, s, in)
+	if got := mustGet(t, s, d.ID); got.FileCheck != nil {
+		t.Fatalf("created record has file check %+v", got.FileCheck)
+	}
+	fc := fullFileCheck("check")
+	if err := s.SetFileCheck(ctx, d.ID, fc); err != nil {
+		t.Fatalf("SetFileCheck: %v", err)
+	}
+	fc.Member = "changed after the call"
+	want := fullFileCheck("check")
+	assertFileCheck(t, mustGet(t, s, d.ID).FileCheck, want)
+
+	stale := d
+	stale.FileCheck = nil
+	stale.Error = "a run's copy"
+	if err := s.UpdateDownload(ctx, &stale); err != nil {
+		t.Fatal(err)
+	}
+	assertFileCheck(t, mustGet(t, s, d.ID).FileCheck, want)
+	stale.FileCheck = fullFileCheck("other")
+	if err := s.SaveCheckpoint(ctx, &stale, fixtureSegments(1, 5)); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGet(t, s, d.ID)
+	assertFileCheck(t, got.FileCheck, want)
+	if got.ServedType != "video/mp4" || !got.NameControls || got.Error != "a run's copy" {
+		t.Fatalf("record = %+v", got)
+	}
+	if err := s.SetFileCheck(ctx, d.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustGet(t, s, d.ID); got.FileCheck != nil {
+		t.Fatalf("cleared file check = %+v", got.FileCheck)
+	}
+	assertErrorIs(t, "SetFileCheck(missing)", s.SetFileCheck(ctx, d.ID+100, want), ErrNotFound)
+}
+
+func assertFileCheck(t *testing.T, got, want *model.FileCheck) {
+	t.Helper()
+	if got == nil || !got.CheckedAt.Equal(want.CheckedAt) {
+		t.Fatalf("file check = %+v, want %+v", got, want)
+	}
+	g, w := *got, *want
+	g.CheckedAt, w.CheckedAt = time.Time{}, time.Time{}
+	if g != w {
+		t.Fatalf("file check = %+v, want %+v", g, w)
 	}
 }
 
@@ -132,11 +206,20 @@ func fullMedia(tag string) *model.Media {
 		FragmentsTotal: 1200,
 		FragmentsDone:  321,
 		BytesDone:      987_654_321,
+		Clip: &model.MediaClip{StartMs: 80_000, EndMs: 165_000, Chapter: "Chapter " + tag, KeyframeMs: 77_400,
+			FetchStartMs: 76_000, FetchEndMs: 168_000, FetchedWhole: true},
+		Chapters: []model.Chapter{{StartMs: 0, EndMs: 80_000, Title: "Intro " + tag}, {StartMs: 80_000, EndMs: 165_000}},
+		// A page with several videos (SITE-MEDIA-SPEC §3.12); thumbnails are never stored.
+		EntryID:      "item-" + tag,
+		Items:        []model.MediaItem{{ID: "item-" + tag, Title: "Item " + tag, Duration: 12 * time.Second}, {ID: "other-" + tag}},
+		ItemsLeftOut: 2, BrowserFetch: true, FetchTicket: "0123456789abcdef0123456789abcdef",
+		Played: []model.PlayedTrack{{ID: "r1", Kind: "video", URL: "https://media.example/v/a.mp4?x=1", Size: 9_000_000,
+			Fragmented: true, Browser: true}},
 		Checkpoint: &model.MediaCheckpoint{Tracks: []model.MediaTrackCheckpoint{
 			{TrackID: "v0-" + tag, Total: 600, Done: []byte{0xff, 0x0f, 0x00, 0x81}, Key: "hkey-" + tag,
-				ChunkBytes: 10 << 20, Partial: map[int]int64{4: 1 << 20, 30: 77}},
+				ChunkBytes: 10 << 20, Partial: map[int]int64{4: 1 << 20, 30: 77}, First: 12, Base: 1 << 30, Head: 524_288},
 			{TrackID: "r1", Total: 600, Done: []byte{0x01}},
-		}, DurableBytes: 123_456_789, BytesTotal: 2_000_000_001},
+		}, DurableBytes: 123_456_789, BytesTotal: 2_000_000_001, LeadIn: 2},
 	}
 }
 
@@ -236,7 +319,9 @@ func assertNoZeroFields(t *testing.T, v any) {
 
 func testCreateGetRoundTrip(t *testing.T, s Store) {
 	in := fullDownload("roundtrip")
-	assertNoZeroFields(t, in)
+	withCheck := in
+	withCheck.FileCheck = fullFileCheck("roundtrip")
+	assertNoZeroFields(t, withCheck)
 	assertNoZeroFields(t, fixtureSegments(2, 1)[1])
 
 	created := mustCreate(t, s, in)

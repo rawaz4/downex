@@ -40,6 +40,30 @@ func TestViewOf(t *testing.T) {
 	}
 }
 
+// "--confirm <id> --raise" (downexd's browser add) is the standalone Confirm download window;
+// "--confirm <id>" alone is the main window's dialog, as before.
+func TestViewOfConfirm(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want View
+	}{
+		{[]string{"--confirm", "5", "--raise"}, View{Confirm: 5}},
+		{[]string{"--raise", "--confirm=9", "--confirm", "4"}, View{Confirm: 9}},
+		{[]string{"--confirm", "5"}, View{}},
+		{[]string{"--raise"}, View{}},
+		{[]string{"--confirm", "5", "--progress", "6", "--raise"}, View{Progress: 6}},
+	} {
+		got := ViewOf(tc.args)
+		if got != tc.want || got.IsConfirm() != (tc.want.Confirm > 0) || got.IsMain() != (tc.want == View{}) {
+			t.Errorf("ViewOf(%q) = %+v, want %+v", tc.args, got, tc.want)
+		}
+	}
+	s := View{Confirm: 5}.WindowOn("windows")
+	if s.Title != "Confirm download" || s.Frameless || s.Width != ConfirmWidth || s.InstanceID == MainInstanceID {
+		t.Errorf("the confirm window's spec %+v", s)
+	}
+}
+
 func TestConfirmArgs(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
@@ -360,5 +384,25 @@ func TestSecondInstanceFocusesTheWindow(t *testing.T) {
 	}
 	if got := r.shownIDs(); len(got) != 0 {
 		t.Errorf("confirmation requests %v without --confirm", got)
+	}
+}
+
+// "--raise" marks the window of a download the user just started in the browser; other
+// arguments, a "--raise" value included, do not.
+func TestRaiseArg(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--progress", "5", "--raise"}, true},
+		{[]string{"-raise"}, true},
+		{[]string{"--progress", "5"}, false},
+		{[]string{"--raise=1"}, false},
+		{[]string{"raise"}, false},
+		{nil, false},
+	} {
+		if got := RaiseArg(c.args); got != c.want {
+			t.Errorf("RaiseArg(%q) = %v, want %v", c.args, got, c.want)
+		}
 	}
 }

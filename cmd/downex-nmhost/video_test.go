@@ -40,6 +40,7 @@ type videoBackend struct {
 	addErr    error
 	gate      chan struct{}
 	started   chan string // page URL (a stream probe: the manifest) of each video call as it starts, when set
+	ticket    string      // the fetch ticket of a video add (docs/SITE-MEDIA-SPEC.md §2.8)
 }
 
 func (v *videoBackend) enter(ctx context.Context, page string) (func(), error) {
@@ -73,7 +74,7 @@ func (v *videoBackend) probeMedia(ctx context.Context, req *downexv1.ProbeMediaR
 	v.deadlines = append(v.deadlines, deadlineOf(ctx))
 	v.mu.Unlock()
 	target := req.GetPageUrl()
-	if req.GetOrigin() != downexv1.MediaOrigin_MEDIA_ORIGIN_SITE {
+	if o := req.GetOrigin(); o != downexv1.MediaOrigin_MEDIA_ORIGIN_SITE && o != downexv1.MediaOrigin_MEDIA_ORIGIN_PLAYED {
 		target = req.GetManifestUrl()
 	}
 	leave, err := v.enter(ctx, target)
@@ -87,8 +88,8 @@ func (v *videoBackend) probeMedia(ctx context.Context, req *downexv1.ProbeMediaR
 	return v.probe(req)
 }
 
-func (v *videoBackend) addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, error) {
-	if req.GetOrigin() != downexv1.MediaOrigin_MEDIA_ORIGIN_SITE {
+func (v *videoBackend) addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, string, error) {
+	if o := req.GetOrigin(); o != downexv1.MediaOrigin_MEDIA_ORIGIN_SITE && o != downexv1.MediaOrigin_MEDIA_ORIGIN_PLAYED {
 		return v.fakeBackend.addMedia(ctx, req)
 	}
 	v.mu.Lock()
@@ -97,15 +98,15 @@ func (v *videoBackend) addMedia(ctx context.Context, req *downexv1.AddMediaReque
 	v.mu.Unlock()
 	leave, err := v.enter(ctx, req.GetPageUrl())
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer leave()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.addErr != nil {
-		return nil, v.addErr
+		return nil, "", v.addErr
 	}
-	return &downexv1.Download{Id: 42, Url: req.GetPageUrl(), Kind: downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA, State: v.addState}, nil
+	return &downexv1.Download{Id: 42, Url: req.GetPageUrl(), Kind: downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA, State: v.addState}, v.ticket, nil
 }
 
 // deadlineOf is ctx's deadline, zero when it has none.
@@ -144,7 +145,14 @@ func TestWelcomeNamesVideo(t *testing.T) {
 	got, _ := m["features"].([]any)
 	// "prefetch": probeVideo forwards the look-ahead mark, so the extension may send one.
 	// "streams": probeStream and the tracks of addMedia (docs/VIDEO-DETECT-SPEC.md §3.5).
-	if m["type"] != "welcome" || fmt.Sprint(got) != "[video prefetch streams]" {
+	// "renew": add's pageUrl and added.renewCheck (docs/BROWSER-SPEC.md §2).
+	// "rescue": the rescue and resume requests (docs/BROWSER-SPEC.md §6).
+	// "clips": the part fields of addMedia/addVideo and videoInfo.chapters (MEDIA-SPEC §8).
+	// "items": entryId of probeVideo/addVideo and videoInfo.items (SITE-MEDIA-SPEC §3.12).
+	// "signIn": cookieDomain of probeVideo/addVideo (SITE-MEDIA-SPEC §6.3).
+	// "browserFetch": addVideo.browserFetch, added.fetchTicket, fetchTake and fetchPut (SITE-MEDIA-SPEC §2.8).
+	// "played": probePlayed and addPlayed (SITE-MEDIA-SPEC §2.9).
+	if m["type"] != "welcome" || fmt.Sprint(got) != "[video prefetch streams renew rescue clips items signIn browserFetch played]" {
 		t.Fatalf("welcome: %v", m)
 	}
 }

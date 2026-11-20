@@ -7,6 +7,7 @@ import (
 
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
+	"downex/ui/core/display"
 	"downex/ui/core/palette"
 	"downex/ui/host"
 	"downex/ui/kit"
@@ -45,9 +46,11 @@ func (c *Commands) State() palette.CommandState {
 	settings, loaded := a.Settings()
 	s.SettingsLoaded = loaded
 	s.GlobalSpeedLimit = settings.GetGlobalSpeedLimit()
+	s.PoliteMode = loaded && settings.GetPoliteMode()
 	if a.Main == nil {
 		return s
 	}
+	s.Polite, _ = a.Main.Polite.Status()
 	ds := a.Main.Downloads
 	sel := ds.Selected()
 	s.Selected = len(sel)
@@ -55,6 +58,9 @@ func (c *Commands) State() palette.CommandState {
 		if d.GetState() == state.StateCompleted {
 			s.CompletedSelected++
 		}
+	}
+	if len(sel) == 1 {
+		s.Renewable, s.PageKnown = display.Renewable(sel[0]), display.PageURL(sel[0]) != ""
 	}
 	s.Active = ds.Totals().Active
 	s.Index, s.Category, s.Counts = ds.Index(), ds.Category(), ds.Counts()
@@ -124,6 +130,8 @@ func (c *Commands) run(id string) bool {
 		return call(func() { o.Add(AddRequest{}) })
 	case "add-video":
 		return call(func() { o.Add(AddRequest{Mode: AddStream}) })
+	case "rescue":
+		return call(func() { o.Rescue(RescueRequest{}) })
 	case "pause":
 		return call(func() { act.Pause(nil) })
 	case "resume":
@@ -142,12 +150,32 @@ func (c *Commands) run(id string) bool {
 			}
 		}
 		return call(func() { o.Restart(RestartRequest{IDs: done, Reason: RestartManual}) })
+	case "new-link", "open-page":
+		ids := c.selected()
+		if len(ids) != 1 {
+			return false
+		}
+		if id == "open-page" {
+			return call(func() { act.OpenPage(ids[0]) })
+		}
+		return call(func() { o.Renew(RenewRequest{ID: ids[0]}) })
 	case "remove":
 		return call(func() { o.Remove(RemoveRequest{IDs: c.selected()}) })
 	case "select-all":
 		return call(act.SelectAll)
 	case "limit":
 		return call(act.OpenLimitMenu)
+	case "polite":
+		if act.SetPolite == nil {
+			return false
+		}
+		settings, loaded := a.Settings()
+		if !loaded {
+			return false
+		}
+		on := !settings.GetPoliteMode()
+		act.SetPolite(on)
+		return true
 	case "when-done":
 		return call(act.OpenWhenDoneMenu)
 	case "search":
@@ -331,6 +359,12 @@ func (c *Commands) MenuItems() []widgets.MenuItem {
 		restart.Label = "Download again…"
 	}
 	items = append(items, restart)
+	if one != nil && display.Renewable(one) { // docs/DESKTOP-SPEC.md §10
+		items = append(items, widgets.MenuItem{ID: "renew", Label: "New link…", Icon: "link", Disabled: stale})
+		if display.PageURL(one) != "" {
+			items = append(items, widgets.MenuItem{ID: "open-page", Label: "Open page", Icon: "external"})
+		}
+	}
 	if one != nil && one.GetErrorCode() == "auth_required" {
 		items = append(items, widgets.MenuItem{ID: "add-login", Label: "Add site login…", Icon: "add", Disabled: stale})
 	}
@@ -396,6 +430,14 @@ func (c *Commands) RunMenuItem(id string) {
 	case "restart":
 		if o.Restart != nil {
 			o.Restart(RestartRequest{IDs: ids, Reason: RestartManual})
+		}
+	case "renew":
+		if one != nil && o.Renew != nil {
+			o.Renew(RenewRequest{ID: one.GetId()})
+		}
+	case "open-page":
+		if one != nil && act.OpenPage != nil {
+			act.OpenPage(one.GetId())
 		}
 	case "add-login":
 		if one != nil && act.AddSiteLogin != nil {

@@ -8,8 +8,10 @@
 
 import { browser } from 'wxt/browser';
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { isFrameMessage } from '../lib/messages';
+import { isFrameMessage, type ShowPanelResponse } from '../lib/messages';
+import { listenPageFetch } from '../lib/page-fetch';
 import { parseVideoOptions, VIDEO_OPTIONS_KEY } from '../lib/options-form';
+import { compactSite, siteOfAddress, tilePost } from '../lib/site-video';
 import { PrefetchDwell, prefetchVideo } from '../lib/video-prefetch';
 import { VideoTracker, VISIBLE_RATIO } from '../lib/video-tracker';
 
@@ -33,6 +35,9 @@ export default defineContentScript({
   runAt: 'document_idle',
   cssInjectionMode: 'manual',
   main(ctx) {
+    // Browser-fetched saves (SITE-MEDIA-SPEC §2.8): the background's request for a download whose
+    // video servers answer only browsers is made here, with the page's own network stack.
+    listenPageFetch(browser.runtime.onConnect as never, browser.runtime.id);
     const topFrame = window.top === window;
     const tracker = new VideoTracker({
       doc: document,
@@ -52,17 +57,33 @@ export default defineContentScript({
       readOptions: async () => parseVideoOptions((await browser.storage.local.get(VIDEO_OPTIONS_KEY))[VIDEO_OPTIONS_KEY]),
       dwell: (deps) => new PrefetchDwell(deps),
       visible: () => document.visibilityState === 'visible',
+      // No video of a curated site's top frame is decorative (VIDEO-DETECT-SPEC §2.5); embeds keep the rule.
+      curatedHost: (url) => siteOfAddress(url) !== undefined,
+      // Compact social sites' top frames: videos that mount late and grid tiles (§5.1 "Social sites").
+      compactHost: (url) => compactSite(url),
+      mutations: (cb) => (typeof MutationObserver === 'function' ? new MutationObserver(() => cb()) : undefined),
+      tileVideo: tilePost,
     });
     tracker.publish();
     ctx.onInvalidated(() => tracker.destroy());
 
-    // The background asks for a deep scan when it saw media for this frame but no video.
-    const onMessage = (msg: unknown) => {
-      if (isFrameMessage(msg)) tracker.onFrameMessage(msg);
-      return undefined;
+    // The background asks for a deep scan when it saw media for this frame but no video, and for
+    // the panel of the right-clicked video ("Show Downex download panel", answered).
+    const onMessage = (msg: unknown, _sender: unknown, sendResponse: (r: ShowPanelResponse) => void) => {
+      if (!isFrameMessage(msg)) return undefined;
+      if (msg.type !== 'downex:show-panel') {
+        tracker.onFrameMessage(msg);
+        return undefined;
+      }
+      // Answered once the overlay UI is known to be in the frame (or could not be put there).
+      void tracker.showPanel().then(
+        (shown) => sendResponse({ shown }),
+        () => sendResponse({ shown: false }),
+      );
+      return true;
     };
     browser.runtime.onMessage.addListener(onMessage);
-    ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(onMessage));
+    ctx.onInvalidated(() => browser.runtime?.onMessage?.removeListener(onMessage)); // gone once orphaned
 
     // "Show a Download button over videos", the hidden sites, the look-ahead options.
     const onStorage = (changes: Record<string, { newValue?: unknown }>, area: string) => {
@@ -70,7 +91,7 @@ export default defineContentScript({
       if (area === 'local' && change) tracker.optionsChanged(parseVideoOptions(change.newValue));
     };
     browser.storage.onChanged.addListener(onStorage);
-    ctx.onInvalidated(() => browser.storage.onChanged.removeListener(onStorage));
+    ctx.onInvalidated(() => browser.storage?.onChanged?.removeListener(onStorage)); // gone once orphaned
 
     // Back from the back/forward cache: the background forgot the tab, so every frame reports again.
     ctx.addEventListener(window, 'pageshow', (e) => {

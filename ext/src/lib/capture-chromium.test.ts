@@ -96,11 +96,11 @@ describe('onDeterminingFilename listener', () => {
     expect(ret).toBe(true);
     expect(suggest).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(results).toHaveLength(1));
-    expect(calls).toEqual(['pause:7', 'add:7:3000', 'cancel:7', 'erase:7', 'suggest']);
-    expect(suggest).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['pause:7', 'add:7:3000', 'cancel:7', 'erase:7']);
+    expect(suggest).not.toHaveBeenCalled();
     expect(results[0]).toEqual({ handedOff: true, value: { type: 'added', downloadId: 1 } });
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(suggest).toHaveBeenCalledTimes(1);
+    expect(suggest).not.toHaveBeenCalled();
   });
 
   it('relay error: suggest + resume, the browser keeps the download', async () => {
@@ -155,7 +155,7 @@ describe('onDeterminingFilename listener', () => {
     await vi.advanceTimersByTimeAsync(3500);
     await vi.waitFor(() => expect(results).toHaveLength(1));
     expect(results[0]).toMatchObject({ handedOff: true });
-    expect(calls).toEqual(['pause:7', 'add:3000', 'cancel:7', 'erase:7', 'suggest']);
+    expect(calls).toEqual(['pause:7', 'add:3000', 'cancel:7', 'erase:7']);
   });
 
   it('a hand-off that never answers is abandoned after the budget plus slack; a late answer changes nothing', async () => {
@@ -207,7 +207,7 @@ describe('onDeterminingFilename listener', () => {
     const { listener, suggest, calls, results } = setup({ decide: () => Promise.resolve(CAPTURE) });
     expect(listener(item(), suggest)).toBe(true);
     await vi.waitFor(() => expect(results).toHaveLength(1));
-    expect(calls).toEqual(['pause:7', 'add:7:3000', 'cancel:7', 'erase:7', 'suggest']);
+    expect(calls).toEqual(['pause:7', 'add:7:3000', 'cancel:7', 'erase:7']);
   });
 
   it('decide throwing or rejecting still suggests exactly once', async () => {
@@ -302,7 +302,7 @@ describe('onCreated fallback', () => {
     await vi.advanceTimersByTimeAsync(CREATED_FALLBACK_DELAY_MS);
     expect(calls).toEqual(['pause:7', 'add:7:3000', 'cancel:7', 'erase:7']);
     expect(decisions).toEqual([CAPTURE]);
-    expect(suggest).toHaveBeenCalledTimes(1);
+    expect(suggest).not.toHaveBeenCalled();
   });
 
   it('a late onDeterminingFilename only lets the browser name the file the fallback took', async () => {

@@ -18,6 +18,7 @@ import {
   type VideoOptions,
 } from '../../lib/options-form';
 import { errorMessage } from '../../lib/protocol';
+import { NOTIFY_REFUSED_TEXT, RESCUE_OPTIONS_KEY, parseRescueOptions } from '../../lib/rescue';
 import { RULES_STORAGE_KEY, defaultRules, parseRules, type CaptureRules } from '../../lib/rules';
 import { STORE_OPTION_HINTS, storeBuild } from '../../lib/store-build';
 import { hiddenSitesField, hiddenSitesResult } from '../../lib/ui-format';
@@ -41,9 +42,12 @@ const statusEl = byId('form-status', HTMLParagraphElement);
 const videoButtonEl = byId('video-button', HTMLInputElement);
 const videoSignInEl = byId('video-sign-in', HTMLInputElement);
 const videoPrefetchEl = byId('video-prefetch', HTMLInputElement);
+const watchPlayedEl = byId('watch-played', HTMLInputElement);
 const videoStatusEl = byId('video-status', HTMLParagraphElement);
 const hiddenSitesEl = byId('hidden-sites', HTMLTextAreaElement);
 const hiddenSitesErrorEl = byId('hidden-sites-error', HTMLParagraphElement);
+const rescueNotifyEl = byId('rescue-notify', HTMLInputElement);
+const rescueStatusEl = byId('rescue-status', HTMLParagraphElement);
 
 const FIELDS: Readonly<Record<RulesField, { input: HTMLInputElement | HTMLTextAreaElement; error: HTMLElement }>> = {
   extensions: { input: extensionsEl, error: byId('extensions-error', HTMLParagraphElement) },
@@ -222,6 +226,7 @@ function fillVideoOptions(o: VideoOptions): void {
   videoButtonEl.checked = o.videoButton;
   videoSignInEl.checked = o.useSignInForVideos;
   videoPrefetchEl.checked = o.videoPrefetch;
+  watchPlayedEl.checked = o.watchPlayed;
   // Entries added or removed elsewhere (a panel's "Don't show on", the toolbar menu) reach an
   // edited field too, so saving it does not undo them.
   const text = hiddenSitesField(hiddenSitesEl.value, hiddenSitesEdited, storedHiddenSites, o.hiddenSites);
@@ -272,7 +277,7 @@ function setVideoStatus(text: string, tone: 'ok' | 'error' | 'none' = 'none'): v
 
 async function saveVideoOption(change: Partial<VideoOptions>, input: HTMLInputElement): Promise<void> {
   try {
-    // Read the latest options: the overlay may have allowed the sign-in meanwhile.
+    // Read the latest options: a panel's "Don't show on this site" may have changed them meanwhile.
     const got = await browser.storage.local.get(VIDEO_OPTIONS_KEY);
     await browser.storage.local.set({ [VIDEO_OPTIONS_KEY]: { ...parseVideoOptions(got[VIDEO_OPTIONS_KEY]), ...change } });
     setVideoStatus('Saved.', 'ok');
@@ -285,8 +290,48 @@ async function saveVideoOption(change: Partial<VideoOptions>, input: HTMLInputEl
 videoButtonEl.addEventListener('change', () => void saveVideoOption({ videoButton: videoButtonEl.checked }, videoButtonEl));
 videoSignInEl.addEventListener('change', () => void saveVideoOption({ useSignInForVideos: videoSignInEl.checked }, videoSignInEl));
 videoPrefetchEl.addEventListener('change', () => void saveVideoOption({ videoPrefetch: videoPrefetchEl.checked }, videoPrefetchEl));
+watchPlayedEl.addEventListener('change', () => void saveVideoOption({ watchPlayed: watchPlayedEl.checked }, watchPlayedEl));
+
+// --- Failed downloads (BROWSER-SPEC §6): the notification needs its optional permission ----------
+
+function setRescueStatus(text: string, tone: 'ok' | 'error' | 'none' = 'none'): void {
+  rescueStatusEl.textContent = text;
+  rescueStatusEl.className = tone === 'none' ? 'muted' : `tone-${tone}`;
+}
+
+rescueNotifyEl.addEventListener('change', () => {
+  const on = rescueNotifyEl.checked;
+  // permissions.request must run in the click's own turn (a user gesture).
+  const allowed = on ? browser.permissions.request({ permissions: ['notifications'] }) : Promise.resolve(true);
+  void allowed
+    .catch(() => false)
+    .then(async (granted) => {
+      if (!granted) {
+        rescueNotifyEl.checked = false;
+        setRescueStatus(NOTIFY_REFUSED_TEXT, 'error');
+        return;
+      }
+      await browser.storage.local.set({ [RESCUE_OPTIONS_KEY]: { rescueNotify: on } });
+      setRescueStatus('Saved.', 'ok');
+    })
+    .catch((e: unknown) => {
+      rescueNotifyEl.checked = !on;
+      setRescueStatus(`Could not save: ${errorMessage(e)}`, 'error');
+    });
+});
+
+void browser.storage.local
+  .get(RESCUE_OPTIONS_KEY)
+  .then((got) => {
+    rescueNotifyEl.checked = parseRescueOptions(got[RESCUE_OPTIONS_KEY]).rescueNotify;
+  })
+  .catch(() => {
+    rescueNotifyEl.checked = false;
+  });
 
 browser.storage.onChanged.addListener((changes, area) => {
+  const rescue = changes[RESCUE_OPTIONS_KEY];
+  if (area === 'local' && rescue) rescueNotifyEl.checked = parseRescueOptions(rescue.newValue).rescueNotify;
   const change = changes[VIDEO_OPTIONS_KEY];
   if (area === 'local' && change) fillVideoOptions(parseVideoOptions(change.newValue));
 });

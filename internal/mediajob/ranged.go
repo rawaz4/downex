@@ -30,7 +30,9 @@ const (
 	// OutputRemux joins the tracks (a video and an audio track, or one muxed track,
 	// each a fragmented MP4 file) into a progressive MP4 with internal/remux.
 	OutputRemux = "remux"
-	// OutputCopy publishes one muxed MP4 track as it is: its file is renamed into place.
+	// OutputCopy publishes one MP4 track as it is: its file is renamed into place. The
+	// track is muxed, or the video of a page without sound (docs/SITE-MEDIA-SPEC.md
+	// §3.11, amendment 2026-11-18).
 	OutputCopy = "copy"
 )
 
@@ -41,8 +43,12 @@ type RangedSelection struct {
 	// track; 1 or 2. Their URLs and headers are secrets of the run: errors never repeat
 	// them and nothing stores them.
 	Tracks []media.RangedTrack
-	// Output is OutputRemux or OutputCopy (one muxed MP4 track).
+	// Output is OutputRemux or OutputCopy (one muxed or video-only MP4 track).
 	Output string
+	// Clip is the part of the video to save (docs/SITE-MEDIA-SPEC.md §2.7,
+	// docs/MEDIA-SPEC.md §8); the zero Clip saves all of it. Its times are on the
+	// resources' media timeline.
+	Clip media.Clip
 	// NotBefore is the earliest time of the first request (yt-dlp's available_at); zero
 	// for none. RunRanged waits for it before it reports any progress, and refuses one
 	// more than 10 minutes ahead.
@@ -93,7 +99,8 @@ var (
 )
 
 // RunRanged downloads the formats of sel into opts.OutPath and returns the container
-// written, always "mp4".
+// written: "mp4", or "mp3" for a copied MP3 (an audio page's, docs/SITE-MEDIA-SPEC.md
+// §3.13).
 //
 // Each track is planned with media.PlanRanged (a track without a known size is asked
 // for "bytes=0-0" first; a server that ignores ranges makes it one whole request) and
@@ -136,22 +143,23 @@ func RunRanged(ctx context.Context, opts Options, sel RangedSelection, resume *C
 	if err != nil {
 		return "", err
 	}
-	if err := checkRangedSelection(sel); err != nil {
+	if err := checkRangedSelection(sel, o.AudioOnly); err != nil {
 		return "", err
 	}
-	if container, done, err := finishAssembled(ctx, o); err != nil || done {
+	if container, clip, done, err := finishRecorded(ctx, o); err != nil || done {
 		if done && onProgress != nil {
 			n := checkpointTotals(resume)
 			size := int64(0)
 			if fi, serr := os.Stat(o.OutPath); serr == nil {
 				size = fi.Size()
 			}
-			onProgress(Progress{FragmentsTotal: n, FragmentsDone: n, BytesDone: size, BytesTotal: size})
+			onProgress(Progress{FragmentsTotal: n, FragmentsDone: n, BytesDone: size, BytesTotal: size, Clip: clip})
 		}
 		return container, err
 	}
 	r := newRangedRunner(o, sel, onProgress, onCheckpoint)
 	defer r.close()
+	r.resume = resume
 	if err := r.waitNotBefore(ctx); err != nil {
 		return "", err
 	}
@@ -172,15 +180,26 @@ func RunRanged(ctx context.Context, opts Options, sel RangedSelection, resume *C
 }
 
 // checkRangedSelection refuses selections RunRanged cannot turn into one MP4 file.
-func checkRangedSelection(sel RangedSelection) error {
+// One audio track is an audio page's download (docs/SITE-MEDIA-SPEC.md §3.13): an MP4
+// (m4a or mp4) joined or copied, or an MP3 copied; never a part.
+func checkRangedSelection(sel RangedSelection, audioOnly bool) error {
 	ts := sel.Tracks
+	audio := len(ts) == 1 && ts[0].Kind == media.KindAudio
 	switch {
 	case len(ts) == 0 || len(ts) > 2:
 		return fmt.Errorf("%w: %d tracks; a video needs a video (or muxed) track and at most one audio track", ErrInvalidSelection, len(ts))
 	case len(ts) == 2 && (ts[0].Kind != media.KindVideo || ts[1].Kind != media.KindAudio):
 		return fmt.Errorf("%w: two tracks must be a video track, then an audio track", ErrInvalidSelection)
-	case len(ts) == 1 && ts[0].Kind != media.KindVideo && ts[0].Kind != media.KindMuxed:
-		return fmt.Errorf("%w: a single track must carry video", ErrInvalidSelection)
+	case len(ts) == 1 && ts[0].Kind != media.KindVideo && ts[0].Kind != media.KindMuxed && !audio:
+		return fmt.Errorf("%w: a single track must carry video or be the audio of a page without video", ErrInvalidSelection)
+	case (audio || audioOnly) && !sel.Clip.IsZero():
+		return errAudioPart
+	}
+	if audio && sel.Output == OutputCopy {
+		if e := ts[0].Ext; e != "mp4" && e != "m4a" && e != containerMP3 {
+			return fmt.Errorf("mediajob: track %q: %w: only an MP4 or MP3 audio file is saved as it is (file type %q)", ts[0].ID, media.ErrUnsupported, e)
+		}
+		return nil
 	}
 	switch sel.Output {
 	case OutputRemux:
@@ -190,8 +209,8 @@ func checkRangedSelection(sel RangedSelection) error {
 			}
 		}
 	case OutputCopy:
-		if len(ts) != 1 || ts[0].Kind != media.KindMuxed {
-			return fmt.Errorf("%w: a copied download is one muxed track", ErrInvalidSelection)
+		if len(ts) != 1 {
+			return fmt.Errorf("%w: a copied download is one track", ErrInvalidSelection)
 		}
 		if ts[0].Ext != "mp4" {
 			return fmt.Errorf("mediajob: track %q: %w: only an MP4 file is saved as it is (file type %q)", ts[0].ID, media.ErrUnsupported, ts[0].Ext)
@@ -265,6 +284,17 @@ type rtrack struct {
 	// chunk claimed the whole track: no early check opens it).
 	headMode atomic.Int32
 	walk     earlyWalk // the early check's progress (main goroutine)
+
+	// A part (ranged_clip.go): clip is the track's clip mode; a span of the resource
+	// starts at base (the file holds resource byte base+i at offset i; size is then the
+	// span's length, fullSize the resource's); headLen is the length of its head file,
+	// moov a progressive file's 'moov', spanStart/spanEnd the times of the subsegments.
+	clip               int
+	spanBase           int64
+	fullSize           int64
+	headLen            int64
+	moov               []byte
+	spanStart, spanEnd time.Duration
 
 	src source // guarded by rangedRunner.srcMu
 }
@@ -386,7 +416,12 @@ type rangedRunner struct {
 	rt           retrier
 	rep          reporter
 	onCheckpoint func(Checkpoint) error
+	resume       *Checkpoint // the checkpoint RunRanged resumes from (nil: none)
+	clipDone     *model.MediaClip
 
+	// audio: the download of a page without video (Options.AudioOnly, or one audio
+	// track): MP4 data with a video track is refused.
+	audio        bool
 	tracks       []*rtrack
 	total        int        // chunks of all tracks
 	pending      []chunkRef // written chunks waiting for a sync
@@ -438,6 +473,7 @@ func newRangedRunner(o Options, sel RangedSelection, onProgress func(Progress), 
 		headReady:    make(chan struct{}, 1),
 	}
 	r.bgCtx, r.bgCancel = context.WithCancel(context.Background())
+	r.audio = o.AudioOnly || len(sel.Tracks) == 1 && sel.Tracks[0].Kind == media.KindAudio
 	for _, t := range sel.Tracks {
 		s := &rtrack{id: t.ID, key: t.Key, kind: t.Kind, ext: t.Ext, unranged: t.Unranged, chunkBytes: t.ChunkBytes, size: -1, src: newSource(t, 0)}
 		if t.Size > 0 {
@@ -498,6 +534,19 @@ func (r *rangedRunner) planTracks(ctx context.Context) error {
 		if s.size < 0 && !s.unranged {
 			if err := r.probeSize(ctx, s); err != nil {
 				return err
+			}
+		}
+		if !r.sel.Clip.IsZero() {
+			if s.size > 0 && !s.unranged {
+				var prev *TrackCheckpoint
+				if r.resume != nil {
+					prev = resumedTrack(r.resume.Tracks, &track{id: s.id, key: s.key})
+				}
+				if err := r.clipHead(ctx, s, prev); err != nil {
+					return err
+				}
+			} else {
+				s.clip = clipWhole
 			}
 		}
 		if err := r.replan(s); err != nil {
@@ -646,7 +695,7 @@ func (r *rangedRunner) prepare(ctx context.Context, resume *Checkpoint) error {
 // a later run.
 func (r *rangedRunner) adopt(ctx context.Context, s *rtrack, cp *TrackCheckpoint) (bool, error) {
 	n := len(s.plan.Fragments)
-	if cp.Total != n || len(cp.Done) != (n+7)/8 || cp.ChunkBytes != s.chunk {
+	if cp.Total != n || len(cp.Done) != (n+7)/8 || cp.ChunkBytes != s.chunk || cp.Base != s.spanBase || cp.Head != s.headLen || cp.First != 0 {
 		return false, nil
 	}
 	fi, err := os.Stat(s.path)
@@ -738,7 +787,9 @@ func (r *rangedRunner) checkSpace() error {
 	for _, s := range r.tracks {
 		if s.size > 0 {
 			need += s.size - s.gotBytes
-			if r.sel.Output == OutputRemux {
+			// The output is written beside the tracks when they are joined or a part is cut
+			// from them (docs/MEDIA-SPEC.md §8 C18); a whole copied file is moved instead.
+			if r.sel.Output == OutputRemux || !r.sel.Clip.IsZero() {
 				need += s.size
 			}
 		}
@@ -759,6 +810,9 @@ func (r *rangedRunner) checkSpace() error {
 func (r *rangedRunner) run(ctx context.Context) (string, error) {
 	for _, s := range r.tracks {
 		switch {
+		case s.clip == clipFrag || s.clip == clipProg:
+			// A span of the resource: its head was checked (clipHead).
+			s.open, s.checked = true, true
 		case isBit(s.got, 0):
 			if err := r.checkInit(s, false); err != nil {
 				return "", err
@@ -973,6 +1027,15 @@ func (r *rangedRunner) earlyPass(s *rtrack) bool {
 func (r *rangedRunner) walkPrefix(s *rtrack, w *earlyWalk, limit int64) bool {
 	reach := min(s.fragLen(0), maxInitBytes) // what the check of the complete chunk reads
 	limit = min(limit, reach)
+	if r.mp3(s) {
+		if limit < mp3HeadBytes {
+			return false
+		}
+		w.done = true
+		var head [mp3HeadBytes]byte
+		_, err := s.file.ReadAt(head[:], 0)
+		return err == nil && checkMP3Head(head[:]) == nil
+	}
 	copied := r.sel.Output == OutputCopy
 	var hdr [16]byte
 	for !w.done {
@@ -1013,6 +1076,9 @@ func (r *rangedRunner) walkPrefix(s *rtrack, w *earlyWalk, limit int64) bool {
 		buf := make([]byte, b.end())
 		if _, err := s.file.ReadAt(buf, 0); err != nil || media.CheckInit(buf) != nil {
 			return false
+		}
+		if r.audio && checkNoVideo(s.id, buf[b.off:]) != nil {
+			return false // refused by the check of the complete chunk
 		}
 		return copied || hasChildBox(buf[b.off+b.hdr:], "mvex")
 	}
@@ -1196,7 +1262,7 @@ func (r *rangedRunner) fetchChunk(ctx context.Context, sl *rslot, ref chunkRef) 
 // retry runs attempt with the track's current source until it succeeds, fails
 // permanently, fails MaxRetries times in a row or ctx is done (ctx.Err()). A 403 or 410
 // renews the addresses (not counted as a failure); the same attempt refused again
-// after a renewal fails. A 429 or 503 halves the host's connections. cv (may be nil)
+// after a renewal fails (ErrRefusedAgain). A 429 or 503 halves the host's connections. cv (may be nil)
 // shows the waits.
 func (r *rangedRunner) retry(ctx context.Context, s *rtrack, cv *connView, attempt func(src source) error) error {
 	expired, expiredGen := false, uint64(0)
@@ -1213,7 +1279,7 @@ func (r *rangedRunner) retry(ctx context.Context, s *rtrack, cv *connView, attem
 		isStatus := errors.As(err, &se)
 		if isStatus && (se.Code == http.StatusForbidden || se.Code == http.StatusGone) && r.sel.Refresh != nil {
 			if expired && src.gen > expiredGen {
-				return fmt.Errorf("refused again after the address was renewed: %w", err)
+				return fmt.Errorf("%w: %w", ErrRefusedAgain, err)
 			}
 			expired, expiredGen = true, src.gen
 			if cv != nil {
@@ -1267,8 +1333,8 @@ func (r *rangedRunner) attempt(ctx context.Context, f transport.Fetcher, sl *rsl
 		r.requests.Add(1)
 		resp, err := f.Fetch(ctx, transport.RangeRequest{
 			Request: model.Request{URL: src.url, Headers: src.headers},
-			Start:   pos,
-			End:     reqEnd,
+			Start:   pos + s.spanBase,
+			End:     reqEnd + s.spanBase,
 		})
 		if err != nil {
 			r.requests.Add(-1)
@@ -1294,16 +1360,22 @@ func (r *rangedRunner) attempt(ctx context.Context, f transport.Fetcher, sl *rsl
 // chunk 0 drops its prefix so that the retry asks from byte 0, unless an early check has
 // started other chunks (the track can no longer become whole).
 func (r *rangedRunner) readChunk(ctx context.Context, resp *transport.Response, sl *rslot, s *rtrack, i int, pos, reqEnd int64) (full bool, err error) {
+	// A span of the resource (ranged_clip.go) asks for its bytes at their offset in the
+	// resource, base more than in the file.
+	base, resSize := s.spanBase, s.size
+	if s.fullSize > 0 {
+		resSize = s.fullSize
+	}
 	switch resp.StatusCode {
 	case http.StatusPartialContent:
 		cr := resp.ContentRange
 		switch {
 		case cr == nil:
 			return false, fmt.Errorf("%w: 206 without a usable Content-Range", ErrRangeMismatch)
-		case cr.Start != pos || cr.End < cr.Start || cr.End > reqEnd:
-			return false, fmt.Errorf("%w: asked for bytes %d-%d, got %d-%d", ErrRangeMismatch, pos, reqEnd, cr.Start, cr.End)
-		case cr.Total >= 0 && s.size >= 0 && cr.Total != s.size:
-			return false, fmt.Errorf("%w: the resource has %d bytes, not the %d declared", ErrRangeMismatch, cr.Total, s.size)
+		case cr.Start != pos+base || cr.End < cr.Start || cr.End > reqEnd+base:
+			return false, fmt.Errorf("%w: asked for bytes %d-%d, got %d-%d", ErrRangeMismatch, pos+base, reqEnd+base, cr.Start, cr.End)
+		case cr.Total >= 0 && resSize >= 0 && cr.Total != resSize:
+			return false, fmt.Errorf("%w: the resource has %d bytes, not the %d declared", ErrRangeMismatch, cr.Total, resSize)
 		}
 		length := cr.End - cr.Start + 1
 		if resp.ContentLength >= 0 && resp.ContentLength != length {
@@ -1318,7 +1390,7 @@ func (r *rangedRunner) readChunk(ctx context.Context, resp *transport.Response, 
 		return false, err
 	case http.StatusOK:
 		switch {
-		case i != 0:
+		case i != 0 || s.fullSize > 0:
 			return false, errWholeBody
 		case pos != 0:
 			if len(s.plan.Fragments) == 1 || s.headMode.Load() != headSplit {
@@ -1654,7 +1726,8 @@ func (r *rangedRunner) checkpoint(force bool) error {
 	if r.onCheckpoint != nil {
 		cp := Checkpoint{Tracks: make([]TrackCheckpoint, len(r.tracks)), BytesTotal: r.knownSize()}
 		for k, s := range r.tracks {
-			tc := TrackCheckpoint{TrackID: s.id, Total: len(s.plan.Fragments), Done: bytes.Clone(s.done), Key: s.key, ChunkBytes: s.chunk}
+			tc := TrackCheckpoint{TrackID: s.id, Total: len(s.plan.Fragments), Done: bytes.Clone(s.done), Key: s.key, ChunkBytes: s.chunk,
+				Base: s.spanBase, Head: s.headLen}
 			for i := range s.plan.Fragments {
 				if isBit(s.done, i) {
 					cp.DurableBytes += max(s.fragLen(i), 0)
@@ -1681,7 +1754,7 @@ func (r *rangedRunner) checkpoint(force bool) error {
 // decreases, but when a whole-resource copy fails or a 200 makes a track start over),
 // with the size of the tracks once every one is known.
 func (r *rangedRunner) emit(force bool) {
-	p := Progress{FragmentsTotal: r.total, SpeedBps: r.speed.rate, Connections: int(r.requests.Load()), BytesTotal: r.knownSize()}
+	p := Progress{FragmentsTotal: r.total, SpeedBps: r.speed.rate, Connections: int(r.requests.Load()), BytesTotal: r.knownSize(), Clip: r.clipDone}
 	var got int64
 	for _, s := range r.tracks {
 		p.FragmentsDone += s.ngot
@@ -1719,10 +1792,18 @@ func (r *rangedRunner) assemble(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	if r.sel.Output == OutputCopy {
+	clip := !r.sel.Clip.IsZero()
+	if r.sel.Output == OutputCopy && !clip && !r.mp3(r.tracks[0]) {
 		if err := checkTiling(r.tracks[0]); err != nil {
 			return "", err
 		}
+	}
+	if clip && r.sel.Output == OutputCopy && r.tracks[0].moov == nil && r.tracks[0].clip != clipFrag {
+		moov, err := readTrackMoov(r.tracks[0])
+		if err != nil {
+			return "", err
+		}
+		r.tracks[0].moov = moov
 	}
 	for _, s := range r.tracks {
 		err := s.file.Close()
@@ -1735,14 +1816,38 @@ func (r *rangedRunner) assemble(ctx context.Context) (string, error) {
 	if err := os.Remove(part); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("mediajob: removing a stale part file: %w", err)
 	}
+	if clip {
+		info, err := r.assembleClip(ctx, part)
+		if err != nil {
+			_ = os.Remove(part)
+			if cerr := ctx.Err(); cerr != nil {
+				return "", cerr
+			}
+			return "", diskErr("cutting the part", err)
+		}
+		if err := publish(ctx, r.o, part, remux.ContainerMP4, info); err != nil {
+			_ = os.Remove(part)
+			return "", err
+		}
+		r.clipDone = info
+		return remux.ContainerMP4, nil
+	}
 	if r.sel.Output == OutputCopy {
-		return "mp4", r.publishCopy(ctx, r.tracks[0], part)
+		container := "mp4"
+		if r.mp3(r.tracks[0]) {
+			container = containerMP3
+		}
+		if err := r.publishCopy(ctx, r.tracks[0], part, container); err != nil {
+			return "", err
+		}
+		return container, nil
 	}
 	inputs := make([]remux.Input, 0, len(r.tracks))
 	for _, s := range r.tracks {
 		inputs = append(inputs, remux.Input{Kind: remux.Kind(string(s.kind)), Container: remux.ContainerFMP4, Fragments: []string{s.path}})
 	}
-	container, err := r.o.Assemble(ctx, inputs, part)
+	res, err := r.o.Assemble(ctx, inputs, part, remux.Window{})
+	container := res.Container
 	if err == nil && container != remux.ContainerMP4 {
 		err = fmt.Errorf("%w: the assembler wrote %q, not MP4", media.ErrUnsupported, container)
 	}
@@ -1753,7 +1858,7 @@ func (r *rangedRunner) assemble(ctx context.Context) (string, error) {
 		}
 		return "", diskErr("assembling", err)
 	}
-	if err := publish(ctx, r.o, part, container); err != nil {
+	if err := publish(ctx, r.o, part, container, nil); err != nil {
 		_ = os.Remove(part)
 		return "", err
 	}
@@ -1764,8 +1869,8 @@ func (r *rangedRunner) assemble(ctx context.Context) (string, error) {
 // file (renames keep its size and time), renames it to part, then to OutPath
 // (placeOutput: never replacing anything but, with ReplaceExisting, a regular file). A
 // failed final rename puts the file back.
-func (r *rangedRunner) publishCopy(ctx context.Context, s *rtrack, part string) error {
-	if err := recordOutput(ctx, r.o, s.path, "mp4"); err != nil {
+func (r *rangedRunner) publishCopy(ctx context.Context, s *rtrack, part, container string) error {
+	if err := recordOutput(ctx, r.o, s.path, container, nil); err != nil {
 		return diskErr("recording the output", err)
 	}
 	if err := renameRetry(ctx, r.o.Clock, s.path, part); err != nil {
@@ -1779,6 +1884,12 @@ func (r *rangedRunner) publishCopy(ctx context.Context, s *rtrack, part string) 
 	}
 	syncDir(filepath.Dir(r.o.OutPath))
 	return nil
+}
+
+// mp3 reports a track copied as an MP3 (an audio page's, docs/SITE-MEDIA-SPEC.md §3.13):
+// its head is checked as an MP3's, never as an MP4's.
+func (r *rangedRunner) mp3(s *rtrack) bool {
+	return r.sel.Output == OutputCopy && s.kind == media.KindAudio && s.ext == containerMP3
 }
 
 // checkInit checks the boxes at the start of track s (its first chunk, at most
@@ -1797,6 +1908,13 @@ func (r *rangedRunner) checkInit(s *rtrack, final bool) error {
 	buf := make([]byte, min(n, maxInitBytes))
 	if _, err := s.file.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
 		return diskErr("reading a track file", err)
+	}
+	if r.mp3(s) {
+		if err := checkMP3Head(buf[:min(len(buf), mp3HeadBytes)]); err != nil {
+			return fmt.Errorf("mediajob: track %q: %w", s.id, err)
+		}
+		s.checked = true
+		return nil
 	}
 	boxes, partial, err := topBoxes(buf, s.size)
 	if err != nil {
@@ -1823,10 +1941,15 @@ func (r *rangedRunner) checkInit(s *rtrack, final bool) error {
 			if err := media.CheckInit(buf[:moov.end()]); err != nil {
 				return fmt.Errorf("mediajob: track %q: %w", s.id, err)
 			}
+			if r.audio {
+				if err := checkNoVideo(s.id, buf[moov.off:moov.end()]); err != nil {
+					return err
+				}
+			}
 		case !final:
 			return nil // the 'moov' comes later: checked on the finished file
 		default:
-			if err := checkMoovAtEnd(s); err != nil {
+			if err := checkMoovAtEnd(s, r.audio); err != nil {
 				return err
 			}
 		}
@@ -1842,6 +1965,11 @@ func (r *rangedRunner) checkInit(s *rtrack, final bool) error {
 	if err := media.CheckInit(buf[:moov.end()]); err != nil {
 		return fmt.Errorf("mediajob: track %q: %w", s.id, err)
 	}
+	if r.audio {
+		if err := checkNoVideo(s.id, buf[moov.off:moov.end()]); err != nil {
+			return err
+		}
+	}
 	switch {
 	case !ftyp:
 		return fmt.Errorf("mediajob: track %q: %w: no 'ftyp' box before the first media", s.id, media.ErrUnsupported)
@@ -1853,8 +1981,8 @@ func (r *rangedRunner) checkInit(s *rtrack, final bool) error {
 }
 
 // checkMoovAtEnd finds the 'moov' box of the finished file of s among its top-level
-// boxes and checks it with media.CheckInit.
-func checkMoovAtEnd(s *rtrack) error {
+// boxes and checks it with media.CheckInit, and with audio that it has no video track.
+func checkMoovAtEnd(s *rtrack, audio bool) error {
 	var hdr [16]byte
 	for off, count := int64(0), 0; off < s.size; count++ {
 		if count >= maxTopBoxes {
@@ -1878,6 +2006,9 @@ func checkMoovAtEnd(s *rtrack) error {
 			}
 			if err := media.CheckInit(moov); err != nil {
 				return fmt.Errorf("mediajob: track %q: %w", s.id, err)
+			}
+			if audio {
+				return checkNoVideo(s.id, moov)
 			}
 			return nil
 		}

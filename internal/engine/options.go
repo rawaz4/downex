@@ -88,9 +88,11 @@ type Options struct {
 	openFile func(name string, flag int, perm fs.FileMode) (partFile, error)
 }
 
-// partFile is the subset of *os.File the engine writes through.
+// partFile is the subset of *os.File the engine writes through. ReadAt reads the
+// file's first bytes back for Progress.Head (docs/ENGINE-SPEC.md §9).
 type partFile interface {
 	io.WriterAt
+	io.ReaderAt
 	Sync() error
 	Truncate(size int64) error
 	Stat() (fs.FileInfo, error)

@@ -334,6 +334,14 @@ describe('videos of web pages', () => {
     expect(videoFailureText({ code: 'expired', message: 'This video is no longer on the page.' })).toBe('This video is no longer on the page.');
   });
 
+  it('says that an item left the page (SITE-MEDIA-SPEC §5.5, as the desktop does)', () => {
+    const gone =
+      'This video is not available (private, removed, blocked in your country, or the site asks to try again later). This item is no longer on the page.';
+    const message = 'site_unavailable: this video is not available: this item is no longer on the page';
+    expect(videoFailureText(rejected(message, 'site_unavailable'))).toBe(gone);
+    expect(videoFailureText(rejected(message))).toBe(gone);
+  });
+
   it('asks again only while Downex sets up yt-dlp or resolves the page', () => {
     expect(isVideoRetry(rejected('tools_installing: downloading yt-dlp and Deno (3%)', 'tools_installing'))).toBe(true);
     expect(isVideoRetry(rejected('site_resolving: still getting the video info'))).toBe(true);
@@ -357,6 +365,7 @@ describe('videos of web pages', () => {
   it('shows direct video files in the history, and every source added without confirmation', () => {
     const f = rec({ source: 'video-file', url: 'https://cdn.example.com/v/clip.mp4', filename: 'Clip.mp4', awaiting: true });
     expect(sourceLabel('video-file')).toBe('Video file');
+    expect(sourceLabel('rescue')).toBe('Finished from the browser');
     expect(fileKind({ ...f, filename: undefined, url: 'https://cdn.example.com/v/clip' })).toBe('video');
     expect(recordName(f)).toBe('Clip.mp4');
     expect(recordResult(f)).toBe('Waiting for confirmation in Downex');

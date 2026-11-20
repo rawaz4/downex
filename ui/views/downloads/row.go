@@ -31,6 +31,8 @@ const (
 	ActFolder  RowAction = "folder"
 	ActRemove  RowAction = "remove"
 	ActRestart RowAction = "restart"
+	// ActRenew is a link that expired: New link… (docs/DESKTOP-SPEC.md §10).
+	ActRenew RowAction = "renew"
 )
 
 // The columns in their order (display.Columns): a row has a cell for each.
@@ -106,6 +108,7 @@ type row struct {
 	slide      float32
 	slideAnim  *kit.Tween
 	live       bool
+	check      display.FileCheckTone // the file check's tone (DESKTOP-SPEC §9.7)
 	cell       display.ProgressCell
 	pill       widgets.BarState
 	statusTone int
@@ -319,7 +322,15 @@ func (r *row) show(d *downexv1.Download, again bool) {
 
 	// Status
 	status := display.StatusText(d)
-	r.mark.set(icons.MarkOf(stateName(d.GetState())), map[bool]kit.DIP{false: 14, true: 12}[compact])
+	r.check = display.ToneOfFileCheck(d)
+	markKind := icons.MarkOf(stateName(d.GetState()))
+	switch r.check { // the alert mark: the file is not what its name says (DESKTOP-SPEC §9.7)
+	case display.FileCheckFail:
+		markKind = icons.MarkFailed
+	case display.FileCheckWarn:
+		markKind = icons.MarkCheckWarn
+	}
+	r.mark.set(markKind, map[bool]kit.DIP{false: 14, true: 12}[compact])
 	r.cells[colStatus].Style.ColumnGap = kit.Px(map[bool]float32{false: 8, true: 7}[compact])
 	if s, p, ok := queuedParts(status); ok {
 		r.status.SetText(s)
@@ -329,9 +340,14 @@ func (r *row) show(d *downexv1.Download, again bool) {
 		r.status.SetText(status)
 		r.pos.SetHidden(true)
 	}
-	if e := d.GetError(); e != "" {
+	switch e := d.GetError(); {
+	case r.check != display.FileCheckNone && e != "":
+		r.cells[colStatus].Tooltip = d.GetFileCheck().GetSummary() + "\n" + text.EscapeBidi(e)
+	case r.check != display.FileCheckNone:
+		r.cells[colStatus].Tooltip = d.GetFileCheck().GetSummary()
+	case e != "":
 		r.cells[colStatus].Tooltip = text.EscapeBidi(e)
-	} else {
+	default:
 		r.cells[colStatus].Tooltip = status
 	}
 	bold := false
@@ -629,6 +645,14 @@ func (r *row) paintColors(t *tokens.Theme, st kit.RowState) {
 		sc = t.Info
 	case state.StateCompleted, state.StateCanceled:
 		sc = faint
+	}
+	if r.state == state.StateCompleted { // "Check file" (DESKTOP-SPEC §9.7)
+		switch r.check {
+		case display.FileCheckFail:
+			sc = t.Danger
+		case display.FileCheckWarn:
+			sc = t.Warn
+		}
 	}
 	r.status.SetColor(sc)
 	r.pos.SetColor(faint)

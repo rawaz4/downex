@@ -3,12 +3,15 @@ import { barPath, brandLayout } from '../../assets/brand';
 import type { HandoffRecord } from '../../lib/history';
 import { DEFAULT_VIDEO_OPTIONS } from '../../lib/options-form';
 import { defaultRules, siteExclusion } from '../../lib/rules';
+import { MP4_NOTE } from '../../lib/video-panel';
 import {
   CONFIRM_IN_DOWNEX,
   DOWNLOADING_IN_DOWNEX,
   HOST_MISSING_HINT,
   connectionLabel,
   daemonLabel,
+  BROWSER_FETCH_NOTE,
+  siteNote,
   siteSendSwitch,
   type FileKind,
 } from '../../lib/ui-format';
@@ -25,6 +28,8 @@ import {
   durationText,
   handoffMark,
   handoffPill,
+  RENEW_CHECK_PILL,
+  RENEW_CHECK_TITLE,
   handoffTime,
   hostMissing,
   keepUnits,
@@ -41,6 +46,7 @@ import {
   streamNameParts,
   tileKind,
   videoSubline,
+  listNoteExtra,
 } from './popup-view';
 
 describe('splitStatus', () => {
@@ -174,6 +180,14 @@ describe('statusChip', () => {
     expect(statusTooltip(relay, daemon)).toBe('Connected (Downex 0.7.3). Daemon running: 2 active, 1 queued');
     expect(statusTooltip(relay, undefined)).toBe('Connected (Downex 0.7.3)');
     expect(statusTooltip(undefined, undefined)).toBe('Checking connection…');
+    // Polite mode adds a sentence only while it slows downloads; the chip's text is unchanged.
+    expect(statusTooltip(relay, daemon, 'slowed')).toBe(
+      'Connected (Downex 0.7.3). Daemon running: 2 active, 1 queued. Polite: slowed to keep the line smooth.',
+    );
+    for (const p of ['off', 'idle', 'watching', 'measuring', 'no_signal', 'unavailable', undefined] as const) {
+      expect(statusTooltip(relay, daemon, p)).toBe('Connected (Downex 0.7.3). Daemon running: 2 active, 1 queued');
+    }
+    expect(statusTooltip(relay, undefined, 'slowed')).toBe('Connected (Downex 0.7.3)');
     const missing = connectionLabel({ state: 'disconnected', lastError: 'Specified native messaging host not found.', since: 0 });
     const unknown = daemonLabel({ ok: false, error: { code: 'disconnected', message: 'Specified native messaging host not found.' } });
     expect(statusTooltip(missing, unknown)).toBe(`Not available: Specified native messaging host not found. ${DAEMON_UNKNOWN}`);
@@ -295,6 +309,13 @@ describe('marks and hand-off pills', () => {
     });
     expect(handoffPill(rec({ ok: false }))).toMatchObject({ text: 'Not sent', tone: 'fail', note: '' });
     expect(handoffPill(rec({ source: 'video', awaiting: false }))).toMatchObject({ title: 'Downloading in Downex. Downex saves it as one MP4 file.' });
+    // A download that failed in the browser and Downex finishes (BROWSER-SPEC §6).
+    expect(handoffPill(rec({ source: 'rescue', awaiting: false, keptBytes: 9 }))).toEqual({
+      text: 'Finished in Downex',
+      tone: 'ok',
+      title: 'Finished in Downex. Downex continues it from the bytes the browser saved.',
+      note: '',
+    });
   });
 
   it('dates a hand-off by the day: the time today, "Yesterday", else a date', () => {
@@ -334,7 +355,14 @@ describe('the video card and the quality select', () => {
     ]);
   });
 
+  it('badges the recommended quality (VIDEO-DETECT-SPEC §5.2)', () => {
+    expect(qualityOptions([{ id: 'v1', quality: '1080p', codecs: '', size: '', picture: '', recommended: true }])).toEqual([
+      { value: 'v1', label: '1080p', badge: 'Recommended' },
+    ]);
+  });
+
   it('shows "No cookies sent" by Find the video only while the sign-in option is off', () => {
+    // Off by default since the second 2026-11-18 amendment (SITE-MEDIA-SPEC §6.3).
     expect(showsNoCookies(DEFAULT_VIDEO_OPTIONS)).toBe(true);
     expect(showsNoCookies({ ...DEFAULT_VIDEO_OPTIONS, useSignInForVideos: true })).toBe(false);
   });
@@ -406,5 +434,26 @@ describe('brand mark', () => {
   it('rounds a bar’s right end only when it is tall enough', () => {
     expect(barPath({ x: 1, y: 2, w: 10, h: 3, r: 0, head: false })).toBe('M1 2h10v3h-10z');
     expect(barPath({ x: 1, y: 2, w: 10, h: 4, r: 2, head: false })).toBe('M1 2h8a2 2 0 0 1 0 4h-8z');
+  });
+});
+
+describe('the renewal check pill (DESKTOP-SPEC §10)', () => {
+  it('says Downex is checking the link, in the info tone', () => {
+    const rec: HandoffRecord = { ts: 1, url: 'https://a/f.zip', source: 'capture', ok: true, downloadId: 3, renewCheck: true };
+    expect(handoffPill(rec)).toEqual({ text: RENEW_CHECK_PILL, tone: 'info', title: RENEW_CHECK_TITLE, note: '' });
+    expect(RENEW_CHECK_PILL).toBe('Checking in Downex');
+    expect(RENEW_CHECK_TITLE).toBe('Downex is checking whether this link continues a stopped download.');
+    expect(handoffMark(rec)).toEqual({ tone: 'info', glyph: 'awaiting' });
+    expect(handoffPill({ ...rec, ok: false, error: { code: 'rejected', message: 'no' } }).text).not.toBe(RENEW_CHECK_PILL);
+  });
+});
+
+describe('a video row list note (SITE-MEDIA-SPEC §2.8, §6.3)', () => {
+  it('shows what the site note adds to the MP4 note the select says', () => {
+    expect(listNoteExtra(MP4_NOTE, MP4_NOTE)).toBe('');
+    expect(listNoteExtra(siteNote({ browserFetch: true }, MP4_NOTE), MP4_NOTE)).toBe(BROWSER_FETCH_NOTE);
+    expect(listNoteExtra(siteNote({ signedIn: 'media.example', browserFetch: true }, MP4_NOTE), MP4_NOTE)).toBe(
+      `Used your sign-in for media.example. ${BROWSER_FETCH_NOTE}`,
+    );
   });
 });

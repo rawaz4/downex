@@ -38,10 +38,10 @@ export interface FrameVideoMeta {
   meaningful: boolean;
 }
 
-/** `f<seq>` a file item, `s<seq>` a stream item, `e<id>` an element file. */
+/** `f<seq>` a file item, `s<seq>` a stream item, `e<id>` an element file, `p<n>` a Played source. */
 export type OfferKey = string;
 /** The form of every OfferKey. */
-export const OFFER_KEY_RE = /^[fse][0-9]{1,12}$/;
+export const OFFER_KEY_RE = /^[fsep][0-9]{1,12}$/;
 
 /** A direct MP4 file of the frame (or of the tab, for the top frame), for the page's panel. */
 export interface FileOffer {
@@ -70,6 +70,12 @@ export interface StreamOffer {
   display: string;
   frame: 'this' | 'other';
   matched: boolean;
+  /**
+   * The playlists of one video (streamGroup): the address's directory and its file name up to the
+   * first "_" or "." (a master and its levels named alike); the panel probes one per group while it
+   * looks for the clicked video's length.
+   */
+  group?: string;
   probe?: VideoTaskState<VideoInfoResult>;
   add?: VideoTaskState<AddedResult>;
 }
@@ -84,8 +90,25 @@ export interface SiteOffer {
   pageUrl: string;
   /** A curated site (VIDEO-DETECT-SPEC §3.8) or YouTube. */
   curated: boolean;
+  /**
+   * The clicked feed video's own post, found from its links (VIDEO-DETECT-SPEC §5.1 "Feed videos"),
+   * not the frame's address: the panel is titled with the site's title for it.
+   */
+  linked?: true;
   probe?: VideoTaskState<VideoInfoResult>;
   add?: VideoTaskState<AddedResult>;
+}
+
+/**
+ * The clicked video's files as the tab's player fetched them (SITE-MEDIA-SPEC §2.9 "Save what's
+ * playing"): Downex's answer once it matched them (`probe`), the add's state, and how long the
+ * panel has waited for a file of this video.
+ */
+export interface PlayedOffer {
+  key: OfferKey;
+  probe?: VideoTaskState<VideoInfoResult>;
+  add?: VideoTaskState<AddedResult>;
+  waitingMs: number;
 }
 
 /** Answer to `downex:frame-offers`: everything a frame's panel lists, from the background's memory. */
@@ -96,11 +119,21 @@ export interface FrameOffers {
   files: FileOffer[];
   streams: StreamOffer[];
   site?: SiteOffer;
-  /** What the relay serves (`streams`: stream qualities; `video`: yt-dlp). */
-  features: { streams: boolean; video: boolean };
+  /**
+   * What the relay serves (`streams`: stream qualities; `video`: yt-dlp; `clips`: a part of a
+   * video, MEDIA-SPEC §8; missing from an older background: none).
+   */
+  features: { streams: boolean; video: boolean; clips?: boolean };
   /** The clicked element is protected / live. */
   drm: boolean;
   live: boolean;
+  /**
+   * The frame shows a `network` site's video (VIDEO-DETECT-SPEC §3.8): yt-dlp cannot read it, so
+   * there is no `site`, and the panel's empty text says so.
+   */
+  networkOnly?: true;
+  /** The clicked `blob:` video's Played source (SITE-MEDIA-SPEC §2.9); none on YouTube or without the relay's `played`. */
+  played?: PlayedOffer;
 }
 
 /** A file of the tab for the popup (an extension page, never a web page): it carries the URL. */

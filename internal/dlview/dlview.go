@@ -8,9 +8,11 @@ package dlview
 
 import (
 	"math"
+	"net/url"
 
 	"downex/internal/media"
 	"downex/internal/model"
+	"downex/internal/played"
 	"downex/internal/sitemedia"
 )
 
@@ -82,10 +84,11 @@ func Received(d *model.Download, segs []model.Segment) int64 {
 	return n
 }
 
-// rangedSite reports a web page's direct formats (site media of format "http"), which
-// mediajob.RunRanged downloads in chunks.
+// rangedSite reports a web page's direct formats (site media of format "http", and the
+// files of a played video, docs/SITE-MEDIA-SPEC.md §2.9), which mediajob.RunRanged
+// downloads in chunks.
 func rangedSite(med *model.Media) bool {
-	return med.Origin == sitemedia.OriginSite && med.Format == sitemedia.FormatHTTP
+	return (med.Origin == sitemedia.OriginSite || med.Origin == played.OriginPlayed) && med.Format == sitemedia.FormatHTTP
 }
 
 // ProbedSize is the probe's size of med's selected tracks, -1 when it is not known:
@@ -114,7 +117,7 @@ func ProbedSize(med *model.Media) (int64, bool) {
 		approx = approx || t.SizeApprox
 	}
 	if sized {
-		return size, approx
+		return clipSize(med, size, approx)
 	}
 	if med.Duration <= 0 {
 		return -1, false
@@ -133,7 +136,7 @@ func ProbedSize(med *model.Media) (int64, bool) {
 	if n < 1 || n >= math.MaxInt64/2 {
 		return -1, false
 	}
-	return int64(math.Round(n)), true
+	return clipSize(med, int64(math.Round(n)), true)
 }
 
 // mediaReceived is the bytes done of a media download as stored: its BytesDone, except
@@ -193,4 +196,65 @@ func AverageBps(bytes, ms int64) int64 {
 		return 0
 	}
 	return int64(math.Round(float64(bytes) * 1000 / float64(ms)))
+}
+
+// maxPageURLBytes bounds a page address (the store's limit, docs/ENGINE-SPEC.md §7.2).
+const maxPageURLBytes = 32 << 10
+
+// PageURL is the page stored file download d came from (Download.page_url;
+// docs/DESKTOP-SPEC.md §10): the one its add named, else its Referer when that is an
+// http or https address naming more than an origin (a referrer cut to its origin names
+// no page); "" when unknown, and always for a media download (its page is media's).
+func PageURL(d *model.Download) string {
+	if d.Kind == model.KindMedia {
+		return ""
+	}
+	if d.PageURL != "" {
+		return d.PageURL
+	}
+	ref := d.Request.Headers.Get("Referer")
+	if ref == "" || len(ref) > maxPageURLBytes {
+		return ""
+	}
+	u, err := url.Parse(ref)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return ""
+	}
+	if (u.Path == "" || u.Path == "/") && u.RawQuery == "" {
+		return ""
+	}
+	return ref
+}
+
+// clipPad is what a part's estimate adds to its length: the fetch starts at a keyframe
+// or fragment before the part (docs/MEDIA-SPEC.md §8 B4).
+const clipPad = 5_000 // ms
+
+// ClipFraction is the share of med's video that its part fetches (docs/MEDIA-SPEC.md §8
+// B4): (To − From + 5 s) / duration, the end rounded up to a whole second, at most 1; 1
+// without a part or without a duration.
+func ClipFraction(med *model.Media) float64 {
+	if med == nil || med.Clip == nil || med.Duration <= 0 {
+		return 1
+	}
+	dur := med.Duration.Milliseconds()
+	end := med.Clip.EndMs
+	if end <= 0 || end > dur {
+		end = dur
+	}
+	span := end - med.Clip.StartMs + clipPad
+	span = (span + 999) / 1000 * 1000
+	if span <= 0 {
+		return 1
+	}
+	return min(float64(span)/float64(dur), 1)
+}
+
+// clipSize scales a whole video's size to its part: an estimate whenever a part is cut.
+func clipSize(med *model.Media, size int64, approx bool) (int64, bool) {
+	f := ClipFraction(med)
+	if f >= 1 || size <= 0 {
+		return size, approx
+	}
+	return max(int64(math.Round(float64(size)*f)), 1), true
 }

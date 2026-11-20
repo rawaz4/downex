@@ -430,11 +430,26 @@ func TestMenuButtonUse(t *testing.T) {
 		h.Click(hd.AddButton().Main.Base())
 		h.Click(hd.AddButton().More.Trigger.Base())
 		m := hd.AddButton().More.Menu()
-		if m == nil || !slices.Equal(itemNames(m, kit.RoleMenuItem), []string{"Add downloads… Ctrl+N", "Add video or stream…"}) {
+		if m == nil || !slices.Equal(itemNames(m, kit.RoleMenuItem), []string{"Add downloads… Ctrl+N", "Add video or stream…", "Rescue partial file…"}) {
 			t.Fatalf("menu %v", m != nil)
 		}
 		clickItem(t, h, m, "Add video or stream…")
 		if !slices.Equal(calls, []string{"add", "video"}) {
+			t.Errorf("calls %v", calls)
+		}
+	})
+	t.Run("SplitButton: its third way is Rescue partial file (DESKTOP-SPEC §11)", func(t *testing.T) {
+		var calls []string
+		hd := shell.NewHeader(shell.HeaderOptions{OnAdd: func() { calls = append(calls, "add") },
+			OnRescue: func() { calls = append(calls, "rescue") }})
+		h := rig(t, hd)
+		h.Click(hd.AddButton().More.Trigger.Base())
+		m := hd.AddButton().More.Menu()
+		if m == nil {
+			t.Fatal("no menu")
+		}
+		clickItem(t, h, m, "Rescue partial file…")
+		if !slices.Equal(calls, []string{"rescue"}) {
 			t.Errorf("calls %v", calls)
 		}
 	})

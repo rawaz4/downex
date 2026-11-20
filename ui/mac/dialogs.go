@@ -19,6 +19,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"downex/ui/core/pageurl"
 	"downex/ui/kit"
 )
 
@@ -337,6 +338,25 @@ func OpenExternal(ctx context.Context, url string) error {
 	defer C.free(unsafe.Pointer(cs))
 	if !C.dxpOpenURL(cs) {
 		return fmt.Errorf("mac: open %s: the browser did not open it", url)
+	}
+	return nil
+}
+
+// OpenPage opens a download's page (docs/DESKTOP-SPEC.md §10, "Open page") in the default
+// browser: an http or https address only (pageurl.Check), re-serialised before NSWorkspace
+// sees it. The user always clicks for it.
+func OpenPage(ctx context.Context, raw string) error {
+	page, err := pageurl.Check(raw)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cs := C.CString(page)
+	defer C.free(unsafe.Pointer(cs))
+	if !C.dxpOpenURL(cs) {
+		return errors.New("mac: the browser did not open the page")
 	}
 	return nil
 }

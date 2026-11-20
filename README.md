@@ -14,7 +14,7 @@
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0f1613?style=flat-square">
   <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13%2B-0f1613?style=flat-square">
   <img alt="Written in Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square">
-  <img alt="Version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-3ccb8b?style=flat-square">
+  <img alt="Version 1.1.0" src="https://img.shields.io/badge/version-1.1.0-3ccb8b?style=flat-square">
   <a href="https://github.com/rawaz4/downex/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/rawaz4/downex/total?label=downloads&color=3ccb8b&style=flat-square"></a>
 </p>
 
@@ -36,8 +36,10 @@
 </p>
 
 > [!NOTE]
-> **Downex 1.0.0 is the first public release.** Download it from the
-> [release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0) or
+> **Downex 1.1.0 is out:** save the video playing on TikTok, Instagram, Facebook and other social
+> sites without signing in (Chrome, Edge, Brave), audio pages as `.m4a` or `.mp3`, just part of a
+> video, and Polite mode (see the [changelog](CHANGELOG.md)). Download it from the
+> [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.0) or
 > [downex.app](https://downex.app), or [build it from source](#build-from-source). The source
 > code is at [github.com/rawaz4/downex](https://github.com/rawaz4/downex).
 
@@ -114,12 +116,12 @@
 | | Windows | macOS |
 |---|---|---|
 | **Needs** | Windows 10 or 11 (x64) | macOS 13 Ventura or later (Intel and Apple silicon) |
-| **Download** | `Downex-Setup-1.0.0.exe` from the [release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0) or [downex.app](https://downex.app) | `Downex-1.0.0.dmg` from the same [release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0) or [downex.app](https://downex.app) |
+| **Download** | `Downex-Setup-1.1.0.exe` from the [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.0) or [downex.app](https://downex.app) | `Downex-1.1.0.dmg` from the same [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.0) or [downex.app](https://downex.app) |
 | **Installs** | for you only, no administrator rights | drag **Downex** onto **Applications** |
 
 To check your download, compare its SHA-256 checksum with the one in `SHA256SUMS.txt` on the
-[release page](https://github.com/rawaz4/downex/releases/tag/v1.0.0). On Windows:
-`Get-FileHash Downex-Setup-1.0.0.exe` in PowerShell; on a Mac: `shasum -a 256 Downex-1.0.0.dmg`.
+[release page](https://github.com/rawaz4/downex/releases/tag/v1.1.0). On Windows:
+`Get-FileHash Downex-Setup-1.1.0.exe` in PowerShell; on a Mac: `shasum -a 256 Downex-1.1.0.dmg`.
 Upper and lower case letters count as the same.
 
 <details>
@@ -348,12 +350,12 @@ with **pnpm**.
 
 ```powershell
 # Windows: everything into bin\ (add -Installer for Setup, needs NSIS 3)
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.0
 ```
 
 ```bash
 # macOS (Xcode Command Line Tools): the universal Downex.app and its disk image in dist/macos
-bash scripts/build-macos.sh -v 1.0.0
+bash scripts/build-macos.sh -v 1.1.0
 ```
 
 <details>

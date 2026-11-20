@@ -61,6 +61,7 @@ func (m *Memory) CreateDownload(ctx context.Context, d *model.Download) error {
 	rec := memoryRecord(*d)
 	stampNew(&rec, now)
 	rec.QueueID = createQueueID(rec.QueueID)
+	rec.FileCheck = nil // written only by SetFileCheck
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -102,8 +103,30 @@ func (m *Memory) UpdateDownload(ctx context.Context, d *model.Download) error {
 	if err != nil {
 		return fmt.Errorf("store: update download: %w", err)
 	}
-	rec.QueueID = e.d.QueueID // changed only by the queue operations
+	rec.QueueID = e.d.QueueID     // changed only by the queue operations
+	rec.FileCheck = e.d.FileCheck // changed only by SetFileCheck
 	e.d = rec
+	return nil
+}
+
+// SetFileCheck replaces (nil: clears) the stored file check of download id.
+func (m *Memory) SetFileCheck(ctx context.Context, id model.DownloadID, fc *model.FileCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, err := m.entry(id)
+	if err != nil {
+		return fmt.Errorf("store: set file check: %w", err)
+	}
+	if fc == nil {
+		e.d.FileCheck = nil
+		return nil
+	}
+	c := *fc
+	c.CheckedAt = canonicalTime(c.CheckedAt)
+	e.d.FileCheck = &c
 	return nil
 }
 
@@ -175,7 +198,8 @@ func (m *Memory) SaveCheckpoint(ctx context.Context, d *model.Download, segs []m
 	if err != nil {
 		return fmt.Errorf("store: save checkpoint: %w", err)
 	}
-	rec.QueueID = e.d.QueueID // changed only by the queue operations
+	rec.QueueID = e.d.QueueID     // changed only by the queue operations
+	rec.FileCheck = e.d.FileCheck // changed only by SetFileCheck
 	e.d, e.segs = rec, sorted
 	return nil
 }

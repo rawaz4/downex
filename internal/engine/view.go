@@ -147,6 +147,8 @@ func shortReason(err error) string {
 		return ""
 	case errors.As(err, &se):
 		return "HTTP " + strconv.Itoa(se.Code)
+	case errors.Is(err, ErrLinkExpired):
+		return "link expired"
 	case errors.Is(err, ErrStalled):
 		return "no data received"
 	case errors.Is(err, ErrValidatorChanged):

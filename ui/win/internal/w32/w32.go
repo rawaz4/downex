@@ -56,6 +56,9 @@ var (
 	procScreenToClient                = user32.NewProc("ScreenToClient")
 	procClientToScreen                = user32.NewProc("ClientToScreen")
 	procSetWindowPos                  = user32.NewProc("SetWindowPos")
+	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
+	procGetWindow                     = user32.NewProc("GetWindow")
+	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
 	procAdjustWindowRectExForDpi      = user32.NewProc("AdjustWindowRectExForDpi")
@@ -435,6 +438,7 @@ const (
 	SWP_NOZORDER     = 0x0004
 	SWP_NOACTIVATE   = 0x0010
 	SWP_FRAMECHANGED = 0x0020
+	SWP_SHOWWINDOW   = 0x0040
 
 	SIZE_RESTORED  = 0
 	SIZE_MINIMIZED = 1
@@ -760,6 +764,38 @@ func GetMonitorInfo(m windows.Handle) (MONITORINFO, bool) {
 	mi := MONITORINFO{Size: uint32(unsafe.Sizeof(MONITORINFO{}))}
 	r, _, _ := syscall.SyscallN(procGetMonitorInfoW.Addr(), uintptr(m), uintptr(unsafe.Pointer(&mi)))
 	return mi, r != 0
+}
+
+// The hWndInsertAfter values of SetWindowZOrder (WinUser.h).
+const (
+	HWND_TOPMOST   = HWND(^uintptr(0))     // (HWND)-1
+	HWND_NOTOPMOST = HWND(^uintptr(0) - 1) // (HWND)-2
+)
+
+// SetWindowZOrder places h after insertAfter in the z-order (SetWindowPos with no move or
+// size: flags add to SWP_NOMOVE|SWP_NOSIZE).
+func SetWindowZOrder(h, insertAfter HWND, flags uint32) bool {
+	r, _, _ := syscall.SyscallN(procSetWindowPos.Addr(), uintptr(h), uintptr(insertAfter), 0, 0, 0, 0, uintptr(flags|SWP_NOMOVE|SWP_NOSIZE))
+	return r != 0
+}
+
+// GetForegroundWindow is the window the user works in (0 while none is).
+func GetForegroundWindow() HWND {
+	r, _, _ := syscall.SyscallN(procGetForegroundWindow.Addr())
+	return HWND(r)
+}
+
+// GetWindow is the window in relation cmd to h (GW_HWNDNEXT 2: the next one below it in
+// the z-order); 0 when there is none.
+func GetWindow(h HWND, cmd uint32) HWND {
+	r, _, _ := syscall.SyscallN(procGetWindow.Addr(), uintptr(h), uintptr(cmd))
+	return HWND(r)
+}
+
+// IsWindowVisible reports a window with WS_VISIBLE.
+func IsWindowVisible(h HWND) bool {
+	r, _, _ := syscall.SyscallN(procIsWindowVisible.Addr(), uintptr(h))
+	return r != 0
 }
 
 // IsIconic reports a minimised window.

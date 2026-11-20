@@ -259,8 +259,8 @@ func TestWatchToolsEvents(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			evs := r.GetEvents()
-			if len(times) == 0 && len(evs) > 0 {
-				firstEnd = evs[len(evs)-1]
+			if len(times) == 0 && len(evs) > 1 {
+				firstEnd = evs[len(evs)-2] // the last is Polite mode's status
 			}
 			times = append(times, time.Now())
 			for _, ev := range evs {

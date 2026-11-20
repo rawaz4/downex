@@ -56,18 +56,23 @@ func TestWindowsInstaller(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "downexd.exe")
 	setup := filepath.Join(t.TempDir(), "Downex-Setup-1.0.0.exe")
-	signed := map[string]error{}
+	// signed: a file's Authenticode result; a file not listed is unsigned.
+	type sig struct {
+		signer Signer
+		err    error
+	}
+	signed := map[string]sig{}
 	var st starts
 	in := NewInstaller(System{
 		GOOS:          "windows",
 		Layout:        func() (client.Layout, error) { return client.Layout{Exe: exe, Dir: dir}, nil },
 		StartDetached: st.start,
 		Getenv:        noEnv,
-		Authenticode: func(p string) error {
-			if err, ok := signed[p]; ok {
-				return err
+		Authenticode: func(p string) (Signer, error) {
+			if r, ok := signed[p]; ok {
+				return r.signer, r.err
 			}
-			return ErrUnsigned
+			return Signer{}, ErrUnsigned
 		},
 		Run: func(context.Context, string, ...string) ([]byte, error) {
 			t.Error("the Windows installer runs no commands")
@@ -104,9 +109,13 @@ func TestWindowsInstaller(t *testing.T) {
 		t.Errorf("started %q, want [%s /S /RELAUNCH]", got, setup)
 	}
 
-	// A signed downexd needs a validly signed Setup.
-	signed[exe] = nil
-	signed[setup] = errors.New("TRUST_E_BAD_DIGEST")
+	// A signed downexd needs a Setup validly signed by the same publisher: the same
+	// certificate subject (a renewed certificate keeps it; its thumbprint changes).
+	downex := Signer{Subject: "Downex", SubjectName: []byte("CN=Downex, O=Downex, C=NL")}
+	renewed := downex
+	other := Signer{Subject: "Downex", SubjectName: []byte("CN=Downex, O=Someone Else, C=US")}
+	signed[exe] = sig{signer: downex}
+	signed[setup] = sig{err: errors.New("TRUST_E_BAD_DIGEST")}
 	if _, err := in.Stage(ctx, setup, v); !errors.Is(err, ErrCodeSignature) {
 		t.Errorf("signed downexd, badly signed Setup: %v, want ErrCodeSignature", err)
 	}
@@ -114,9 +123,23 @@ func TestWindowsInstaller(t *testing.T) {
 	if _, err := in.Stage(ctx, setup, v); !errors.Is(err, ErrCodeSignature) {
 		t.Errorf("signed downexd, unsigned Setup: %v, want ErrCodeSignature", err)
 	}
-	signed[setup] = nil
+	signed[setup] = sig{signer: other}
+	if _, err := in.Stage(ctx, setup, v); !errors.Is(err, ErrCodeSignature) {
+		t.Errorf("Setup validly signed by another publisher: %v, want ErrCodeSignature", err)
+	}
+	signed[setup] = sig{signer: Signer{Subject: "Downex"}}
+	if _, err := in.Stage(ctx, setup, v); !errors.Is(err, ErrCodeSignature) {
+		t.Errorf("Setup signer subject unreadable: %v, want ErrCodeSignature", err)
+	}
+	signed[exe] = sig{signer: Signer{}}
+	signed[setup] = sig{signer: Signer{}}
+	if _, err := in.Stage(ctx, setup, v); !errors.Is(err, ErrCodeSignature) {
+		t.Errorf("neither signer subject readable: %v, want ErrCodeSignature", err)
+	}
+	signed[exe] = sig{signer: downex}
+	signed[setup] = sig{signer: renewed}
 	if _, err := in.Stage(ctx, setup, v); err != nil {
-		t.Errorf("both signed: %v", err)
+		t.Errorf("both signed by the same publisher: %v", err)
 	}
 
 	st.err = errors.New("access denied")

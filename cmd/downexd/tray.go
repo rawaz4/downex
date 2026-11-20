@@ -13,6 +13,8 @@ import (
 
 	"downex/internal/client"
 	"downex/internal/daemon"
+	"downex/internal/filecheck"
+	"downex/internal/model"
 	"downex/internal/notify"
 	"downex/internal/platform"
 	downexv1 "downex/internal/rpc/downex/v1"
@@ -143,7 +145,7 @@ func startTray(ctx context.Context, cfg trayConfig) (stop func()) {
 
 // tooltip renders the daemon's activity.
 func tooltip(a daemon.Activity) string {
-	return notify.Tooltip(notify.Summary{Active: a.Active, Speed: a.SpeedBps})
+	return notify.Tooltip(notify.Summary{Active: a.Active, Speed: a.SpeedBps, PoliteSlowed: a.PoliteSlowed})
 }
 
 // trayRunner connects the daemon to the icon.
@@ -230,6 +232,8 @@ func (r *trayRunner) run() {
 				show(center.Completed(now, n.Download))
 			case daemon.NoticeFailed:
 				show(center.Failed(now, n.Download))
+			case daemon.NoticeLinkRenewed:
+				show(center.Renewed(now, n.Download))
 			case daemon.NoticeAwaiting:
 				if !n.UILaunched { // the window could not be asked to show it
 					show(center.Awaiting(now, n.Download))
@@ -243,6 +247,9 @@ func (r *trayRunner) run() {
 			case daemon.NoticeScanProblem:
 				// Shown whatever notify_on_failure says: the user turned scanning on.
 				r.icon.Notify(tray.Balloon{Title: "Antivirus scan", Text: notify.Clean(n.Text), Error: true})
+			case daemon.NoticeFileCheck:
+				// The daemon decides who hears of it (docs/DESKTOP-SPEC.md §9.7).
+				r.icon.Notify(fileCheckBalloon(n))
 			case daemon.NoticeUpdateAvailable:
 				r.icon.Notify(updateBalloon(n.Update))
 			}
@@ -326,6 +333,17 @@ func updateBalloon(u *downexv1.UpdateInfo) tray.Balloon {
 	return tray.Balloon{
 		Title: "Downex " + notify.Clean(u.GetLatestVersion()) + " is available",
 		Text:  "Click to open Downex and install it.",
+	}
+}
+
+// fileCheckBalloon is the notification of a final file check (docs/DESKTOP-SPEC.md
+// §9.7): "Check this download", in the error style for DANGER. Clicking it opens the
+// window, as every notification does.
+func fileCheckBalloon(n daemon.Notice) tray.Balloon {
+	return tray.Balloon{
+		Title: filecheck.NotificationTitle,
+		Text:  notify.Clean(n.Text),
+		Error: n.Level == model.FileCheckDanger,
 	}
 }
 

@@ -59,6 +59,27 @@ func urlNameParts(rawURL string) (segment, host string) {
 	return lastPathSegment(s), host
 }
 
+// RawFilenameFromURL returns the last non-empty path segment of rawURL, percent-decoded
+// once, before sanitising: what the file check inspects for the hidden text-direction
+// characters that SanitizeFilename removes (docs/DESKTOP-SPEC.md §9.5 N1).
+func RawFilenameFromURL(rawURL string) string {
+	seg, _ := urlNameParts(rawURL)
+	return seg
+}
+
+// HiddenControls reports whether name holds bidirectional embeddings, overrides or
+// isolates (U+202A–U+202E, U+2066–U+2069), which can make an extension look like
+// another ("txt.exe" shown as "exe.txt"). The marks U+200E, U+200F and U+061C do not
+// count: legitimate right-to-left names use them (docs/DESKTOP-SPEC.md §9.5 N1).
+func HiddenControls(name string) bool {
+	for _, r := range name {
+		if r >= 0x202A && r <= 0x202E || r >= 0x2066 && r <= 0x2069 {
+			return true
+		}
+	}
+	return false
+}
+
 // lastPathSegment returns the last non-empty segment of an escaped path, unescaped once.
 func lastPathSegment(escaped string) string {
 	p := strings.TrimRight(escaped, "/")
@@ -85,6 +106,49 @@ func SanitizeFilename(name string) string {
 		return s
 	}
 	return fallbackFilename
+}
+
+// mediaExtensions are the extensions MediaFileName replaces with the container's.
+var mediaExtensions = map[string]bool{
+	"m3u8": true, "m3u": true, "mpd": true, "mp4": true, "m4v": true, "m4a": true, "m4s": true, "ts": true,
+	"mkv": true, "webm": true, "mov": true, "aac": true, "mp3": true,
+}
+
+// MediaExtension returns name's extension, lower-case, when it is one of a media file or
+// manifest (".m3u8", ".mp4", ".webm"...), else "".
+func MediaExtension(name string) string {
+	i := strings.LastIndexByte(name, '.')
+	if i <= 0 || i == len(name)-1 {
+		return ""
+	}
+	if ext := strings.ToLower(name[i+1:]); mediaExtensions[ext] {
+		return ext
+	}
+	return ""
+}
+
+// MediaFileName names a media download's output file from base (a requested name or a
+// title): sanitised, without leading dots (no hidden files), with a media extension
+// (MediaExtension) replaced by the container's (none for ""), and shortened so the
+// extension and a " (n)" variant fit within MaxFilenameBytes; "video" names a base of which
+// nothing usable remains. downexd names media and site downloads with it, and the window
+// proposes the same name for another video of a page (docs/SITE-MEDIA-SPEC.md §3.12).
+func MediaFileName(base, container string) string {
+	base = strings.TrimLeft(SanitizeFilename(base), ".")
+	if ext := MediaExtension(base); ext != "" && len(base) > len(ext)+1 {
+		base = strings.TrimRight(base[:len(base)-len(ext)-1], ". ")
+	}
+	ext := ""
+	if container != "" {
+		ext = "." + container
+	}
+	if limit := MaxFilenameBytes - len(ext) - 12; len(base) > limit {
+		base = truncateUTF8(base, limit)
+	}
+	if base = strings.TrimRight(base, ". "); base == "" {
+		base = "video"
+	}
+	return SanitizeFilename(base + ext)
 }
 
 // sanitizeFilename is SanitizeFilename that reports false instead of falling back.

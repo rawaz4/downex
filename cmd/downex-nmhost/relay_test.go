@@ -20,6 +20,44 @@ import (
 	downexv1 "downex/internal/rpc/downex/v1"
 )
 
+// The status answer carries Polite mode's state for the popup's chip, and its cap while it
+// slows downloads (docs/POLITE-SPEC.md §8); an older daemon's answer has neither.
+func TestStatusPolite(t *testing.T) {
+	be := &fakeBackend{st: &downexv1.StatusResponse{Active: 1}}
+	s := startSession(t, be)
+	for i, tc := range []struct {
+		st   *downexv1.PoliteStatus
+		want string // "" = no polite field
+		rate any    // politeRate, nil = absent
+	}{
+		{nil, "", nil},
+		{&downexv1.PoliteStatus{}, "", nil},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_OFF}, "off", nil},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_WATCHING, DelayMs: 3}, "watching", nil},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_SLOWED, RateLimit: 2_400_000}, "slowed", 2_400_000.0},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_MEASURING, RateLimit: 65536}, "measuring", nil},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_NO_SIGNAL}, "no_signal", nil},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_UNAVAILABLE}, "unavailable", nil},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_IDLE}, "idle", nil},
+	} {
+		be.mu.Lock()
+		be.st.Polite = tc.st
+		be.mu.Unlock()
+		id := fmt.Sprintf("s%d", i)
+		s.send(map[string]any{"id": id, "type": "status"})
+		m := s.recv()
+		if m["type"] != "status" || m["running"] != true {
+			t.Fatalf("status: %v", m)
+		}
+		if got, ok := m["polite"]; (tc.want == "" && ok) || (tc.want != "" && got != tc.want) {
+			t.Errorf("%v: polite = %v, want %q", tc.st, got, tc.want)
+		}
+		if got, ok := m["politeRate"]; (tc.rate == nil && ok) || (tc.rate != nil && got != tc.rate) {
+			t.Errorf("%v: politeRate = %v, want %v", tc.st, got, tc.rate)
+		}
+	}
+}
+
 func TestHelloStatusPing(t *testing.T) {
 	be := &fakeBackend{st: &downexv1.StatusResponse{Version: "1.2.3", Active: 2, Queued: 5}}
 	s := startSession(t, be)
@@ -412,4 +450,35 @@ func TestLogNeverRecordsSecrets(t *testing.T) {
 
 func newTestJSONLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// Only a download the user starts hands the browser's right to the foreground on (so its
+// window may come above the browser, docs/DESKTOP-SPEC.md §7); a ping or a status never does.
+func TestOnlyAddsHandTheForegroundOn(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	old := allowForeground
+	allowForeground = func() bool { mu.Lock(); calls++; mu.Unlock(); return true }
+	t.Cleanup(func() { allowForeground = old })
+	count := func() int { mu.Lock(); defer mu.Unlock(); return calls }
+
+	s := startSession(t, &fakeBackend{})
+	s.send(map[string]any{"id": "p", "type": "ping"})
+	if m := s.recv(); m["id"] != "p" {
+		t.Fatalf("ping: %v", m)
+	}
+	s.send(map[string]any{"id": "s", "type": "status"})
+	if m := s.recv(); m["id"] != "s" {
+		t.Fatalf("status: %v", m)
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("ping and status handed the foreground on %d times", n)
+	}
+	s.send(map[string]any{"id": "a", "type": "add", "url": "https://example.test/f.zip"})
+	if m := s.recv(); m["type"] != "added" {
+		t.Fatalf("add: %v", m)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("an add handed the foreground on %d times, want 1", n)
+	}
 }

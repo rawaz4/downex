@@ -18,6 +18,7 @@ import (
 	"downex/internal/daemon"
 	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/internal/sitemedia"
 )
 
 const testManifest = "https://cdn.test/show/master.m3u8?token=t"
@@ -230,6 +231,24 @@ func TestMediaFollow(t *testing.T) {
 		}
 		if tc.d.GetMedia().GetFormat() == "http" && strings.Contains(r.stderr, "fragments") {
 			t.Errorf("a web page's direct video is reported in fragments (%s): %q", tc.name, r.stderr)
+		}
+	}
+
+	// A video server that refuses Downex even with renewed addresses (403, often bot
+	// protection) is explained; trying again is advised only when progress is kept.
+	refused := siteFailed("http", 316_000_000, false)
+	refused.Error, refused.ErrorCode = "yt-dlp could not read this page: "+sitemedia.ReasonForbidden, "site_error"
+	for _, received := range []int64{0, 33_619_968} {
+		refused.Received = received
+		if received == 0 {
+			refused.Media.FragmentsDone = 0
+		}
+		f.do(func() { f.probe, f.watch = sampleSiteProbe(), waitScript([]*downexv1.Event{snapshot(refused)}) })
+		r := h.run(context.Background(), "media", "--site", testPage, "--wait")
+		retry := strings.Contains(r.stderr, "Try again with: downex resume 7")
+		if r.code != exitError || !strings.Contains(r.stderr, "The site's video server refused Downex") ||
+			strings.Contains(r.stderr, "unexpected HTTP status") || retry != (received > 0) {
+			t.Errorf("refused site video --wait (received %d): %v", received, r)
 		}
 	}
 }
@@ -462,6 +481,29 @@ func TestMediaSiteList(t *testing.T) {
 	}
 	if !strings.Contains(r.stdout, `"sizeApprox": true`) || !strings.Contains(r.stdout, `"pageUrl"`) {
 		t.Errorf("--json fields:\n%s", r.stdout)
+	}
+}
+
+// TestMediaSiteListNoSound: a page whose videos are listed without any audio track (a
+// silent page) says so in the CODECS column, and its footer offers no audio to choose.
+func TestMediaSiteListNoSound(t *testing.T) {
+	f, h := newFakeDaemon(t)
+	f.do(func() {
+		p := sampleSiteProbe()
+		p.Tracks = slices.DeleteFunc(p.Tracks, func(t *downexv1.MediaTrack) bool { return t.GetKind() != "video" })
+		p.SelectedAudio = ""
+		f.probe = p
+	})
+	r := h.run(context.Background(), "media", "--site", testPage, "--list")
+	if r.code != exitOK {
+		t.Fatalf("media --site --list: %v", r)
+	}
+	lines := strings.Split(strings.TrimRight(r.stdout, "\n"), "\n")
+	if len(lines) != 7 || !strings.Contains(lines[3], "H.264 (no sound)") || !strings.Contains(lines[4], "AV1 (no sound)") {
+		t.Errorf("listing:\n%s", r.stdout)
+	}
+	if foot := lines[len(lines)-1]; foot != "* = downloaded by default; choose another quality with --video ID." {
+		t.Errorf("footer %q", foot)
 	}
 }
 
@@ -793,6 +835,93 @@ func TestFormatBandwidth(t *testing.T) {
 		1_500_000_000: "1.5 Gbit/s", 2e12: "2.0 Tbit/s", math.MaxInt64: "9.2 Ebit/s"} {
 		if got := formatBandwidth(bps); got != want {
 			t.Errorf("formatBandwidth(%d) = %q, want %q", bps, got, want)
+		}
+	}
+}
+
+// TestMediaSiteItems: a page with several videos lists them after the qualities, the one
+// described marked; --item names one for the probe and the add (docs/SITE-MEDIA-SPEC.md
+// §3.7, §3.12), only with --site.
+func TestMediaSiteItems(t *testing.T) {
+	f, h := newFakeDaemon(t)
+	f.do(func() {
+		p := sampleSiteProbe()
+		p.EntryId, p.ItemsLeftOut = "itemB", 2
+		p.Items = []*downexv1.MediaItem{{Id: "itemA", Title: "Video by example", DurationMs: 12_000},
+			{Id: "itemB", Title: "Second", DurationMs: 75_500}, {Id: "itemC"}}
+		f.probe = p
+	})
+	r := h.run(context.Background(), "media", "--site", testPage, "--list", "--item", "itemB")
+	if r.code != exitOK {
+		t.Fatalf("media --site --list --item: %v", r)
+	}
+	for _, want := range []string{
+		"Videos on this page: 3 (2 other items not listed: photos, links or videos Downex cannot save)",
+		"  1  itemA  Video by example  0:12", "* 2  itemB  Second            1:15.5", "  3  itemC  -                 -",
+		"* = the video listed above; choose another with --item ID.",
+	} {
+		if !strings.Contains(r.stdout, want+"\n") {
+			t.Errorf("listing lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	r = h.run(context.Background(), "media", "--site", testPage, "--list", "--json")
+	if r.code != exitOK || !strings.Contains(r.stdout, `"entryId": "itemB"`) || !strings.Contains(r.stdout, `"itemsLeftOut": 2`) ||
+		!strings.Contains(r.stdout, `"durationSeconds": 75.5`) {
+		t.Errorf("--json: %v", r)
+	}
+	r = h.run(context.Background(), "media", "--site", testPage, "--item", "itemC", "-o", t.TempDir())
+	if r.code != exitOK {
+		t.Fatalf("media --site --item: %v", r)
+	}
+	f.do(func() {
+		if f.mediaProbes[0].GetEntryId() != "itemB" || f.mediaAdds[len(f.mediaAdds)-1].GetEntryId() != "itemC" {
+			t.Errorf("probe %v, add %v", f.mediaProbes[0], f.mediaAdds[len(f.mediaAdds)-1])
+		}
+	})
+	for _, args := range [][]string{
+		{"media", testManifest, "--item", "x"},
+		{"media", "--site", testPage, "--item", ""},
+		{"media", "--site", testPage, "--item", "a\x01b"},
+	} {
+		if r := h.run(context.Background(), args...); r.code != exitError || !strings.Contains(r.stderr, "--item") {
+			t.Errorf("%q: %v", args, r)
+		}
+	}
+}
+
+// --cookie-domain (docs/SITE-MEDIA-SPEC.md §6.3) sends the -H Cookie's domain with the
+// probe and the add; it needs --site, a Cookie and a domain that holds the page.
+func TestMediaSiteCookieDomain(t *testing.T) {
+	f, h := newFakeDaemon(t)
+	f.do(func() { f.probe = sampleSiteProbe() })
+	const host = "video.test" // testPage's site
+	r := h.run(context.Background(), "media", "--site", testPage, "-H", "Cookie: sid=e2e", "--cookie-domain", host, "-o", t.TempDir())
+	if r.code != exitOK {
+		t.Fatalf("media --site --cookie-domain: %v", r)
+	}
+	r = h.run(context.Background(), "media", "--site", testPage, "-H", "Cookie: sid=e2e", "--cookie-domain", host, "--list")
+	if r.code != exitOK {
+		t.Fatalf("media --site --list --cookie-domain: %v", r)
+	}
+	f.do(func() {
+		if add := f.mediaAdds[len(f.mediaAdds)-1]; add.GetCookieDomain() != host {
+			t.Errorf("add %v", add)
+		}
+		if p := f.mediaProbes[len(f.mediaProbes)-1]; p.GetCookieDomain() != host {
+			t.Errorf("probe %v", p)
+		}
+	})
+	for _, args := range [][]string{
+		{"media", testManifest, "-H", "Cookie: sid=e2e", "--cookie-domain", host},
+		{"media", "--site", testPage, "--cookie-domain", host},
+		{"media", "--site", testPage, "-H", "Cookie: sid=e2e", "--cookie-domain", ""},
+		{"media", "--site", testPage, "-H", "Cookie: sid=e2e", "--cookie-domain", "Example.COM"},
+		{"media", "--site", testPage, "-H", "Cookie: sid=e2e", "--cookie-domain", "other.example"},
+		{"media", "--site", testPage, "-H", "Cookie: sid=e2e", "--cookie-domain", "com"},
+	} {
+		if r := h.run(context.Background(), args...); r.code != exitError || !strings.Contains(r.stderr, "--cookie-domain") ||
+			strings.Contains(r.stderr, "sid=e2e") {
+			t.Errorf("%q: %v", args, r)
 		}
 	}
 }

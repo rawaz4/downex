@@ -47,6 +47,7 @@ type Options struct {
 type toggles struct {
 	useCategoryFolders, confirmBrowserDownloads, notifyOnComplete, notifyOnFailure bool
 	launchAtLogin, showTrayIcon, showProgressWindow, showCompleteDialog            bool
+	politeMode                                                                     bool
 }
 
 // Dialog is SettingsDialog.svelte (DESIGN-SYSTEM.md §3.20, §4.9): a dialog of 70 × 46 rem (less
@@ -79,6 +80,7 @@ type Dialog struct {
 	toggles            toggles
 	network            validate.NetworkForm
 	integration        validate.IntegrationForm
+	renewLinks         downexv1.RenewLinks // Downloads → Expired links (DESKTOP-SPEC §10)
 	updates            validate.UpdatesForm
 	video              validate.VideoForm
 	proxyPassword      string
@@ -280,12 +282,14 @@ func (d *Dialog) fillForms(s *downexv1.Settings) {
 		notifyOnComplete: s.GetNotifyOnComplete(), notifyOnFailure: s.GetNotifyOnFailure(),
 		launchAtLogin: s.GetLaunchAtLogin(), showTrayIcon: s.GetShowTrayIcon(),
 		showProgressWindow: s.GetShowProgressWindow(), showCompleteDialog: s.GetShowCompleteDialog(),
+		politeMode: s.GetPoliteMode(),
 	}
 	d.network = validate.NewNetworkForm(s, d.nextKey)
 	d.nextKey += len(s.GetHostRules()) + len(s.GetSiteLogins())
 	d.integration = validate.NewIntegrationForm(s)
 	d.updates = validate.NewUpdatesForm(s)
 	d.video = validate.NewVideoForm(s)
+	d.renewLinks = s.GetRenewLinks() // UNSPECIFIED (auto) is written back as it was
 	d.proxyPassword = ""
 	d.clearProxyPassword = false
 }
@@ -306,7 +310,8 @@ func (d *Dialog) form() validate.SettingsForm {
 		Categories: d.categories, UseCategoryFolders: t.useCategoryFolders, ConfirmBrowserDownloads: t.confirmBrowserDownloads,
 		NotifyOnComplete: t.notifyOnComplete, NotifyOnFailure: t.notifyOnFailure, LaunchAtLogin: t.launchAtLogin,
 		ShowTrayIcon: t.showTrayIcon, ShowProgressWindow: t.showProgressWindow, ShowCompleteDialog: t.showCompleteDialog,
-		Network: &network, Integration: &integration, Updates: &updates, Video: &video,
+		PoliteMode: t.politeMode, Network: &network, Integration: &integration, Updates: &updates, Video: &video,
+		RenewLinks: d.renewLinks,
 	}
 }
 

@@ -25,13 +25,13 @@ export const PREFETCH_REFILL_MS = 60_000;
 export const PREFETCH_THROTTLE_MS = 30 * 60_000;
 
 /**
- * Whether the video options allow look-aheads: "Prepare video qualities while you watch" on, the
- * Download button shown (with it off the user does not use Downex on YouTube), and the sign-in not
- * allowed: a look-ahead never carries the user's cookies (they go only with a video the user asked
- * for, SITE-MEDIA-SPEC §6.3), and one without them would not be the click's probe.
+ * Whether the video options allow look-aheads: "Prepare video qualities while you watch" on and the
+ * Download button shown (with it off the user does not use Downex on YouTube). The sign-in option
+ * does not matter: a look-ahead never carries the user's cookies, and a click's first request goes
+ * without them too (SITE-MEDIA-SPEC §6.3), so the look-ahead is that request made earlier.
  */
 export function lookAheadAllowed(o: VideoOptions): boolean {
-  return o.videoPrefetch && o.videoButton && !o.useSignInForVideos;
+  return o.videoPrefetch && o.videoButton;
 }
 
 /**
@@ -99,6 +99,16 @@ export class PrefetchDwell {
   stop(): void {
     this.#clear();
     this.#key = undefined;
+  }
+
+  /**
+   * The user pointed at the video's Download button: a stay still being counted ends now (the
+   * same checks as when its time is up). Nothing when none is counted or it was reported already.
+   */
+  now(): void {
+    if (this.#timer === undefined) return;
+    this.#clear();
+    this.#elapsed();
   }
 
   #elapsed(): void {

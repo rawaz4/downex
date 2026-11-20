@@ -440,7 +440,7 @@ svg.tile {
   background: var(--hover);
 }
 
-/* A link-like action inside text or a list (Try again, Allow the sign-in). */
+/* A link-like action inside text or a list (Try again). */
 .btn.link {
   height: auto;
   min-height: 0;
@@ -992,6 +992,19 @@ input[type='checkbox'][role='switch']:disabled {
 
 .sm-option[aria-selected='true'] .sm-olabel {
   font-weight: 600;
+}
+
+.sm-option .sm-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+  vertical-align: 1px;
 }
 
 .sm-option .sm-odetail {

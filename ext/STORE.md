@@ -31,13 +31,59 @@ this computer.
 > menu, or choose a video or stream, it hands Downex what is needed to download it as your browser
 > would:
 >
-> - the file's address, the request method, the request headers your browser sent for it (these can
->   include your cookies, an `Authorization` header and the referring page), a form body of at most
->   1 MiB, and the file's name, type and size;
-> - for a download or a stream detected on a page, the cookies your browser holds for that one
->   address, so a download that needs you to be signed in works in Downex;
-> - for a video on a page, the page's address and title. Your cookies are added for a video only
->   when you turn on "Send my sign-in cookies when a video needs it" (off unless you turn it on).
+> - the file's address, the request method, the request headers your browser sent for it (for a
+>   download your browser started, these can include your cookies, an `Authorization` header and the
+>   referring page), a form body of at most 1 MiB, and the file's name, type and size;
+> - for a download your browser started or a link you send from the context menu, the cookies your
+>   browser holds for that one address, so a download that needs you to be signed in works in Downex. A video file or a stream you choose in a
+>   video's Download panel or in the popup goes without your cookies and without an `Authorization`
+>   header, unless "Use my sign-in for videos that need it" is on (off unless you turn it on);
+> - for a video on a page, the page's address and title. Your cookies for that site go only when
+>   you click Download and the site answers that the video needs you to be signed in (for example an
+>   age-checked or members-only video, or a post only signed-in people can see; never for a check
+>   whether you are a person rather than a program): the extension then asks once more with your
+>   cookies for the site being downloaded and no other site (for a known video site its own domain,
+>   such as instagram.com; for any other page only that page's own address), never from a private
+>   window. They go only to Downex on this computer and are never stored by the extension or sent
+>   anywhere else. Downex keeps them in memory only, never on disk except in a private file for each
+>   lookup that it deletes afterwards, and only for that video's own lookups and download: until the
+>   download completes or is removed, or Downex is closed. This happens only for YouTube videos and
+>   only with "Use my sign-in for videos that need it" on in the extension's options (off unless you
+>   turn it on). Other sites' videos are always looked up without your cookies. The panel says when
+>   your sign-in was used.
+>
+> **Videos your browser fetches.** Some sites' video servers answer only a web browser. After you
+> clicked Download on such a video, Downex asks the extension to fetch it: a script in that video's
+> tab makes the same request the site's own player makes and passes the video's bytes to Downex on
+> this computer, piece by piece, until the video is saved. To find the address the player used, the
+> extension remembers, for each tab and for at most 30 minutes, the address and size of the video
+> files its pages loaded (never their contents); this stays in the browser (its memory, and its
+> session storage, which is cleared when the browser closes), is removed once it expires and when the
+> tab closes, and goes nowhere but to Downex on this computer when you click Download (below). These
+> requests carry the site's cookies for a video that needed your sign-in only under the same "Use my
+> sign-in for videos that need it" option. A file the site's own player fetched for the video you
+> are watching (below) may be requested with the cookies the browser itself attaches for that site
+> when the site refuses it without them, whatever that option says, exactly as the player requested
+> it; the browser sends them itself, the extension never reads them, and none go to Downex.
+>
+> **Saving the video you are watching.** To save the video you see on sites such as TikTok,
+> Instagram or Facebook, the extension remembers, for each tab and for at most 30 minutes, the
+> address, size and type of the video and audio files that tab's pages loaded (never their contents,
+> never cookies), in the browser only (its memory and its session storage, cleared when the browser
+> closes). When you click Download on a video, it reads the
+> first 64 KiB of at most 16 of those files again (the extension's background first, without
+> cookies; then from the tab, as the page's player did), and hands the addresses and those first
+> bytes to Downex on this computer, which picks the files of the video you clicked by its length and
+> picture and downloads them. Only files the page's player fetched as video or audio are read again:
+> never the site's other requests, and never a file on YouTube. The extension's background reads
+> again only a file the browser got from a public address for that tab (others only from the tab,
+> under the browser's own rules for pages), and never one whose address is, or now leads to, this
+> computer or your local network; Downex's own requests for these files never connect to this
+> computer or your local network either, whatever name the address uses (through a proxy you set,
+> the proxy connects). When the site refuses such a file without its cookies, the tab requests it the way the
+> player did, with the cookies the browser attaches for that site (the extension never reads them,
+> and none go to Downex). Nothing of this is sent anywhere else. You can turn it off with "Watch
+> videos as they play" in the extension's options (on unless you turn it off).
 >
 > On connecting, the extension also tells Downex which browser it runs in and its own version, so
 > that the two agree on how to talk to each other.
@@ -48,7 +94,7 @@ this computer.
 >
 > **Preparing video qualities.** With "Prepare video qualities while you watch" on (it is on unless
 > you turn it off), after you stay 1.5 seconds on a video of a supported site, the extension hands the
-> page's address (never your cookies) to Downex, which then asks that site for the video's
+> page's address (never your cookies, whatever the sign-in option says) to Downex, which then asks that site for the video's
 > qualities, so the Download button lists them at once. You can turn it off in the extension's
 > options.
 >
@@ -69,7 +115,10 @@ this computer.
 > **Contact.** support@downex.app
 
 Sources: [ext/src/lib/context.ts `PRIORITY_HEADERS`; protocol.ts `MAX_BODY_BYTES`; background.ts
-`cookies.getAll` for one URL; options-form.ts `useSignInForVideos: false`, `videoPrefetch: true`;
+`cookies.getAll` for one URL; video-handoff.ts `readSignIn` (only after `auth_required`, the
+site's scope from site-video.ts `SIGN_IN_DOMAINS`/`signInScope`, `MAX_SIGN_IN_COOKIE_CHARS`);
+internal/sitejob/cookies.go (private per-run file); options-form.ts `useSignInForVideos: false` (YouTube only), `watchPlayed: true`, browser-fetch.ts `PlayedLog`,
+`videoPrefetch: true`;
 video-prefetch.ts `PREFETCH_DWELL_MS` and no cookies on a look-ahead; history.ts `HISTORY_LIMIT`;
 capture-trace.ts `TRACE_LIMIT` and the query replaced by `?…`; media headers only in
 `storage.session`; wxt.config.ts `incognito: 'not_allowed'`; internal/store headers column; tools
@@ -80,21 +129,23 @@ above holds for both builds.
 
 | Permission | Why |
 | --- | --- |
-| `downloads` | To take over a download you start in the browser (cancel it there and hand it to Downex) and to leave it to the browser when Downex is not available. |
+| `downloads` | To take over a download you start in the browser (cancel it there and hand it to Downex) and to leave it to the browser when Downex is not available; to offer finishing a download that failed in the browser with Downex, which then removes the entry from the browser's list. |
 | `nativeMessaging` | The only channel to the Downex program on this computer; nothing is sent anywhere else. |
 | `webRequest` | To read a response's headers to decide whether it is a download, and to notice the video streams and files a page plays so the toolbar menu can list them. Observe-only on Chromium. |
 | `webRequestBlocking` (Firefox only) | Firefox's download capture holds a download's response for at most 1.5 seconds and cancels it in the browser once Downex has taken it; otherwise the browser downloads it as usual. |
 | `webNavigation` | To clear a tab's detected videos when it moves to another page, and to find which frame of the page a video plays in. |
-| `cookies` | To read the cookies of the one address being downloaded, so a download that needs you to be signed in works in Downex. Never read in bulk. |
-| `contextMenus` | "Download with Downex" and "Download all links" in the right-click menu. |
+| `cookies` | To read the cookies of the one address being downloaded, so a download that needs you to be signed in works in Downex; for a video, only after you clicked Download and the site said the video needs a sign-in, and only that site's. Never read in bulk, never stored. |
+| `contextMenus` | "Download with Downex", "Show Downex download panel" and "Download all links" in the right-click menu (the store build has no "Download video from this link"). |
 | `storage` | Your capture rules and options, the recent hand-offs, and the videos detected in open tabs. |
 | `scripting` | To show the Download button and its quality list over the video playing in a page. |
+| `notifications` (optional) | Asked for only when you turn on "Offer to finish failed downloads with a notification": a notification when a download fails in the browser, with a button to finish it with Downex. Off by default. |
 | Host access to `http://*/*` and `https://*/*` | Downloads and videos can come from any website; the extension needs to see those requests and pages wherever you start them. It does nothing on other schemes and never in private windows. |
 
 ## Store form answers
 
-- **Remote code:** No. All code is in the package; there is no `eval`, `new Function`, remote script
-  or `fetch` to any server.
+- **Remote code:** No. All code is in the package; there is no `eval`, `new Function` or remote
+  script. The background's only `fetch` reads the first 64 KiB of the video files the tab's player
+  fetched, after the user clicked Download on that video (data, never code).
 - **Chrome Web Store, data usage:** declare *Authentication information* (cookies and request headers
   of a download) and *Web history* (the address and title of the page a download or video comes
   from). Certify: not sold to third parties, not used or transferred for purposes unrelated to the
@@ -104,8 +155,8 @@ above holds for both builds.
   data handed to the local Downex program is declared, although it never leaves the computer. The
   manifest (`wxt.config.ts`) has, under `browser_specific_settings.gecko`:
   - `id: 'extension@downex.app'`, permanent from the first upload: AMO ties the listing and every
-    installed copy's updates to it. `downex-nmhost` allows it, and the earlier `browser@downex.local`
-    of copies loaded by hand.
+    installed copy's updates to it. `downex-nmhost` allows it, and only it (the earlier
+    `browser@downex.local` is no longer allowed).
   - `strict_min_version: '140.0'`, the first Firefox with the built-in data consent, so no Firefox
     installs the add-on without showing the data below.
   - `data_collection_permissions: { required: [...] }` with Mozilla's data types; Firefox shows them

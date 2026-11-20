@@ -142,18 +142,21 @@ export async function pausedHandOff(id: number, opts: PausedHandoffOptions): Pro
     const reason = outcome.error.code === 'timeout' ? 'timeout' : 'error';
     return { handedOff: false, reason, code: outcome.error.code, message: outcome.error.message };
   }
+  let cancelled = false;
   try {
-    let cancelled = true;
     try {
       await opts.downloads.cancel(id);
+      cancelled = true;
     } catch {
-      cancelled = false;
+      // not cancelled (it may have completed)
     }
     // Erasing a download that could not be cancelled (it may have completed) would hide
     // the browser's file from the user.
     if (cancelled) await quietly(() => opts.downloads.erase({ id }));
   } finally {
-    release();
+    // A cancelled, erased download has no file name left to choose: answering the browser's
+    // onDeterminingFilename for it fails with "Invalid downloadId" on the extension's Errors page.
+    if (!cancelled) release();
   }
   return { handedOff: true, value: outcome.value };
 }
@@ -272,7 +275,7 @@ export function createDeterminingFilenameListener(
 ): (item: DownloadItemLike, suggest: Suggest) => true | undefined {
   const timeoutMs = deps.timeoutMs ?? CHROMIUM_HANDOFF_TIMEOUT_MS;
 
-  const capture = async (item: DownloadItemLike, suggestOnce: () => void) => {
+  const capture = async (item: DownloadItemLike, suggestOnce: () => void, settled: () => void) => {
     const result = await pausedHandOff(item.id, {
       downloads: deps.downloads,
       handOff: () => deps.handOff(item, timeoutMs),
@@ -280,11 +283,17 @@ export function createDeterminingFilenameListener(
       ...(deps.timers ? { timers: deps.timers } : {}),
       release: suggestOnce,
     });
+    // Handed off: the browser's download is cancelled and erased (or, if it could not be
+    // cancelled, already answered). A later suggest() would fail with "Invalid downloadId".
+    if (result.handedOff) settled();
     deps.onResult?.(item, result);
   };
 
   return (item, suggest) => {
     let suggested = false;
+    const settled = () => {
+      suggested = true;
+    };
     const suggestOnce = () => {
       if (suggested) return;
       suggested = true;
@@ -315,7 +324,7 @@ export function createDeterminingFilenameListener(
         suggestOnce();
         return undefined;
       }
-      capture(item, suggestOnce).catch((e: unknown) => {
+      capture(item, suggestOnce, settled).catch((e: unknown) => {
         deps.onError?.(e);
         suggestOnce();
       });
@@ -323,7 +332,7 @@ export function createDeterminingFilenameListener(
     }
 
     decision
-      .then((d) => (reportDecision(deps, item, d).capture ? capture(item, suggestOnce) : suggestOnce()))
+      .then((d) => (reportDecision(deps, item, d).capture ? capture(item, suggestOnce, settled) : suggestOnce()))
       .catch((e: unknown) => {
         deps.onError?.(e);
       })

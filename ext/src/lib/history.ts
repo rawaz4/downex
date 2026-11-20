@@ -9,9 +9,11 @@ export const HISTORY_LIMIT = 10;
 /**
  * `media`: an HLS/DASH stream from the popup or an overlay panel (`addMedia`); `video`: a web
  * page's video from the overlay, the popup or the context menu (`addVideo`); `video-file`: a
- * direct MP4 file a page played, from the popup or an overlay panel (`add`).
+ * direct MP4 file a page played, from the popup or an overlay panel (`add`); `rescue`: a
+ * download that failed in the browser, finished by Downex (`rescue`, or `add` from the start;
+ * BROWSER-SPEC §6). The relay never learns the source: it is the history's own.
  */
-export type HandoffSource = 'capture' | 'menu' | 'page-links' | 'media' | 'video' | 'video-file';
+export type HandoffSource = 'capture' | 'menu' | 'page-links' | 'media' | 'video' | 'video-file' | 'rescue';
 
 export interface HandoffRecord {
   /** Epoch ms. */
@@ -26,6 +28,13 @@ export interface HandoffRecord {
   downloadId?: number | string;
   /** A video Downex added: whether it waits for the user's confirmation there. */
   awaiting?: boolean;
+  /**
+   * Downex checks whether this link continues one of its downloads whose link expired
+   * (`added.renewCheck`; DESKTOP-SPEC §10). The extension never learns the outcome.
+   */
+  renewCheck?: true;
+  /** A rescue (`rescue`): the bytes Downex kept from the browser's partial file. */
+  keptBytes?: number;
   /** Failure reason when not ok; the browser kept the download for captures. */
   error?: ProtocolError;
   /**

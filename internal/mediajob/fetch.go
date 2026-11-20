@@ -35,12 +35,18 @@ type fetchSpec struct {
 	// total is the size of the whole resource as declared (0 = unknown): a 206 that names
 	// another total, or a 200 of another length, is a range mismatch.
 	total int64
+	// whole (rng nil) asks for the resource without a Range header and accepts a
+	// content-coded answer to that one request, which the caller decodes (a manifest,
+	// fetchManifest). Any other coded answer is refused with ErrContentCoded: its bytes
+	// and Content-Range are those of the coded data.
+	whole bool
 }
 
 // respMeta is what the first response of a fetch says about the resource.
 type respMeta struct {
 	finalURL    string
 	contentType string
+	coding      []string // transport.Response.ContentCoding
 }
 
 // copier moves body bytes to their destination in read slices, waiting on the limiter
@@ -198,7 +204,8 @@ func (w *stallWatch) stop() {
 // fetchInto fetches spec and writes exactly its bytes to w: it continues with a new
 // request when a server answers an open or bounded range with a shorter one (or when
 // spec.maxReq split a bounded range), and skips the leading bytes when a server ignores
-// the range and sends the whole resource. It returns the bytes written to w.
+// the range and sends the whole resource. It returns the bytes written to w; those of
+// a content-coded answer only for spec.whole (respMeta.coding names the coding).
 func fetchInto(ctx context.Context, f transport.Fetcher, spec fetchSpec, w io.Writer, cp *copier, onRequest func(delta int)) (respMeta, int64, error) {
 	var meta respMeta
 	start, end := int64(0), int64(-1)
@@ -218,6 +225,7 @@ func fetchInto(ctx context.Context, f transport.Fetcher, spec fetchSpec, w io.Wr
 			Request: model.Request{URL: spec.url, Headers: spec.headers},
 			Start:   pos,
 			End:     reqEnd,
+			Whole:   spec.whole && first,
 		})
 		if err != nil {
 			if onRequest != nil {
@@ -226,7 +234,19 @@ func fetchInto(ctx context.Context, f transport.Fetcher, spec fetchSpec, w io.Wr
 			return meta, pos - start, redactURL(err)
 		}
 		if first {
-			meta = respMeta{finalURL: resp.FinalURL, contentType: resp.ContentType}
+			meta = respMeta{finalURL: resp.FinalURL, contentType: resp.ContentType, coding: resp.ContentCoding}
+		}
+		// A coded answer is usable only whole: its bytes cannot be joined with another
+		// answer's, nor written where the plain bytes belong.
+		if coding := resp.ContentCoding; (len(coding) > 0 && !(spec.whole && first)) || (!first && len(meta.coding) > 0) {
+			_ = resp.Body.Close()
+			if onRequest != nil {
+				onRequest(-1)
+			}
+			if len(coding) == 0 {
+				coding = meta.coding
+			}
+			return meta, pos - start, fmt.Errorf("%w: %s", ErrContentCoded, strings.Join(coding, ", "))
 		}
 		n, done, err := readResponse(ctx, resp, pos, reqEnd, spec.total, w, cp)
 		_ = resp.Body.Close()
@@ -408,7 +428,7 @@ func transient(err error) bool {
 	for _, permanent := range []error{
 		ErrRangeMismatch, ErrInvalidSelection, ErrNotManifest, ErrInvalidOptions,
 		transport.ErrTLS, transport.ErrTooLarge, transport.ErrRedirects, transport.ErrInvalidRequest,
-		transport.ErrInsecureRedirect,
+		transport.ErrInsecureRedirect, transport.ErrGone, transport.ErrLocalAddress,
 		media.ErrEncrypted, media.ErrLive, media.ErrTooLarge, media.ErrMalformed, media.ErrUnsupported,
 		media.ErrNotFound,
 	} {

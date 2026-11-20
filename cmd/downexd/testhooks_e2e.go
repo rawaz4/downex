@@ -3,9 +3,11 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"downex/internal/engine"
+	"downex/internal/polite"
 )
 
 // The hooks of an e2etest build (internal/e2e builds it; never shipped):
@@ -27,6 +30,9 @@ import (
 //	                                           downloads, which this daemon then makes although
 //	                                           it is not the user's own
 //	DOWNEX_E2E_YTDLP_KEY=<armored key | file>  the OpenPGP key of yt-dlp's checksum signatures
+//	DOWNEX_E2E_POLITE_RTT=<file>               Polite mode's probes answer after the whole
+//	                                           milliseconds the file holds (no file: no reply)
+//	DOWNEX_E2E_POLITE_LOOPBACK=1               loopback addresses are Polite mode's anchors
 //
 // Every DOWNEX_E2E_* variable is passed on to the yt-dlp and Deno children
 // (docs/SITE-MEDIA-SPEC.md §8.3): the stand-in tools read DOWNEX_E2E_FAKE_YTDLP and
@@ -38,6 +44,8 @@ const (
 	envE2EUpdateKey = "DOWNEX_E2E_UPDATE_KEY"
 	envE2EToolsBase = "DOWNEX_E2E_TOOLS_BASE"
 	envE2EYtDlpKey  = "DOWNEX_E2E_YTDLP_KEY"
+	envE2EPoliteRTT = "DOWNEX_E2E_POLITE_RTT"
+	envE2ELoopback  = "DOWNEX_E2E_POLITE_LOOPBACK"
 	envE2EPrefix    = "DOWNEX_E2E_"
 )
 
@@ -79,8 +87,50 @@ func loadTestHooks() (testHooks, error) {
 		}
 	}
 	h.passEnv = envE2EPrefix
+	if p := os.Getenv(envE2EPoliteRTT); p != "" {
+		h.politeProber = fileProber{path: p}
+	}
+	h.politeLoopback = os.Getenv(envE2ELoopback) == "1"
 	return h, nil
 }
+
+// fileProber answers every probe after the milliseconds its file holds, read at each
+// probe; a missing or unreadable file is no reply (after the probe timeout).
+type fileProber struct{ path string }
+
+func (f fileProber) answer(ctx context.Context) (time.Duration, error) {
+	ms := -1
+	if data, err := os.ReadFile(f.path); err == nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && v > 0 {
+			ms = v
+		}
+	}
+	wait := polite.ProbeTimeout
+	if ms > 0 {
+		wait = time.Duration(ms) * time.Millisecond
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-t.C:
+	}
+	if ms <= 0 {
+		return 0, polite.ErrNoReply
+	}
+	return wait, nil
+}
+
+func (f fileProber) ProbeICMP(ctx context.Context, _ netip.Addr) (time.Duration, error) {
+	return f.answer(ctx)
+}
+
+func (f fileProber) ProbeTCP(ctx context.Context, _ netip.AddrPort) (time.Duration, error) {
+	return f.answer(ctx)
+}
+
+func (fileProber) Close() error { return nil }
 
 // scaledClock is a clock that starts at base and runs speed times faster than real time.
 type scaledClock struct {

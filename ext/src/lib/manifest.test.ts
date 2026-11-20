@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { matchesGlob } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import config, { dropStoreEntrypoints, FIREFOX_ID, FIREFOX_OLD_ID, HOST_PERMISSIONS, releaseVersion, STORE_MODE } from '../../wxt.config';
+import config, { dropStoreEntrypoints, FIREFOX_ID, HOST_PERMISSIONS, releaseVersion, STORE_MODE } from '../../wxt.config';
 import content from '../entrypoints/content';
 import videoUi from '../entrypoints/video-ui';
 import video from '../entrypoints/video.content';
@@ -35,6 +35,14 @@ describe('manifest', () => {
     expect(m.incognito).toBe('not_allowed');
   });
 
+  it.each(['chrome', 'edge', 'firefox'])('%s: asks for notifications only when the rescue option is turned on', (browser) => {
+    for (const mode of ['production', STORE_MODE]) {
+      const m = manifest(browser, mode);
+      expect(m.optional_permissions).toEqual(['notifications']);
+      expect(m.permissions as string[]).not.toContain('notifications');
+    }
+  });
+
   it.each(['chrome', 'firefox'])('%s: observes navigations (media lists) without blocking them', (browser) => {
     const perms = manifest(browser).permissions as string[];
     expect(perms).toContain('webNavigation');
@@ -44,7 +52,6 @@ describe('manifest', () => {
 
   it('firefox: has its permanent add-on ID and declares the data it hands to Downex', () => {
     expect(FIREFOX_ID).toBe('extension@downex.app');
-    expect(FIREFOX_OLD_ID).toBe('browser@downex.local');
     for (const mode of ['production', STORE_MODE]) {
       expect(manifest('firefox', mode).browser_specific_settings).toEqual({
         gecko: {

@@ -69,8 +69,8 @@ development ID and, once the listings exist, the Chrome Web Store's and Edge Add
 scripts bake them into `downex-nmhost` (`-X main.DefaultChromeExtensionIDs=<id>,<id>`), whose
 `register` writes all of them into the host manifests. Firefox's add-on ID is
 `extension@downex.app` (`FIREFOX_ID` in `wxt.config.ts`), permanent from the first upload to
-addons.mozilla.org; `downex-nmhost` allows it and, after it, `browser@downex.local`, the ID of copies
-loaded by hand before (`defaultFirefoxIDs` in `cmd/downex-nmhost`). The Firefox build needs Firefox 140
+addons.mozilla.org; `downex-nmhost` allows only it (`defaultFirefoxIDs` in `cmd/downex-nmhost`; the
+earlier `browser@downex.local` is no longer allowed, see `docs/BROWSER-SPEC.md` §1). The Firefox build needs Firefox 140
 or later and declares the data it hands to Downex for Firefox's built-in consent (`STORE.md`, AMO).
 
 `STORE.md` has the store listings' privacy policy draft and permission justifications.

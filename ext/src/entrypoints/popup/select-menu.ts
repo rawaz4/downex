@@ -25,6 +25,8 @@ export interface SelectMenuOption {
   readonly meta?: string;
   readonly title?: string;
   readonly disabled?: boolean;
+  /** A short badge after the label in the list ("Recommended"). */
+  readonly badge?: string;
 }
 
 export interface SelectMenuInit {
@@ -64,7 +66,7 @@ function icon(doc: Document, d: string): SVGSVGElement {
 }
 
 function signature(options: readonly SelectMenuOption[]): string {
-  return JSON.stringify(options.map((o) => [o.value, o.label, o.detail ?? '', o.meta ?? '', o.title ?? '', o.disabled === true]));
+  return JSON.stringify(options.map((o) => [o.value, o.label, o.detail ?? '', o.meta ?? '', o.title ?? '', o.disabled === true, o.badge ?? '']));
 }
 
 export class SelectMenu {
@@ -475,6 +477,12 @@ export class SelectMenu {
     label.className = 'sm-olabel';
     label.textContent = o.label;
     text.append(label);
+    if (o.badge) {
+      const badge = doc.createElement('span');
+      badge.className = 'sm-badge';
+      badge.textContent = o.badge;
+      label.append(' ', badge);
+    }
     if (o.detail) {
       const detail = doc.createElement('span');
       detail.className = 'sm-odetail';

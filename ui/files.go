@@ -209,6 +209,26 @@ func (a *App) openCompleted(id int64, open func(path string) error) error {
 	if !info.Mode().IsRegular() {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is not a regular file", path))
 	}
+	// A file that is not what its name says (its file check is DANGER, docs/DESKTOP-SPEC.md
+	// §9.7) is never opened unasked, also by this window, whose pages show no file check.
+	if fc := d.GetFileCheck(); fc.GetLevel() == downexv1.FileCheckLevel_FILE_CHECK_LEVEL_DANGER {
+		h := a.runtimeHost()
+		if h == nil {
+			return errNoWindow()
+		}
+		text := fc.GetSummary()
+		if fc.GetDetail() != "" {
+			text += "\n\n" + fc.GetDetail()
+		}
+		ok, err := h.Confirm(disguisedTitle, text)
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("confirmation dialog: %w", err))
+		}
+		if !ok {
+			a.log.Info("opening a disguised file was declined", "download", id)
+			return nil
+		}
+	}
 	// The name of the link and of its target decide; the target's mode (execute bit).
 	if r := max(riskOf(path, info), riskOf(target, info)); r != riskNone {
 		h := a.runtimeHost()
@@ -230,6 +250,10 @@ func (a *App) openCompleted(id int64, open func(path string) error) error {
 	}
 	return nil
 }
+
+// disguisedTitle is the native question's title before a file that is not what its name
+// says is opened (docs/DESKTOP-SPEC.md §9.7).
+const disguisedTitle = "This file is not what its name says"
 
 // confirmText is the question asked before the file at path (a link to target, when
 // they differ), whose risk is r, is opened.

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"downex/ui/core/pageurl"
 	"downex/ui/host"
 	"downex/ui/views"
 	"downex/ui/views/fixture"
@@ -110,6 +111,14 @@ func (p *FakePlatform) PickFile(_ context.Context, title, initial string) (strin
 // OpenExternal is Platform's.
 func (p *FakePlatform) OpenExternal(_ context.Context, url string) error {
 	return p.record("OpenExternal", url)
+}
+
+// OpenPage is Platform's: it records the address after the real check.
+func (p *FakePlatform) OpenPage(_ context.Context, url string) error {
+	if _, err := pageurl.Check(url); err != nil {
+		return err
+	}
+	return p.record("OpenPage", url)
 }
 
 // CopyText is Platform's.

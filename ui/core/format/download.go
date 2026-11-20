@@ -34,7 +34,7 @@ func fragmentFraction(d *downexv1.Download) float64 {
 	if m == nil || !(m.GetFragmentsTotal() > 0) {
 		return math.NaN()
 	}
-	if isMedia(d) && m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE && m.GetFormat() == "http" {
+	if isMedia(d) && (m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE || m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_PLAYED) && m.GetFormat() == "http" {
 		return math.NaN()
 	}
 	return math.Min(1, math.Max(0, float64(m.GetFragmentsDone())/float64(m.GetFragmentsTotal())))

@@ -62,6 +62,15 @@ func (s downloadService) List(ctx context.Context, _ *connect.Request[downexv1.L
 	return connect.NewResponse(&downexv1.ListResponse{Downloads: all}), nil
 }
 
+// Rescue adopts a partial file a browser left unfinished (rescue.go).
+func (s downloadService) Rescue(ctx context.Context, req *connect.Request[downexv1.RescueRequest]) (*connect.Response[downexv1.RescueResponse], error) {
+	d, kept, err := s.m.Rescue(ctx, req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&downexv1.RescueResponse{Download: d, RescuedBytes: kept}), nil
+}
+
 func (s downloadService) Get(ctx context.Context, req *connect.Request[downexv1.GetRequest]) (*connect.Response[downexv1.GetResponse], error) {
 	d, err := s.m.Get(ctx, req.Msg.GetId())
 	if err != nil {
@@ -93,6 +102,14 @@ func (s downloadService) Remove(ctx context.Context, req *connect.Request[downex
 	return connect.NewResponse(&downexv1.RemoveResponse{}), nil
 }
 
+func (s downloadService) RenewLink(ctx context.Context, req *connect.Request[downexv1.RenewLinkRequest]) (*connect.Response[downexv1.RenewLinkResponse], error) {
+	resp, err := s.m.RenewLink(ctx, req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
 func (s downloadService) Watch(ctx context.Context, req *connect.Request[downexv1.WatchRequest], stream *connect.ServerStream[downexv1.WatchResponse]) error {
 	return s.m.Watch(ctx, req.Msg.GetIds(), stream.Send)
 }
@@ -122,11 +139,11 @@ func (s downloadService) ResumeAll(ctx context.Context, _ *connect.Request[downe
 }
 
 func (s downloadService) AddMedia(ctx context.Context, req *connect.Request[downexv1.AddMediaRequest]) (*connect.Response[downexv1.AddMediaResponse], error) {
-	d, err := s.m.AddMedia(ctx, req.Msg)
+	d, ticket, err := s.m.addMedia(ctx, req.Msg)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&downexv1.AddMediaResponse{Download: d}), nil
+	return connect.NewResponse(&downexv1.AddMediaResponse{Download: d, FetchTicket: ticket}), nil
 }
 
 func (s downloadService) ProbeMedia(ctx context.Context, req *connect.Request[downexv1.ProbeMediaRequest]) (*connect.Response[downexv1.ProbeMediaResponse], error) {

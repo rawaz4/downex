@@ -41,10 +41,12 @@ type queueState struct {
 
 func (q *queueState) id() model.QueueID { return q.q.ID }
 
-func newQueueState(q model.Queue, global limiter.Limiter) *queueState {
+// newQueueState indexes queue q with its limiter level below parent
+// (Manager.queueParent: Polite mode's level).
+func newQueueState(q model.Queue, parent limiter.Limiter) *queueState {
 	order := slices.Clone(q.DownloadIDs)
 	q.DownloadIDs = nil
-	return &queueState{q: q, order: order, lim: newChainLink(q.SpeedLimit, global)}
+	return &queueState{q: q, order: order, lim: newChainLink(q.SpeedLimit, parent)}
 }
 
 // loadQueues indexes the stored queues (recovery, before the downloads).
@@ -54,11 +56,11 @@ func (m *Manager) loadQueues(ctx context.Context) error {
 		return fmt.Errorf("daemon: list queues: %w", err)
 	}
 	for _, q := range list {
-		m.queues[q.ID] = newQueueState(q, m.global)
+		m.queues[q.ID] = newQueueState(q, m.queueParent())
 	}
 	if m.queues[model.MainQueueID] == nil { // every store creates it; keep going without it stored
 		m.log.Warn("the store has no main queue; using a default one")
-		m.queues[model.MainQueueID] = newQueueState(model.Queue{ID: model.MainQueueID, Name: store.MainQueueName, Running: true}, m.global)
+		m.queues[model.MainQueueID] = newQueueState(model.Queue{ID: model.MainQueueID, Name: store.MainQueueName, Running: true}, m.queueParent())
 	}
 	return nil
 }

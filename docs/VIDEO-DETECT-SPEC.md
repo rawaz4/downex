@@ -39,6 +39,29 @@ Step 0 (§7) brings the older texts in line first.
 >    - No automatic yt-dlp run on arbitrary sites: look-ahead only for the curated list, and the
 >      user's click everywhere else.
 
+> **Amendment 2026-11-18 (owner: "please dont rely on login at all … download whatever video user
+> want and show download downex icon then download"; SITE-MEDIA-SPEC §2.9 "Save what's playing"):**
+> - **A fourth source, Played** (§2.6). On any site but YouTube, the panel of a `<video>` that plays
+>   `blob:` (MSE) lists "This video" from the files the tab's own player fetched (`fetch()`/XHR,
+>   workers and media requests alike), matched to the element by its duration (SITE-MEDIA-SPEC §2.9).
+>   It is the default on feeds, profiles, the For You page, reels and post viewers, and whenever the
+>   Site source fails. On a curated video's own page the Site rows stay first, except on a site whose
+>   video servers answer only browsers (TikTok), where Played is first.
+> - **What the background records** (§2.4, amends decision 2 and "Segment-like files" for this log
+>   only): `PlayedLog`, per tab, the media responses of every request type with their range-in-query
+>   pieces folded into whole files. It is never sent anywhere but, on a click, to the local Downex.
+> - **No dead ends** (§5.1, §5.6). "Open this video's own page to download it." and "Open this
+>   video's comments, then click Download again: …" are removed. A panel without rows says what it
+>   is doing ("Getting this video…", then "Downex hasn't seen this video load yet. It appears here as
+>   soon as it plays."). A Site failure is never the panel's result while another row exists, and
+>   the in-page panels never name a sign-in on any site but YouTube.
+> - **Order** (§2.6). Played rows lead and hold the default, unless the frame's own address is the
+>   video, its servers answer more than browsers and the site's rows offer a better picture class;
+>   a grid tile that plays a `blob:` preview has the Played source of that preview.
+> - **The click's own address** (§3.6). `downex:frame-offers` carries the frame's `location.href`;
+>   the background uses it in place of the sender's address when both have the same origin, so a
+>   post viewer opened with `pushState` is judged by its real address.
+
 > **Amendment 2026-10-23 (quality names; user decision, SITE-MEDIA-SPEC.md "Amendment 2026-10-23"
 > holds the full rule and the shared test table):**
 > 1. **Standard quality names.** Every video row (Site, Stream, File, popup, desktop, CLI) is named by
@@ -122,7 +145,10 @@ Step 0 (§7) brings the older texts in line first.
   - **Script-fetched MP4.** MP4 responses to `xmlhttprequest`/`fetch`/`other` requests are never
     listed as files. They are segments or split audio/video byte ranges of a player that uses Media
     Source Extensions (MSE), and saving one would give a silent, mute or partial video. Such
-    players are covered by their manifest (Stream) or by yt-dlp (Site).
+    players are covered by their manifest (Stream) or by yt-dlp (Site). *Amended 2026-11-18 (SITE-MEDIA-SPEC
+    §2.8):* their address and total size (`video/*`, `audio/*`, 200 or 206) are remembered per tab
+    (`PlayedMedia`, storage.session, 32 entries, 30 min), never listed and never sent: a
+    browser-fetched save uses the player's own address of the same resource (same path, same size).
   - **`blob:` and `data:` URLs** are never handed off.
 - **Not in v1** (§9 has the defaults):
   - per-element permalink discovery on feed pages
@@ -303,10 +329,17 @@ progressive file (EME needs MSE), so a listed file is never DRM-protected.
     events and at most once a second on pointer activity.
   - One `IntersectionObserver` (threshold 0.5) and one `ResizeObserver` for the tracked videos.
   - At most 32 tracked videos per frame, kept in a `WeakMap`.
-  - **No subtree `MutationObserver`.** No layout read outside `requestAnimationFrame`, and only for
-    videos whose button is shown.
+  - **No subtree `MutationObserver`,** except in the top frame of a compact social site
+    (*amended 2026-11-18*, §5.1 "Social sites"): one whose callback only schedules a `check()`
+    250 ms later. No layout read outside `requestAnimationFrame`, and only for videos whose button
+    is shown (and once per link the pointer enters on those sites, §5.1 "Grid tiles").
 - **Meaningful video.** All of these must hold:
-  - `isConnected`, and `srcObject === null`
+  - `isConnected`, and `srcObject === null`. *Amended 2026-11-18 (social sites):* or a
+    `srcObject` that is no MediaStream (a camera, a call, a screen has `getTracks`). Facebook's
+    players play through Media Source Extensions in a worker, whose `MediaSourceHandle` is the
+    element's `srcObject` and leaves `currentSrc` empty (a signed-out check of a public reel,
+    2026-11-18); such a video is an MSE player (`mse: true`) like a `blob:` one. Before, no
+    Facebook video got a button.
   - `currentSrc` is http(s) or `blob:`, or `readyState ≥ HAVE_METADATA`
   - rendered at least 200 × 112 CSS px and at least 50 % inside the viewport
   - `duration` is not `Infinity`
@@ -316,6 +349,21 @@ progressive file (EME needs MSE), so a listed file is never DRM-protected.
   - the button is allowed for the tab's site (§5.4)
 
   DRM and live are checked again at click time: `mediaKeys` can be set after the button appeared.
+- **Decorative videos** (*amended 2026-11-18, in-page button on social sites*).
+  - **Curated hosts.** In a top frame whose own address is on a curated site's host (§3.8, any
+    path: feeds, profiles and home pages included; `siteOfHost`), no video is decorative. There,
+    short, muted, looping clips without native controls are the site's videos (TikTok, Instagram, X
+    and Pinterest play them that way). The rule reads the frame's own address, not the tab's: a
+    cross-origin sub-frame cannot read the top address, and these sites play their videos in their
+    own top frames. *Fix 2026-11-18:* an embedded frame on a curated host keeps the usual rule. A
+    landing page's background loop is often such a player (`player.vimeo.com/video/<id>?background=1`,
+    muted, looping, no controls); it is quiet (below), not a full video that counts in the badge.
+  - **Other hosts.** A decorative video that would otherwise be meaningful (and is neither
+    protected nor live) is *quiet*. It stays out of `meaningful`, so reports, the badge and the
+    look-ahead do not count it. It still gets the mark alone (32 × 32 px), shown only while the
+    pointer is over the video (§5.1 "Quiet videos"). The frame asks for the overlay UI for a quiet
+    video only after the first trusted `pointermove` in the frame: a landing page nobody points at
+    costs nothing more than before.
 - **Shadow DOM.** Media events are not composed, so players whose `<video>` sits in a shadow root
   are not seen by the document listeners.
   - When the background has seen media or manifest traffic for a frame that reported no video, it
@@ -327,7 +375,8 @@ progressive file (EME needs MSE), so a listed file is never DRM-protected.
   only when something changed. It lists each tracked video (meaningful or not) with its `src` (http(s)
   only), size, duration, DRM and live state (§3.6), never page text.
 - **On demand UI.** The tracker itself draws nothing and sends nothing until its frame has a video
-  that is meaningful apart from the site rule. Then it asks `downex:overlay-state` (the site rule,
+  that is meaningful apart from the site rule (or a quiet one the pointer moved over, above). Then
+  it asks `downex:overlay-state` (the site rule,
   §5.4) and, when buttons are allowed, `downex:video-ui`, on which the background injects
   `/video-ui.js` into that frame (§5.1). Pages without a video therefore parse only the tracker and
   cost the background nothing.
@@ -347,7 +396,12 @@ progressive file (EME needs MSE), so a listed file is never DRM-protected.
     unknown size.
 - **Matching.** A file matches the clicked element when its `requestUrl` or `url` (without
   fragment) equals the element's `currentSrc`. For a `blob:` element, the frame's streams count as
-  "This video" when the frame has stream items.
+  "This video" when the frame has stream items. *Amendment 2026-11-18 (a grid of previews, 48
+  playlists all marked):* with several streams in the frame, only those whose directory holds the
+  segments the page fetched last (the clicked element's trace carries the directories from the
+  page's resource timing, within 10 s of its newest segment, at most 8; else the frame's recorded
+  segment files), or a playlist at least two levels deep above that directory, are matched; without such an association, every stream is, as
+  before (`playingSegmentDirs`, `streamOfSegments` in `lib/frame-offers.ts`).
 - **Order of rows** (`lib/offer-rows.ts`, shared by the panel and the popup):
   1. Site qualities, once the site source has a list (curated pages, YouTube, or after "Look for
      more qualities").
@@ -636,6 +690,10 @@ type MediaRunOptions struct {
   download state is `AWAITING_CONFIRMATION`, as `addVideo` already does (relay.go:287-290). The
   extension treats a missing `awaiting` as unknown ("Sent to Downex").
 - `add` is otherwise unchanged (15 s, `deadlineMs`, `minAddTime`).
+- **Parts (2026-11, `MEDIA-SPEC.md` §8).** `addMedia` takes `clipStartMs`/`clipEndMs` like `addVideo`
+  (SITE-MEDIA-SPEC §3.5), sent only to a relay that lists `clips` (`NativeClient` answers
+  `outdated_downex` "Update Downex to save part of a video." instead of sending one to an older relay,
+  which would save the whole video). `probeStream` answers carry `chapters: []` (streams have none).
 
 ### 3.6 Extension runtime messages (validated in `isExtensionMessage`, Step 0)
 Every listener is non-`async` and uses `sendResponse` with `return true` (SITE-MEDIA-SPEC §3.6). The
@@ -651,7 +709,14 @@ in its own per-tab store, bound to the sender's frame (§6).
     `sender.tab.url` (a sub-frame cannot read the top host itself).
   - `downex:frame-offers {src: string, mse: boolean}` → `Outcome<FrameOffers>`. `src` is the
     clicked element's `currentSrc` when http(s) (≤ 32 KiB), else `""`. It is used only to match
-    items.
+    items. *Amended 2026-11-18:* an optional `post` (an http(s) address, ≤ 32 KiB) is the clicked
+    feed video's own address (§5.1 "Feed videos"). The background uses it only when it parses as a
+    curated video (not a `network` site) on the sender frame's own origin and the frame's own
+    address is not a curated video. The answer's `site` is then that video with `linked: true`.
+    A frame on a curated host whose own address is no video and that names no usable `post` gets
+    no `site` but `feed: <site>` (the curated site's name, for the panel's text; *fix 2026-11-18*).
+    Only an address that lists videos counts as such a frame (§5.1 "Feed videos", "Which pages are
+    feeds"); a curated host's other addresses keep the generic target.
   - `downex:stream-probe {key}` → `Outcome<VideoInfoResult>`. Local code `outdated_downex` when the
     relay lacks `streams`; `expired` when the key no longer resolves.
   - `downex:offer-add {key, videoTrack?, audioTrack?}` → `Outcome<AddedResult>`: a file key →
@@ -669,6 +734,9 @@ in its own per-tab store, bound to the sender's frame (§6).
     `sender.tab.url` in `videoOptions.hiddenSites` (§5.4).
 - **Background → content script** (`tabs.sendMessage(tabId, m, {frameId})`):
   - `downex:frame-media-seen {}`: media traffic for a frame that reported no video (§2.5).
+  - `downex:show-panel {}` → `{shown: boolean}` (*amended 2026-11-18*, §5.1 "Menu"): the user
+    chose "Show Downex download panel" on a `<video>` of that frame. The tracker answers `shown:
+    false` when it holds no video right-clicked in the last 60 s that is still in the page.
 - **Popup → background** (`fromExtensionPage`):
   - `downex:tab-media {tabId}` → `TabMediaResponse` (today `{items: MediaEntry[], videos:
     PageVideoEntry[]}`, `lib/messages.ts:187-190`) becomes:
@@ -724,6 +792,12 @@ export interface StreamEntry extends MediaEntry {
   probe?: VideoTaskState<VideoInfoResult>;
 }
 ```
+  *Amended 2026-11-18 (feed videos, §5.1):* `SiteOffer.linked?: true` (the Site source is the
+  clicked video's own post, found from its links, not the frame's address) and
+  `FrameOffers.feed?: true` (a curated site's page that is no video, and no post was found for the
+  clicked video). Both are additive and missing from an older background. The tracker's
+  `TrackedVideo` (tracker ↔ overlay UI, the same build) gains `quiet?: boolean` (§2.5); it is not
+  part of `FrameVideoMeta`, so the reports do not change.
   `FileEntry.url` exists for the popup only (an extension page, never a web page). `offer-types.ts`
   imports `VideoTaskState` from `messages.ts`, `AddedResult`/`VideoInfoResult` from `protocol.ts`,
   `SiteVideoKind` from `site-video.ts` and `MediaEntry` from `media.ts` as types only; `messages.ts`
@@ -751,7 +825,11 @@ export interface StreamEntry extends MediaEntry {
     `User-Agent` when missing. There is no `cookies.getAll` fallback for files (§6, §9 #3), unlike
     `createHandOff`/`createMediaHandOff` (`background.ts:415-430`). When no headers were recorded, the
     hand-off has no Cookie and a default-policy `Referer` of the frame (`defaultPolicyReferer`,
-    `lib/context.ts:385`).
+    `lib/context.ts:385`). *Correction 2026-11-18 (review; owner: "never rely on login"):* a File
+    or Stream row chosen in a video's panel or in the popup (`addFile`, `addMedia`, `probeStream`)
+    carries no `Cookie` and no `Authorization`, recorded or read with `cookies.getAll`, unless "Use
+    my sign-in for videos that need it" (SITE-MEDIA-SPEC §6.3) is on; a download the browser started
+    and a link sent from the context menu (`createHandOff`) keep theirs.
   - **`referrer`**: the frame's address (http(s)).
   - **`filename`**, the first that applies, then cleaned (`cleanTitle`, `lib/media-handoff.ts:36`,
     then cut to 200 characters), with `.m4v` replaced by `.mp4` and `.mp4` appended when missing:
@@ -825,47 +903,172 @@ export interface StreamEntry extends MediaEntry {
 - **Key and address.** `key` = `<site>:<id>` (Twitch clips `twitch:clip:<slug>`). The `pageUrl` sent
   to Downex is the canonical address below.
 - **Kinds.** `watch`, `clip` or `embed`. Embeds never get a look-ahead. Their probe carries the
-  default-policy `Referer` of the tab's page (`siteTarget`, §3.6).
+  default-policy `Referer` of the tab's page (`siteTarget`, §3.6). *Amended 2026-11-18:* also
+  `post` (a post page that may hold a video: Facebook, Bluesky, LinkedIn, 9GAG, Imgur, Telegram,
+  Tumblr and Threads posts, Pinterest pins) and `link` (a share address that redirects to a video,
+  such as `vm.tiktok.com/<code>`: sent as it is, for context-menu links; a tab never stays on it).
+  Neither ever gets a look-ahead.
+- **Resolver** (*amended 2026-11-18*). Every row is resolved with yt-dlp (`resolver: 'yt-dlp'`)
+  except Threads, Snapchat, Rumble and Kick VODs (`resolver: 'network'`), where yt-dlp has no
+  working path today (its reader of any page answers "Unsupported URL" for Threads; its Snapchat
+  reader fails to read the page; every Rumble address, page or embed, answered HTTP 403 (bot
+  protection) and two of two public Kick VODs answered "NOT_FOUND" in the real checks of
+  2026-11-18, while the browser plays them; Kick clips list their MP4 and stay `yt-dlp`). A `network` video is never sent to Downex as a page: no Site source in the panel and no
+  "Look for more qualities" (the panel's File and Stream rows, from the browser's own traffic,
+  still work; with none, its empty text reads "Downex can't read this site's videos yet. Play the
+  video, then try again."), no popup page-video row, no "Find the video on this page" for that
+  address, no badge count, no look-ahead, and a context-menu link to it records that text as the
+  hand-off's failure. Content scripts asking `downex:page-video-probe`/`-add` about it get
+  `unsupported_page` with that text.
+- **Hosts** (*amended 2026-11-18*). `siteOfHost(host)` names the site whose table row lists that
+  host, whatever the path: the one owner of the host column. `parseSiteVideo` dispatches on it,
+  and so do the decorative exemption (§2.5) and the feed rule (§5.1). In the store build YouTube's
+  hosts name no site, as before.
 
 | Site (name) | Hosts | Shapes → id | Kind | Canonical `pageUrl` | Look-ahead |
 |---|---|---|---|---|---|
 | `youtube` (YouTube) | as SITE-MEDIA-SPEC §5.1 | unchanged | unchanged | unchanged | watch, shorts |
-| `vimeo` (Vimeo) | `vimeo.com`, `www.vimeo.com` | `/<id>`, `/<id>/<hash>`, `/channels/<c>/<id>`, `/groups/<g>/videos/<id>`, `/showcase/<s>/video/<id>`; id `[0-9]{1,12}`, hash `[0-9a-f]{6,20}` | watch | `https://vimeo.com/<id>` (or `/<id>/<hash>`) | yes |
+| `vimeo` (Vimeo) | `vimeo.com`, `www.vimeo.com` | `/<id>`, `/<id>/<hash>`, `/channels/<c>/<id>`, `/groups/<g>/videos/<id>`, `/showcase/<s>/video/<id>`; id `[0-9]{1,12}`, hash `[0-9a-f]{6,20}` | watch | `https://player.vimeo.com/video/<id>[?h=<hash>]` (*amended 2026-11-18*; was `https://vimeo.com/<id>[/<hash>]`, which yt-dlp answers anonymously with "only works when logged-in" today, while the player's address lists a public video's qualities; a private or embed-restricted video answers HTTP 401 there, and a FairPlay one is refused as `encrypted`, as before) | yes |
 | | `player.vimeo.com` | `/video/<id>` (query `h` kept) | embed | `https://player.vimeo.com/video/<id>[?h=<hash>]` | no |
 | `x` (X) | `x.com`, `twitter.com`, and `www.`/`mobile.` of both | `/<user>/status/<id>[/video/<n>]`, `/i/status/<id>`, `/i/web/status/<id>`; id `[0-9]{1,20}` | watch | `https://x.com/i/status/<id>` | yes |
+| | same | `/i/broadcasts/<id>`; id `[A-Za-z0-9]{8,20}`; key `x:broadcast:<id>` (*2026-11-18*) | watch | `https://x.com/i/broadcasts/<id>` | no (it may be live) |
 | `facebook` (Facebook) | `facebook.com`, `www.`, `m.`, `web.` | `/watch?v=<id>`, `/watch/?v=<id>`, `/videos/<id>`, `/<page>/videos/<id>`, `/<page>/videos/<slug>/<id>`; id `[0-9]{1,20}` | watch | `https://www.facebook.com/watch/?v=<id>` | no |
 | | same | `/reel/<id>` | watch | `https://www.facebook.com/reel/<id>` | no |
+| | same | `/watch/live/?v=<id>`, `/video.php?v=<id>` (*2026-11-18*) | watch | `https://www.facebook.com/watch/?v=<id>` | no |
+| | same | `/<page>/posts/<post>`, `/groups/<g>/posts/<post>`, `/groups/<g>/permalink/<post>`; post `[0-9]{1,20}` or `pfbid[A-Za-z0-9]{10,80}`; key `facebook:post:<post>` (*2026-11-18*) | post | `https://www.facebook.com/<page>/posts/<post>` (groups: `https://www.facebook.com/groups/<g>/posts/<post>`) | no |
+| | same | `/permalink.php?story_fbid=<post>&id=<n>`, `/story.php?story_fbid=<post>&id=<n>`; `n` `[0-9]{1,20}`, each parameter once (*2026-11-18*) | post | `https://www.facebook.com/permalink.php?story_fbid=<post>&id=<n>` | no |
 | | `fb.watch` | `/<code>`; code `[A-Za-z0-9_-]{4,32}` | watch | `https://fb.watch/<code>/` | no |
-| `instagram` (Instagram) | `instagram.com`, `www.instagram.com` | `[/<user>]/p/<code>`, `/reel/<code>`, `/reels/<code>`, `/tv/<code>`; code `[A-Za-z0-9_-]{5,64}` | watch | `https://www.instagram.com/<p, reel or tv>/<code>/` (`reels` → `reel`) | no |
-| `tiktok` (TikTok) | `tiktok.com`, `www.`, `m.` | `/@<user>/video/<id>`; user `[A-Za-z0-9._]{1,64}`, id `[0-9]{1,25}` | watch | `https://www.tiktok.com/@<user>/video/<id>` | yes |
+| `instagram` (Instagram) | `instagram.com`, `www.instagram.com` | `[/<user>]/p/<code>`, `[/<user>]/reel/<code>`, `/reels/<code>`, `[/<user>]/tv/<code>`; code `[A-Za-z0-9_-]{5,64}` (the `/<user>` forms of reel and tv: *2026-11-18*) | watch | `https://www.instagram.com/<p, reel or tv>/<code>/` (`reels` → `reel`) | no |
+| `tiktok` (TikTok) | `tiktok.com`, `www.`, `m.` | `/@<user>/video/<id>`; user `[A-Za-z0-9._-]{1,64}` (`-`: *2026-11-18*), id `[0-9]{1,25}` | watch | `https://www.tiktok.com/@<user>/video/<id>` | yes |
 | | same | `/embed/v2/<id>`, `/embed/<id>` | embed | `https://www.tiktok.com/embed/v2/<id>` | no |
+| | same; `vm.tiktok.com`, `vt.tiktok.com` | `/t/<code>` (on the first hosts), `/<code>` (on the short hosts); code `[A-Za-z0-9]{5,16}`; key `tiktok:link:<code>` (*2026-11-18*) | link | `https://www.tiktok.com/t/<code>/`, `https://vm.tiktok.com/<code>/` or `https://vt.tiktok.com/<code>/`, as found | no |
 | `dailymotion` (Dailymotion) | `dailymotion.com`, `www.` | `/video/<id>`; id `[A-Za-z0-9]{5,12}` | watch | `https://www.dailymotion.com/video/<id>` | yes |
 | | same | `/embed/video/<id>` | embed | the same canonical address | no |
+| | `geo.dailymotion.com` | `/player.html?video=<id>`, `/player/<player>.html?video=<id>`; player `[A-Za-z0-9]{1,20}` (*2026-11-18*) | embed | the same canonical address | no |
 | | `dai.ly` | `/<id>` | watch | the same canonical address | yes |
-| `reddit` (Reddit) | `reddit.com`, `www.`, `old.`, `new.` | `/r/<sub>/comments/<id>[/<slug>...]`; sub `[A-Za-z0-9_]{2,32}`, id `[a-z0-9]{2,12}` | watch | `https://www.reddit.com/r/<sub>/comments/<id>/` | yes |
+| `reddit` (Reddit) | `reddit.com`, `www.`, `old.`, `new.` | `/r/<sub>/comments/<id>[/<slug>...]`; sub `[A-Za-z0-9_]{2,32}`, id `[a-z0-9]{2,12}` | watch | `https://www.reddit.com/r/<sub>/comments/<id>/` | no (*amended 2026-11-18*, was yes) |
+| | same | `/r/<sub>/s/<code>`; code `[A-Za-z0-9]{5,16}`; key `reddit:link:<code>` (*2026-11-18*) | link | `https://www.reddit.com/r/<sub>/s/<code>` | no |
+| | `v.redd.it` | `/<id>`; id `[a-z0-9]{5,20}`; key `reddit:v:<id>` (*2026-11-18*) | watch | `https://v.redd.it/<id>` | no |
 | `twitch` (Twitch) | `twitch.tv`, `www.`, `m.` | `/videos/<id>`; id `[0-9]{1,15}` | watch | `https://www.twitch.tv/videos/<id>` | yes |
-| | same | `/<channel>/clip/<slug>`; slug `[A-Za-z0-9_-]{4,100}` | clip | `https://clips.twitch.tv/<slug>` | yes |
+| | same | `/<channel>/clip/<slug>`, and on `m.twitch.tv` `/clip/<slug>` (*2026-11-18*); slug `[A-Za-z0-9_-]{4,100}` | clip | `https://clips.twitch.tv/<slug>` | yes |
 | | `clips.twitch.tv` | `/<slug>` | clip | the same | yes |
 | | `player.twitch.tv` | `/?video=v<id>` | embed | `https://www.twitch.tv/videos/<id>` | no |
 | `streamable` (Streamable) | `streamable.com`, `www.` | `/<id>`, `/e/<id>` (embed); id `[a-z0-9]{4,12}`, not one of `about`, `blog`, `careers`, `contact`, `documentation`, `help`, `login`, `pricing`, `privacy`, `settings`, `signup`, `terms`, `upload` | watch / embed | `https://streamable.com/<id>` | watch only |
 
+*Amended 2026-11-18: more curated sites.* Written from the addresses these sites show in the
+address bar and in their share buttons (CLEAN-ROOM). None gets a look-ahead: they resolve on a click
+only (Tumblr often answers HTTP 403 to yt-dlp, which Downex reports and never works around; Rumble
+always did and is a `network` site; the others were not checked for being cheap and anonymous).
+
+| Site (name) | Hosts | Shapes → id (key) | Kind | Canonical `pageUrl` |
+|---|---|---|---|---|
+| `bluesky` (Bluesky) | `bsky.app` | `/profile/<handle>/post/<id>`; handle `[A-Za-z0-9.:_-]{3,253}`, id `[a-z0-9]{10,16}` (`bluesky:<handle>/<id>`) | post | `https://bsky.app/profile/<handle>/post/<id>` |
+| `pinterest` (Pinterest) | `pinterest.com`, `www.` | `/pin/<id>`; id `[0-9]{1,25}` | post | `https://www.pinterest.com/pin/<id>/` |
+| | `pin.it` | `/<code>`; code `[A-Za-z0-9]{4,16}` (`pinterest:link:<code>`) | link | `https://pin.it/<code>` |
+| `linkedin` (LinkedIn) | `linkedin.com`, `www.` | `/posts/<slug>`; slug `[A-Za-z0-9._%-]{3,300}` (`linkedin:<slug>`) | post | `https://www.linkedin.com/posts/<slug>` |
+| | same | `/feed/update/urn:li:activity:<id>`; id `[0-9]{1,25}` (`linkedin:activity:<id>`) | post | `https://www.linkedin.com/feed/update/urn:li:activity:<id>/` |
+| `kick` (Kick) | `kick.com`, `www.` | `/<channel>/videos/<uuid>`; uuid 8-4-4-4-12 hex digits; `resolver: 'network'` | watch | `https://kick.com/<channel>/videos/<uuid>` |
+| | same | `/<channel>?clip=<id>`, `/<channel>/clips/<id>`; id `[A-Za-z0-9_]{4,64}` (`kick:clip:<id>`) | clip | `https://kick.com/<channel>?clip=<id>` |
+| `bilibili` (Bilibili) | `bilibili.com`, `www.`, `m.` | `/video/<id>`; id `BV[A-Za-z0-9]{10}` or `av[0-9]{1,12}`; query `p` (`[1-9][0-9]{0,3}`, a part of a multi-part video) kept above 1, any other `p` ignored (`bilibili:<id>[:p<n>]`) | watch | `https://www.bilibili.com/video/<id>/[?p=<n>]` |
+| | `b23.tv` | `/<code>`; code `[A-Za-z0-9]{4,16}` (`bilibili:link:<code>`) | link | `https://b23.tv/<code>` |
+| `vk` (VK) | `vk.com`, `www.`, `m.`; `vkvideo.ru`, `www.` | `/video<owner>_<id>`; owner `-?[0-9]{1,20}`, id `[0-9]{1,20}` | watch | `https://vk.com/video<owner>_<id>` |
+| `odysee` (Odysee) | `odysee.com` | `/@<channel>/<name>`; channel `[A-Za-z0-9._%-]{1,100}` and name `[A-Za-z0-9._%-]{1,200}`, each optionally followed by `:<claim>` (`[0-9a-f]{1,40}`) (`odysee:@<channel>/<name>`) | watch | `https://odysee.com/@<channel>/<name>` |
+| `bitchute` (BitChute) | `bitchute.com`, `www.` | `/video/<id>`, `/embed/<id>` (embed); id `[A-Za-z0-9_-]{6,20}` | watch / embed | `https://www.bitchute.com/video/<id>/` |
+| `ninegag` (9GAG) | `9gag.com` | `/gag/<id>`; id `[A-Za-z0-9]{5,12}` | post | `https://9gag.com/gag/<id>` |
+| `imgur` (Imgur) | `imgur.com`, `www.`, `m.` | `/<id>`; id `[A-Za-z0-9]{5,8}` with a digit or an upper-case letter (Imgur's own pages are lower-case words) | post | `https://imgur.com/<id>` |
+| | same | `/gallery/<slug>`; slug `[A-Za-z0-9_-]{5,200}` (`imgur:gallery:<slug>`) | post | `https://imgur.com/gallery/<slug>` |
+| `telegram` (Telegram) | `t.me` | `/<channel>/<n>`; channel `[A-Za-z][A-Za-z0-9_]{3,31}`, n `[0-9]{1,10}` (`telegram:<channel>/<n>`) | post | `https://t.me/<channel>/<n>` |
+| `tumblr` (Tumblr) | `<blog>.tumblr.com` (blog `[a-z0-9-]{1,32}`, not `www`) | `/post/<id>[/<slug>]`; id `[0-9]{1,20}` (`tumblr:<blog>/<id>`) | post | `https://<blog>.tumblr.com/post/<id>` |
+| | `www.tumblr.com` | `/<blog>/<id>[/<slug>]`; blog not one of Tumblr's own pages `blog`, `dashboard`, `explore`, `following`, `likes`, `post`, `search`, `settings`, `tagged` | post | the same |
+| `rumble` (Rumble) | `rumble.com`, `www.` | `/v<id>-<slug>.html`, `/v<id>`, `/embed/v<id>` (embed); id `[a-z0-9]{4,10}`, slug `[A-Za-z0-9_-]{1,200}` (`rumble:v<id>`); `resolver: 'network'` | watch / embed | `https://rumble.com/` plus the address's own first segment; embeds `https://rumble.com/embed/v<id>/` |
+| `threads` (Threads) | `threads.com`, `threads.net`, `www.` of both | `/@<user>/post/<code>`; user `[A-Za-z0-9._]{1,30}`, code `[A-Za-z0-9_-]{5,64}` (`threads:<code>`); `resolver: 'network'` | post | `https://www.threads.com/@<user>/post/<code>` |
+| `snapchat` (Snapchat) | `snapchat.com`, `www.` | `/spotlight/<id>`; id `[A-Za-z0-9_-]{10,200}`; `resolver: 'network'` | watch | `https://www.snapchat.com/spotlight/<id>` |
+
+*Amended 2026-11-18: audio sites* (`SITE-MEDIA-SPEC.md` §3.13, owner decision). Written from the
+addresses these sites show in the address bar (CLEAN-ROOM). Their pages have no video: downexd offers
+their audio (`.m4a` or `.mp3`). Kind `audio`: the popup's page row shows from the address alone (no
+video ever plays there), there is no in-page button and no look-ahead.
+
+| Site (name) | Hosts | Shapes → id (key) | Kind | Canonical `pageUrl` |
+|---|---|---|---|---|
+| `soundcloud` (SoundCloud) | `soundcloud.com`, `www.`, `m.` | `/<user>/<track>`, `/<user>/<track>/s-<secret>` (a private share); user `[a-z0-9_-]{1,64}`, track `[A-Za-z0-9_-]{1,200}`, secret `[A-Za-z0-9]{4,32}`; user not one of SoundCloud's own pages `charts`, `discover`, `feed`, `jobs`, `messages`, `mobile`, `notifications`, `pages`, `people`, `pro`, `search`, `settings`, `signin`, `stations`, `stream`, `tags`, `terms-of-use`, `upload`, `you`; track not a profile tab `albums`, `comments`, `followers`, `following`, `likes`, `popular-tracks`, `reposts`, `sets`, `spotlight`, `tracks` (`soundcloud:<user>/<track>`) | audio | `https://soundcloud.com/<user>/<track>[/s-<secret>]` |
+| | `on.soundcloud.com` | `/<code>`; code `[A-Za-z0-9]{4,32}` (`soundcloud:link:<code>`) | link | `https://on.soundcloud.com/<code>` |
+| `bandcamp` (Bandcamp) | `<artist>.bandcamp.com` (artist `[a-z0-9-]{1,63}`, not `www`) | `/track/<slug>`; slug `[A-Za-z0-9_-]{1,200}` (`bandcamp:<artist>/<slug>`); an album (`/album/<slug>`) is several tracks and is not matched | audio | `https://<artist>.bandcamp.com/track/<slug>` |
+| `mixcloud` (Mixcloud) | `mixcloud.com`, `www.`, `m.` | `/<user>/<mix>`; user `[A-Za-z0-9_-]{1,64}` not one of Mixcloud's own pages `about`, `categories`, `dashboard`, `discover`, `genres`, `live`, `messages`, `notifications`, `player`, `pro`, `search`, `select`, `settings`, `tag`, `upload`, `widget`; mix `[A-Za-z0-9_-]{1,200}` (*amended 2026-11-18:* or, for a title in another script, which the tab's URL keeps percent-encoded, `([A-Za-z0-9_-]|%XX){1,600}` whose octets decode to UTF-8 text without `/`, `?`, `#`, `%`, `\` or a control character; the key and page URL keep the encoded form) not a profile tab `favorites`, `followers`, `following`, `history`, `listens`, `playlists`, `posts`, `reposts`, `shows`, `stream`, `uploads` (`mixcloud:<user>/<mix>`) | audio | `https://www.mixcloud.com/<user>/<mix>/` |
+
+*Amended 2026-11-18 (social sites, §5.1 "Social sites"): stories and embeds.* Stories from the
+address bar of Instagram's story viewer; embeds from the frame addresses these sites' own "Embed"
+codes put in a page, which the address bar shows when such a frame is opened on its own
+(CLEAN-ROOM). None gets a look-ahead. Each embed has the key of the post it shows, so the caches are
+shared with the post's own page.
+
+| Site | Hosts | Shapes → id (key) | Kind | Canonical `pageUrl` |
+|---|---|---|---|---|
+| `instagram` | `instagram.com`, `www.` | `/stories/<user>/<id>`; user `[A-Za-z0-9._-]{1,100}` (not `highlights`), id `[0-9]{1,25}` (`instagram:story:<id>`). Stories need a sign-in: the click's second request carries it (SITE-MEDIA-SPEC §6.3) | post | `https://www.instagram.com/stories/<user>/<id>/` |
+| | same | `/stories/highlights/<id>`; id `[0-9]{1,25}` (`instagram:highlight:<id>`): several videos, listed by the entry picker (SITE-MEDIA-SPEC §3.12) | post | `https://www.instagram.com/stories/highlights/<id>/` |
+| | same | `[/<user>]/p/<code>/embed`, `…/embed/captioned` (`instagram:<code>`) | post | `https://www.instagram.com/p/<code>/` |
+| | same | `[/<user>]/reel/<code>/embed`, `/tv/<code>/embed`, `…/embed/captioned` (`instagram:<code>`) | embed | `https://www.instagram.com/<reel or tv>/<code>/` |
+| `x` | `platform.twitter.com` | `/embed/Tweet.html?id=<id>`; id `[0-9]{1,20}`, once (`x:<id>`) | post | `https://x.com/i/status/<id>` |
+| `facebook` | `facebook.com`, `www.`, `m.`, `web.` | `/plugins/video.php?href=<address>`, `/plugins/post.php?href=<address>`: the `href` parameter (once) is a Facebook address of this table other than a plugin's, and the row is that address's (its key and canonical address; `video.php`: kind `embed`) | embed / post | that address's |
+| `reddit` | `embed.reddit.com` | `/r/<sub>/comments/<id>[/<slug>...]` as on `www.reddit.com` (`reddit:<id>`) | post | `https://www.reddit.com/r/<sub>/comments/<id>/` |
+| `pinterest` | `assets.pinterest.com` | `/ext/embed.html?id=<id>`; id `[0-9]{1,25}`, once (`pinterest:<id>`) | post | `https://www.pinterest.com/pin/<id>/` |
+| `bluesky` | `embed.bsky.app` | `/embed/<handle>/app.bsky.feed.post/<id>`; handle and id as on `bsky.app` (`bluesky:<handle>/<id>`) | post | `https://bsky.app/profile/<handle>/post/<id>` |
+
+- **Compact sites** (*2026-11-18*, `compactSite`): `tiktok`, `instagram`, `facebook`, `x`,
+  `reddit`, `pinterest`, `threads`, `snapchat`, `linkedin`, `bluesky`, `tumblr`, `ninegag`,
+  `imgur`, `vk`, `telegram`. A frame on any of their hosts (`siteOfHost`) gets the compact button
+  (§5.1 "Social sites"); the top frame also the late-mount observer and grid tiles.
+- **Tiles** (*2026-11-18*, `videoTile`): the curated addresses whose shape always names a video,
+  so that a picture tile linking to one is a video's tile: TikTok `/@<user>/video/<id>`, Instagram
+  `[/<user>]/reel/<code>`, `/reels/<code>` and `[/<user>]/tv/<code>` (not `/p/`, which may be
+  photos), X `/<user>/status/<id>/video/<n>` (a media grid's video; `/photo/<n>` is not
+  matched), Facebook `/reel/<id>`, `/videos/…`, `/watch/?v=<id>` and `/video.php?v=<id>`, and VK
+  `/video<owner>_<id>`; on a compact site, never a `network` site's. The tile's target is that
+  address's row.
 - **Never matched:**
   - a Twitch channel page `/<channel>` (live)
   - X, Facebook or Reddit timelines, profiles and search pages
   - TikTok and Instagram feeds
   - any address with user information
+  - any site's private messages (`/direct/…`, `/messages/…`, `/i/chat`, `/chat/…` and the like
+    are neither videos nor feeds, §5.1 "DMs")
+  - *2026-11-18:* TikTok photo posts (no video), and Twitch channel addresses with a `clip` query
+    (not seen in the address bar). *Amended 2026-11-18 (social sites):* Instagram stories and
+    highlights were in this list while Downex had no sign-in for pages; since the automatic
+    sign-in (SITE-MEDIA-SPEC §6.3) they are the rows above.
 - **Look-ahead "no".** Instagram and Facebook: anonymous extraction there mostly answers
   `auth_required` and invites rate limits on the user's address. They resolve on click only.
+  *Amended 2026-11-18:* Reddit too (anonymous yt-dlp runs answer "Account authentication is
+  required" today), every `post` and `link`, X broadcasts, and every site added on 2026-11-18.
 - **Display names** (`SITE_NAMES`, `lib/site-video.ts:20`, today `{youtube: 'YouTube'}`): YouTube,
   Vimeo, X, Facebook, Instagram, TikTok, Dailymotion, Reddit, Twitch, Streamable. The daemon keeps
   yt-dlp's `extractor_key` display rule (`sitemedia.SiteName`, `internal/sitemedia/label.go:15`:
   "Youtube" → "YouTube", any other key as it is); Lane B adds, as a data table there, the keys whose
   own spelling is not the site's name: `Twitter` → "X", `TwitchVod`/`TwitchClips` → "Twitch",
   `FacebookReel` → "Facebook". The extension shows its own `SITE_NAMES` for curated rows either way.
+  *Amended 2026-11-18:* also `TwitterBroadcast` → "X", `KickClip`/`KickVOD` → "Kick", `BiliBili` →
+  "Bilibili", `NineGag` → "9GAG", `TelegramEmbed` → "Telegram", `LBRY` → "Odysee", `FoxNews` →
+  "Fox News", `FacebookPluginsVideo` → "Facebook", `InstagramStory` → "Instagram", `Soundcloud` →
+  "SoundCloud" (audio sites); and a page read
+  by yt-dlp's readers of any page (`Generic`, `HTML5MediaEmbed`) is named by its host
+  (`sitemedia.PageSiteName`: lower case, no port, no leading `www.`), not by the key.
+  *Amended 2026-11-19:* the keys that are a site's name of several words run together are spelled
+  out: `ApplePodcasts` → "Apple Podcasts", `GooglePodcasts` → "Google Podcasts", `AppleTrailers` →
+  "Apple Trailers", `ABCNews` → "ABC News", `CBSNews` → "CBS News", `NBCNews` → "NBC News", `SkyNews`
+  → "Sky News", `WashingtonPost` → "Washington Post", `NYTimes` → "New York Times", `BBCCoUk` → "BBC",
+  `TedTalk` → "TED", `DailyMotion` → "Dailymotion", `RumbleEmbed` → "Rumble", `BandcampAlbum` →
+  "Bandcamp", `SoundcloudPlaylist`/`SoundcloudSet` → "SoundCloud", `PinterestCollection` →
+  "Pinterest"; any other key is still shown as it is.
 - **Types** (Step 0): `SiteName` (`lib/site-video.ts:5`) becomes the union of the ten names;
   `SiteVideoKind` (:6, `watch | shorts | embed | live | clip`) already holds the curated kinds;
   `SiteVideo` gains `lookAhead: boolean` (YouTube: true for `watch` and `shorts`, as
-  `prefetchVideo` decides today).
+  `prefetchVideo` decides today). *Amended 2026-11-18:* `SiteName` adds `bluesky`, `pinterest`,
+  `linkedin`, `kick`, `bilibili`, `vk`, `odysee`, `bitchute`, `ninegag`, `imgur`, `telegram`,
+  `tumblr`, `rumble`, `threads` and `snapchat`, named in `SITE_NAMES` Bluesky, Pinterest, LinkedIn,
+  Kick, Bilibili, VK, Odysee, BitChute, 9GAG, Imgur, Telegram, Tumblr, Rumble, Threads and
+  Snapchat; `SiteVideoKind` adds `post` and `link`; `SiteVideo` gains `resolver: 'yt-dlp' |
+  'network'`. *Audio sites (2026-11-18):* `SiteName` adds `soundcloud`, `bandcamp` and `mixcloud`
+  (SoundCloud, Bandcamp, Mixcloud) and `SiteVideoKind` adds `audio`.
 - **Tests.** Every row has positive cases (each host and shape) and negative cases: wrong host,
   bad id, extra segments where none are allowed, channel and feed pages, user information,
   `javascript:` and non-http schemes.
@@ -883,6 +1086,12 @@ export interface StreamEntry extends MediaEntry {
   mock's TS streams become MP4 (`mock.ts:481`, `:641`; `mock.test.ts:381`, `:442`). The progress
   window keeps its assembling text while converting, conversion included (§9 #9): "Assembling…" for
   streams and "Merging…" for site downloads (`ui/frontend/src/lib/progress.ts:80`, unchanged).
+- **Parts (2026-11).** `downex:offer-add` and `downex:page-video-add` may carry `clipStartMs` and
+  `clipEndMs` (integers of ms within 168 h; an end needs a start and comes after it, or is 0 = to the
+  end); the background passes them to `addMedia`/`addVideo`. `FrameOffers.features.clips` says whether
+  the relay takes a part (MEDIA-SPEC §8); the YouTube overlay, which asks for no frame offers, asks
+  `downex:video-features` (answered `{clips}` from the connected relay's welcome, false while none is
+  connected; content scripts only).
 
 ## 4. TS → MP4 remuxer (`internal/remux`, `internal/remux/mpegts`)
 Implemented from ISO/IEC 13818-1 (ITU-T H.222.0: packets, adaptation field, PSI with CRC-32, PES,
@@ -1200,18 +1409,294 @@ fragment index, PID), never a URL.
   - Shown for 3 s after pointer movement over the video's rectangle, for 5 s after `play`/
     `loadedmetadata`, on `:focus-visible` and while its panel is open. It is hidden with opacity,
     so it stays focusable.
+  - *Fix 2026-11-18 (owner's report: on Instagram the button hid as soon as the pointer reached
+    it).* While the pointer is on a compact button itself (`pointerenter` until `pointerleave`, or
+    its last position in the frame lies on the button: a pointer that stops on the spot the moment
+    the button is revealed gets no `pointerenter` until it moves again) it stays shown, however long the pointer rests there, and it is shown for 3 s more after the
+    pointer leaves it. While the pointer is on a button, that button is the one under the pointer
+    as long as the page shows its video (the layer's own elements never count as covering a
+    video): a prompt or viewer the page lays over the whole video hides it all the same, checked
+    again every 3 s while the pointer rests there. The YouTube pill keeps its usual timing (3 s
+    after the last movement). A hidden button takes no pointer, so the pointer that comes straight
+    onto its spot is judged by the video under the pointer (below), which counts a page layer
+    over a strip of the video as not covering it. Before, a pointer resting
+    on the button hid it after 3 s (its hidden state takes no pointer, so it could not be clicked),
+    and on a compact site the element the page has under the button (an Instagram post's header
+    layer, which belongs to the whole post, not to the video's player) was taken for something
+    covering the video, which hid the button the moment the pointer reached it.
   - It respects `prefers-reduced-motion` and `forced-colors`, and activation requires
     `event.isTrusted`.
+- **Quiet videos** (*amended 2026-11-18*, §2.5). A quiet video (a decorative loop on a host that is
+  not curated) gets a button of the usual kind with these differences:
+  - It is always the mark alone (32 × 32 px, inset 8 px).
+  - It is never shown on `play`/`loadedmetadata`.
+  - It shows while the pointer is over the video's rectangle and hides as soon as the pointer
+    leaves it, unless it has the focus or its panel is open.
+  - It counts against the 8 buttons of a frame after every meaningful video.
+  - *Fix 2026-11-18.* It never covers the page's own controls. Before placing it (in the animation
+    frame), the layer hit-tests the mark's box (`document.elementsFromPoint` at its corners and
+    centre, past the layer). Under it may lie a link, a button, a form control or an element with
+    a control role (`button`, `link`, `checkbox`, `switch`, `slider`, `tab`, `menuitem`). When one
+    is there, the mark goes to the video's top-left corner instead. When one is there too, the
+    video gets no mark (the menu's "Show Downex download panel" still opens its panel). Two kinds
+    of such element are the video's own surface and do not count: one that contains the video,
+    and one laid over half of the video's visible part or more (a tile's link). A real check on
+    2026-11-18 (a landing page with a pause button in its hero's top-right corner): the mark went
+    to the top-left corner and a click on the pause button paused the hero.
 - **Click.** DRM and live are checked again (§2.5), then `downex:frame-offers` is called and the
   panel opens.
+- **Feed videos** (*amended 2026-11-18*). A curated site's feed, profile, search or home page is
+  not a video address, so its frame has no Site source of its own. On a click (or the menu's
+  "Show Downex download panel"), when the frame's own address is not a curated video (§3.8), the
+  layer looks for the clicked video's own address (`lib/feed-link.ts`):
+  - **The walk.** It starts at the `<video>` and goes up at most 16 ancestors (from a shadow root to
+    its host). At each ancestor it looks at the ancestor itself when it is an `<a href>`, else at
+    its `a[href]` descendants. *Fix 2026-11-18:* the bound was 10. A public Facebook page's video
+    (signed out, 2026-11-18) had its own `/videos/<id>` link 11 levels up and got none.
+  - **Where it stops.** The walk stops and takes nothing at the first ancestor that holds a
+    `<video>` other than the clicked one: that ancestor's links may be a neighbouring post's (a feed
+    card without a post link of its own, below another card that has one). It also stops at an
+    ancestor with more than 64 `a[href]` descendants, a page section, which it does not judge from
+    part of its links (*fix 2026-11-18*; before, the first 64 decided). *Amended 2026-11-18
+    (social sites):* a hidden slide of the same carousel does not stop it (§5.1 "Carousels").
+  - **Which links count.** It reads each link's resolved `href` and parses it with the curated
+    table. A link counts only when it is on the frame's own origin and is not a `network` site's.
+    Examples: an Instagram `/p/` or `/reel/` link, TikTok `/@<user>/video/`, X `/status/`, a
+    Facebook `/reel/`, `/videos/` or post link, a Pinterest `/pin/`.
+  - **Which ancestor decides.** The lowest ancestor with any such link decides. Its links must all
+    name one video (one key, however many links). Links to several videos mean the walk reached a
+    list of posts, and nothing is taken.
+  - **What it reads.** It reads link addresses only, never page text, scripts or player data
+    (CLEAN-ROOM.md). It runs at click time only, never while the user browses.
+  - **Where the address goes.** It goes to the background (`downex:frame-offers {post}`, then
+    `downex:page-video-probe`/`-add {url}`) and from there to the local Downex only.
+  - **What the background does with it.** The panel's Site source is that video, with the key its
+    own page has, so the look-ahead and probe caches are shared. It is asked at once, as on a
+    curated page.
+    - It carries no tab title (a feed's title is not the video's) and no look-ahead. In the top
+      frame it carries no Referer either (same origin, as on the post's own page); a feed in an
+      embedded frame gets an embed's default-policy Referer (§3.6).
+    - A quiet video's mark stays shown for 3 s after its panel closes, then follows the pointer
+      again.
+    - The sign-in follows SITE-MEDIA-SPEC §6.3 (amendment 2026-11-18): the post is asked without
+      cookies first, and once more with the site's sign-in only after `auth_required`.
+    - The panel's title is the site's title for the video once the site answered.
+  - **Which pages are feeds** (*fix 2026-11-18*, `curatedPage`). From the addresses these sites
+    show in the address bar: each curated site's home page, and per site its feeds, searches and
+    profiles. Examples: TikTok `/foryou`, `/following`, `/explore`, `/@<user>`; Instagram
+    `/explore/…`, `/<user>/`, `/<user>/reels/`; X `/home`, `/search`, `/<user>`,
+    `/<user>/media`; Facebook `/watch/`, `/search/…`, `/<page>`, `/<page>/videos`; Reddit
+    `/r/<name>/` and its orders, `/user/<name>/`; Pinterest's searches, profiles and boards;
+    YouTube's `/feed/…`, `/results`, `/@<handle>…`; Bluesky `/profile/<handle>`; LinkedIn
+    `/feed/`. Any other address of a curated host that the table (§3.8) does not parse keeps the
+    generic target: an episode, a clip, an album, a story, a post the table does not know, a
+    live channel. Before this fix every such address was taken for a feed, which removed "Look for
+    more qualities" from single-video pages.
+  - **No post found** (*amended 2026-11-18*, SITE-MEDIA-SPEC §2.9). The frame then gets no Site
+    source (yt-dlp cannot read a feed as one video), and the clicked video's **Played** source
+    carries the click: the files the tab's player fetched for it. The texts that sent the user to the
+    video's own page or to TikTok's comments are removed. On TikTok, opening a For You video's
+    comments changes the address bar to the video's own address (`pushState`); the frame's address
+    read at the click (`downex:frame-offers {href}`) then names that video, and its Site source is
+    asked beside Played; the comments panel being open or not makes no difference to Played.
+  - **Not verified** with the extension on the real sites in a real browser (§8.4). Only the
+    walk itself ran on a real page (the TikTok check above).
+- **Menu** (*amended 2026-11-18*, BROWSER-SPEC §4). The context menu's "Show Downex download panel"
+  on a `<video>` (any source: `blob:` and MSE players included) opens the same panel for that video
+  in its own frame:
+  - The tracker remembers the target of the last trusted `contextmenu` event (capture phase,
+    passive) when it is a `<video>` (`composedPath()[0]`, so a video in an open shadow root
+    counts), else the tracked video under the pointer (its `getBoundingClientRect()`, read once per
+    right-click: a video in a closed shadow root, which the event does not name), for 60 s. It
+    never prevents the event or the page's own menu.
+  - On `downex:show-panel` it tracks that video if it is not tracked yet (making room as on a media
+    event), marks it requested, asks for the overlay UI if it did not yet (`downex:video-ui`), and
+    answers `{shown: true}` once the UI is in the frame; with no such video, or when the UI could
+    not be put in (asked again on the next request), `{shown: false}` and the background records
+    "Right-click the video itself, then choose Show Downex download panel." for the popup's
+    history. *Amended 2026-11-18 (review):* a right-click whose event named no video and that hit
+    no tracked one keeps its point; on `downex:show-panel` the tracker runs its bounded deep scan
+    once (open and closed shadow roots) and looks under that point again, so a closed root's video
+    that never played is found.
+  - The background lets the overlay UI into a frame where buttons are not allowed only while that
+    frame answers the menu's `downex:show-panel` (at most 30 s): the user's menu choice, never a
+    page's own message, decides. Other `downex:video-ui` requests keep the button rules.
+  - YouTube's frames (`youtube.content.ts`) answer `downex:show-panel` by opening their own panel
+    when their button is shown; otherwise, and in the store build, the background records "On
+    YouTube, use the Downex toolbar menu to download this video." (store build: "Downex can't show
+    its panel on this site."), not the reload advice, which never helps there.
+  - The layer mounts for a requested video even where buttons are not allowed (the option off, a
+    hidden site) or the video is not meaningful (small, decorative): the user asked for it. It
+    gets its button (revealed) and its panel opens at once. Other videos keep the usual rules: on a
+    site where buttons are not allowed, the requested one is the only button, and the layer
+    unmounts again after its panel closes.
+  - DRM and live are refused by the panel as on a click; private windows get no menu action.
+- **Social sites: the compact button and every video surface** (*amended 2026-11-18, owner
+  decisions 2-4 of that day*). The owner asked for a smaller button on social sites that fits
+  their vertical players and feed cards and never covers their own controls, for a button on
+  every kind of video these sites show, and for touches that set Downex apart. YouTube's button
+  (`youtube.content.ts`) is unchanged, and so is every other site's.
+  - **Which frames** (`compactSite`, §3.8 "Compact sites"). A frame whose own address is on the
+    host of TikTok, Instagram, Facebook, X, Reddit, Pinterest, Threads, Snapchat, LinkedIn,
+    Bluesky, Tumblr, 9GAG, Imgur, VK or Telegram, top frames and these sites' embedded players on
+    other pages alike. The video-platform rows of §3.8 (Vimeo, Dailymotion, Twitch, Kick,
+    Bilibili, Streamable, Odysee, BitChute, Rumble) keep the usual button: their players are large
+    and wide, with their controls along the bottom.
+  - **Look.** Every video button of such a frame is the mark alone on the same smoked-glass
+    pill: 34 px with an inset of 10 px over a video at least 260 × 220 px, else 28 px with an
+    inset of 6 px (feed cards, grid tiles, thumbnails); the orb's disc is 28 px (24 px) with a
+    16 px (14 px) mark. *Amended 2026-11-19 (owner: "little small ... i dont want too way big"):*
+    moderately bigger than the first 28 px (24 px) form, still placed only in a free corner.
+    On `:hover`, `:focus-visible`, while its panel is open and while it shows a
+    state (below) it widens, away from the corner it sits in, to show its label ("Download", or
+    the hint below); never wider than the video's visible width less both insets, the label cut
+    with an ellipsis before that. It is drawn in the fixed layer like every button, so the
+    page's layout never moves; `prefers-reduced-motion` removes the widening's and the ring's
+    motion (the label shows at once, the ring stands still); forced colours and reduced
+    transparency follow the shared rules. Shown and hidden as any meaningful video's button
+    (3 s after pointer movement over the video, 5 s after `play`/`loadedmetadata`, focus, open
+    panel); the quiet mark (above) of other hosts is unchanged.
+  - **A free corner** (`placeCompact`). In the animation frame that places it, while it is shown
+    or the pointer is over its video, the layer hit-tests the button's box as for the quiet mark
+    (the page's controls; the video's own surfaces do not count, and here also `[tabindex="0"]`
+    elements). It takes the first free one of: the visible part's top-right corner, its
+    top-left corner, the right edge just under the control that took the top-right corner, the
+    left edge under the one that took the top-left corner (each only within the upper 45 % of the
+    visible part), the middle of the right edge, the middle of the left edge. When none is free
+    there is no button (the menu's "Show Downex download panel" still opens the panel). The
+    choice is kept relative to the video and checked again only when the video's size changed by
+    more than 4 px or after 500 ms while shown, never every frame: scrolling moves the video and
+    the site's controls together.
+  - **The video under the pointer.** Where the pointer is over the rectangles of several
+    videos, or over one video covered by something else (a post viewer opened over a feed, a
+    story over its tray), only the video the page shows there gets its button: the layer reads
+    `document.elementsFromPoint` at the pointer once per placement (past the layer) and reveals
+    the video whose player holds that element, the nearest one when several do. A video's player
+    is the video and its ancestors, up to 12 levels (from a shadow root to its host), while they
+    stay about its size (at most 1.25 times its width and height plus 8 px; or a card that
+    letterboxes it, within that bound on one axis and on the other at most 16/9 of its own kept
+    side plus 8 px, or, when it keeps the video's height, at most the viewport's width plus 8 px,
+    such as a portrait video's wide card on a vertical feed, *amended 2026-11-18*; a wrapper with
+    no area is passed over): a feed or a page around it is not its player. *Fix 2026-11-18
+    (owner's report: TikTok For You showed no button on portrait videos):* a For You card follows
+    the window's width, not the video's (measured: a 514x914 video in a 1634x914 card at a
+    1906x946 viewport, a maximised 1080p window at 125 %), so a 16:9 frame of the kept height
+    alone rejected it, and the card's overlay, the element at the pointer, counted as covering
+    the video. When no player holds the element at the pointer, the video the page shows at the
+    centre of its visible part (its player holds the element topmost there) is the one under the
+    pointer: a layer the page lays over a strip of the video (an Instagram post's header, where
+    the button sits) does not hide its button, while a viewer or prompt over the whole video
+    does. With none, no button is revealed there. A button revealed
+    without the pointer (a video that starts or loads, §5.1 "Button") is checked the same way at
+    its own spot: a video that starts under a post viewer gets no button over the viewer. Compact
+    frames only. The pointer on a button keeps it while the page shows its video (§5.1 "Button",
+    fix 2026-11-18).
+  - **Videos that mount late or are recycled.** In the top frame of a compact site the tracker
+    also runs one `MutationObserver` (`childList`, `subtree`) on the document. Its callback does
+    no work of its own: it schedules one `check()` of the live collection 250 ms later (one
+    pending at most), so a feed's videos that mount without playing (a scroll with the keyboard)
+    get their buttons without pointer movement. A player that reuses its `<video>` for the next
+    post (`emptied`, a new `currentSrc`) drops that video's hint and state below; the post is
+    found again on the next click. Removed videos are let go at that check (IntersectionObserver
+    and ResizeObserver entries removed, their buttons removed by the layer). No timers run while
+    nothing changes, and nothing reads layout for videos whose button is not shown.
+  - **Feeds, reels and Shorts-style players, stories, modals.** Feed videos keep "Feed videos"
+    above; vertical players are videos like any other (their buttons are the 34 px form); a story
+    on its own address (§3.8 Instagram `/stories/…`) is that address's video, the largest shown
+    one (the active story) gets the button; a post viewer opened over a feed changes the address
+    bar to the post (Instagram, X), so its video is the frame's own and the feed under it gets no
+    button (the video under the pointer, above).
+  - **Carousels.** *The feed walk's stop rule is amended:* another `<video>` under an ancestor
+    does not stop the walk when it is a slide of the same carousel as the clicked one: it is
+    tracked and known not to be shown (its IntersectionObserver ratio below 0.5, a slide moved
+    out of the carousel's clip), it has a size, and its rectangle has the clicked video's top and
+    height within 2 px (one horizontal row). A neighbouring card of a feed (another top) or a
+    shown video beside it (a grid, a masonry) still stops the walk. The panel opens on the
+    clicked slide where the page shows which (SITE-MEDIA-SPEC §3.12 "Which item").
+  - **Grid tiles** (profile grids and other tiles that show a picture, not a video). In the top
+    frame of a compact site the tracker listens to trusted `pointerover` events (capture, passive).
+    When the pointer enters a link (`a[href]`, `composedPath`) whose address is a curated video on
+    the frame's origin with a shape that always names a video (`videoTile`, §3.8 "Tiles"), that
+    holds no `<video>` with a button of its own and is at least 96 × 96 px (read once per
+    entered link), that link is the frame's tile (`tilePost`): the overlay UI is asked for as
+    for a quiet video, and the layer puts one compact button at the tile's free corner (on a
+    tile, any of the link's first 64 descendants in the corner that is not half of the tile or
+    more takes it too, such as the tile's own "reel" badge, which a real profile grid draws at
+    its top-right without taking the pointer, so a hit test passes through it) while the
+    pointer is over it (it hides as soon as the pointer leaves, unless focused or its panel is
+    open). Its panel is a feed video's panel whose post is the tile's own address (no walk),
+    with no element (no File rows of its own, no part from the element, never DRM or live at
+    click time: the site's answer says). A `<video>` that mounts in the tile (a preview on
+    hover) and gets a button of its own (big enough, §2.5) takes over: the tile's button goes,
+    the video's own comes. A preview smaller than that (a 148 px tile's) leaves the tile its
+    button and its post. No tile is taken in a frame whose own address is a video (the "You
+    may like" and creator tiles under a video page: the page is that video, as the feed under
+    a post viewer) or a site's private messages ("DMs" below), and a tile goes when the frame
+    navigates to such an address (*amended 2026-11-18*). Only the link's resolved address is
+    read, locally; nothing leaves the frame before the click.
+    Tiles are a pointer shortcut: keyboard users open the post and use its button.
+  - **Embeds.** These sites' embedded players on other pages are frames of the embed addresses of
+    §3.8 ("Embeds"): the Site source is the embedded post, with an embed's default-policy Referer
+    (§3.6), the compact button, and no look-ahead.
+  - **DMs.** Private messages are never a surface: no address of a site's messages is in §3.8,
+    and their pages are not feeds (`curatedPage`; X `/messages` and `/i/chat`, Facebook
+    `/messages`, Instagram `/direct`, TikTok `/messages`, Reddit `/chat` and `/message`, LinkedIn
+    `/messaging`, Bluesky `/messages`, which the profile shapes would otherwise take;
+    `messagesPage`), so their videos get no Site source and no post is looked for: the feed walk
+    takes nothing there, the background takes no post a panel names there, and no grid tile is
+    taken. They get no generic target either ("Look for more qualities", the popup's "Find the
+    video on this page"), which would ask yt-dlp about the conversation's address. The
+    browser's own File and Stream rows are listed as on any page.
+  - **What the button tells** (compact buttons only):
+    - *The best quality and size, once known.* "Download · 1080p · 24 MB" (the default row's
+      quality up to " (" and its size, "~" kept for estimates) when it widens; where its widest
+      form is too narrow for that (a grid tile, a small card) "1080p · 24 MB", then "Download"
+      (and "Sent" for "Sent to Downex"), judged at 7 px a character. Known from the
+      panel's own answer for that video, or, on a frame whose own address is a curated video (or
+      a video whose post a click found before), from the background's memory
+      (`downex:frame-offers`, which sends nothing to Downex, so no request at all, with or
+      without cookies), asked at most once per 20 s per button and only when the pointer reveals
+      it. A look-ahead (§5.5) fills that memory on the sites marked for it. Never a request of its
+      own, never with the sign-in. The accessible name becomes "Download this video with Downex,
+      1080p, 24 MB".
+    - *Work in progress.* While its panel gets the qualities or sends one, a ring turns around
+      the mark (`data-state="working"`; it stands still with reduced motion).
+    - *Sent.* Once Downex took the video, the button widens to "Sent to Downex" with a check for
+      3 s, then keeps a small check on the mark (`data-state="sent"`) for that video: the user
+      sees in the feed which videos were already sent. Downex only took it: the extension never
+      learns the download's own progress (the relay has no such answer), so it never says
+      "Saved".
+    - These live in the layer's memory only, per video and its source (`currentSrc`) or post, and
+      go with the page.
+  - **Part of the video.** The compact panel is the same panel: its *Part of the video* row
+    (the timeline trimmer, "Start here"/"End here" at the playhead) saves a part in one more click
+    where Downex takes parts, unchanged.
+  - **Not verified** on the real sites in a real browser: each site's controls and markup
+    (corners, carousels, tiles, stories, modals), embeds, the late-mount observer's cost on long
+    feeds. A local harness with stand-in pages of each surface, light and dark, was checked
+    (§8.4).
 
 ### 5.2 Panel
+- **Recommended** (*amended 2026-11-19, owner: "mark the highest quality as recommend download
+  when qualities loaded"*). When a panel lists at least two qualities of the site and of what
+  played (Site and Played rows), the highest one with sound (`highestWithSound`: the largest
+  picture, width × height, of a muxed track or a video paired with an audio track; the first of
+  equals; without one with sound, the largest) carries the badge "Recommended" (said in the
+  row's label) and is the default row. The popup's video rows of sites other than YouTube do the
+  same (`VideoPanelDeps.recommend`: the badge in the quality list, the pick preselected);
+  YouTube's panels keep Downex's default pick. A panel with a Played source keeps the default it
+  showed (§2.9 "The panel"): a quality listed later moves neither the selection nor the badge.
+- **Quick rows** (*amended 2026-11-19, owner: "the loading of getting video links takes little
+  extra seconds"*). While the Played source has not answered (within PLAYED_WAIT_MS), the panel
+  asks for the frame's offers every 250 ms (`PLAYED_POLL_MS`) instead of every 2 s, so what played
+  is listed as soon as Downex matched it; the site's qualities (yt-dlp) fill in when they come.
 - **Shell.**
   - `popover="auto"`, `role="dialog"`, labelled by the title (the tab's title, else "Video"),
     positioned from the button's rectangle.
   - It closes on Esc (focus returns to the button), light dismiss, `fullscreenchange`, the element's
     removal or `emptied`, a navigation of the frame, or the extension's invalidation.
-  - Rows are buttons in the order of §2.6. Up and Down move between them.
+  - Rows are buttons in the order of §2.6. Up and Down move between them (not inside a field, a
+    select or a slider: the Part row's, "Audio").
 - **Row labels** (picker rules of SITE-MEDIA-SPEC §5.3; `qualityRows` for Site and Stream):
   - Site: "1080p (Full HD) 60fps · H.264 · 412 MB", with the site name as the source tag.
   - Stream: "1080p (Full HD) · H.264 · about 412 MB" (bandwidth × duration), tagged "Stream".
@@ -1239,6 +1724,142 @@ fragment index, PID), never a URL.
   height only the default row is shown, with "More in the Downex toolbar menu".
 - **Text safety.** Titles and site strings are set with `textContent`, without bidi controls
   (`cleanSiteText`). No HTML strings are used anywhere (Trusted Types safe).
+- **Several videos** (amendment 2026-11-18, `SITE-MEDIA-SPEC.md` §3.12; `lib/item-strip.ts`, state in
+  `VideoPanel`): when the page video's answer lists two or more items (a carousel, a news page), an item
+  row sits under the title, above the rows: "Video 2 of 3", one 44 px tile per video (the page's
+  thumbnail, else its number, with its length), the chosen one checked; Left/Right/Up/Down and
+  Home/End move between tiles and choose (one tab stop, `role="radiogroup"` of `role="radio"`
+  buttons named "Video 2: <title>, 0:12"). With other items left out, the note "2 other items not
+  listed: photos, links or videos Downex cannot save." (also with one video), wrapped under the count
+  (never cut). The panel opens on the video the user clicked when what the page shows names one
+  (`clickedItem`: the element's length, else an Instagram post address's slide; SITE-MEDIA-SPEC
+  §3.12 "The video the user clicked"), else on the page's default. Choosing another item asks for its
+  qualities (`downex:page-video-probe` with `entryId`; the background caches each item apart, and the
+  panel's own probe state stays the default item's), the Part row starts again (another length), and
+  Download sends the item (`downex:page-video-add` with `entryId`). The row stays while the item's
+  qualities are got, and after a failure ("this item is no longer on the page"), so another can be
+  chosen. Thumbnails are `<img>` elements (never a CSS URL) with `referrerpolicy="no-referrer"`,
+  `loading="lazy"`, `alt=""`, only for https addresses without user information; one that fails to load
+  leaves the number. A short frame shows the count without the tiles. Clicks and keys the page makes
+  (`isTrusted` false) are ignored. The popup lists the same items as a "Video" select ("1 of 3", the
+  title, the length; no thumbnails) under the card, with the note, and sends `entryId` with
+  `downex:tab-video-probe`/`-add`. The YouTube panel has no row: a YouTube watch page is always one
+  video. `NativeClient` refuses an `entryId` to a relay without `items` (`outdated_downex` "Update
+  Downex to choose a video of this page.").
+- **Part of the video** (2026-11, `MEDIA-SPEC.md` §8; `offer-panel.ts`, the row's state, elements and
+  rules in `lib/part-row.ts` (shared with the YouTube panel, below), pure rules in `lib/clip.ts`):
+  below the quality rows (and the audio select), only when the relay lists `clips`
+  (`FrameOffers.features.clips`) and the default row is a stream's or the page video's (never a direct
+  file), and not in a short frame.
+  - **Its duration** (*amended 2026-11-18*): the default row's info's `durationMs` when it is above 0.
+    Otherwise, as for Instagram, which reports 0, it is the clicked element's own duration: its
+    `duration` when finite and above 0, read on every render; never a live element's. When neither
+    is known, there is no row. Before this, a zero-length timeline was drawn. With the element's
+    duration, the trimmer's video check (below) holds by construction, and the daemon checks the
+    part against no duration (MEDIA-SPEC §8 C2: an unknown duration is not checked).
+
+  A disclosure button "Part of the video" (`aria-expanded`, a
+  scissors mark, a chevron) with its summary "Whole video" beside the label (which never wraps); open,
+  the readout below says the part and the summary fades out (amendment 2026-11-17). It stays closed by default, and closed, the whole video is sent. Opened (the body grows to its height,
+  its parts rising in turn, the part's fill sweeping in and the handles popping in; none of it under
+  `prefers-reduced-motion`), the row is a **timeline trimmer** (amendment 2026-11-17, replacing the
+  From/To fields with Now and the Chapter select):
+  - **Readout.** The two times big ("1:20 → 2:45", 18 px, tabular figures), "Whole video" (resets the
+    part; shown only with a part), and under them "1:25 selected · ~78 MB at 1080p": the part's length
+    and the default row's size for the part (`clipSize`, below) with its quality's short name; "Whole
+    video · 754 MB at 1080p" without a part. While a typed time cannot be used, its error takes that line's
+    place (below). The site's and the streams' quality rows show the part's estimate too
+    (`buildOfferRows` with the part), so the rows and the readout agree (amendment 2026-11-17).
+  - **Track.** The whole video as a rail with ruler ticks. The row's body (the track, the chapter chips,
+    the buttons) reads left to right whatever the page's direction (`dir="ltr"`; a chapter's title
+    keeps its own, `dir="auto"`), Start here before End here as the handles. The part between two Mint handles joined by a frame is filled with a Mint
+    gradient, the rest dimmed; the playhead (a line with a dot) is the page video's `currentTime`,
+    followed on `timeupdate`/`seeked`. Chapters are segments of the rail separated by 3 px gaps (2 px past 12
+    chapters; past 24, short ticks in place of the ruler's); the mouse over the track shows a bubble
+    with the time under it on the handles' grid and its chapter ("Testing · 7:47"), the segment lit.
+    The bubbles have room of their own above the rail (`--tip`), so they never cover the readout. A part
+    is drawn at least 10 px wide (`--vs`, `--ve`), so a short part of a long video shows between its
+    handles. Positions are fractions in custom properties (`--s`, `--e`, `--p`, `--t`) and
+    glide (0.34 s) except while a handle is dragged. Tokens `--p-trim`, `--p-trim-hi`,
+    `--p-trim-grip`, `--p-trim-dim`, `--p-trim-tick`, `--p-trim-halo` in both schemes.
+  - **Pointer.** A press on a handle grabs it where it is (no jump); a press elsewhere on the track
+    takes the nearer handle there. The handle follows the pointer (mouse, touch or pen; pointer
+    capture, `touch-action: none`, so the page does not scroll) on a grid of whole seconds (tenths
+    under 20 s; the very end kept), grows while held, with a Mint bubble of its time above it. The
+    handle hit areas reach 8–10 px past the handles. A double-click on a chapter's segment takes that
+    chapter; a press needs `isTrusted`.
+  - **Keyboard.** Each handle is `role="slider"` (named "Start" and "End", `aria-valuenow`/`min`/`max`
+    in seconds, each bounded by the other handle, `aria-valuetext` "Start 1:20"): arrows ±1 s
+    (Right/Up later), Shift+arrows ±10 s, Page Up/Down ±1 min, Home/End the bounds; the bubble shows
+    while keys move it. Keys with Alt, Ctrl or Meta are left to the browser (Alt+Left is Back). Up and
+    Down stay with the slider (the panel does not move to a row), and no key
+    reaches the page or the player (`isolateEvents`).
+  - **Rules.** The handles never cross and keep `MIN_CLIP_MS` (1 s) between them (`PartRow.setMs`).
+    "Start here" and "End here" set a handle from the page video's position and push the other one
+    away instead (the end to the video's end, the start to 0). The state holds the part in ms (end 0
+    = to the end); `checkRange` (`checkClip`'s rules for ms) checks it.
+  - **Chapters.** A chip per chapter under the track ("1 Intro", named "1. Intro (0:00–1:20)",
+    `aria-pressed` while the part is exactly that chapter), in a strip that scrolls sideways with faded
+    edges where more chips are out of view; a chip chosen scrolls into view.
+  - **Typing.** Each time is a chip; a click (or Enter) turns it into a text field (named "From"/"To",
+    "Time, like 1:20"), Enter or leaving it commits, Esc cancels (and does not close the panel). A
+    committed time is checked with the desktop's rules (SITE-MEDIA-SPEC §5.3: a mistyped time, the
+    start after the end, shorter than 1 s, an end past the video's; within 1 s past the end is the end;
+    empty is the start or the end), in the trimmer's words ("Enter a time like 1:20 or 1:02:03.", "The
+    start must be before the end.", "The part must be at least 1 second long.", "The video ends at
+    12:34."; amendment 2026-11-17). One that does not fit is kept as typed in its chip (red, `aria-invalid`
+    on the field, both chips described by the error line, `role="alert"`, which shows right under the
+    times in place of the length, the track dimmed and Preview disabled meanwhile), the handles staying
+    at the last good times, until the next change; errors show only after a commit, never while typing.
+  - **The page's video.** "Preview", "Start here" and "End here" and the playhead show only with the
+    clicked `<video>` (read in the frame that owns it: the overlay host's own element). The trimmer
+    uses only that element's `currentTime`, `paused`, `seeking`, `play()`, `pause()` and their events
+    (`PartPlayer`; never the page's scripts or player data, CLEAN-ROOM.md). A drag (or a key) pauses the
+    video and seeks it to the moved handle (one seek at a time, the latest waiting for `seeked`), after
+    remembering its position and whether it played; the handle let go, its frame stays 1.2 s and the
+    video goes back where it was, playing or paused as before. Preview seeks to the start and plays,
+    checks every 40 ms and pauses at the end (then the same 1.2 s and back); pressed again ("Stop", the
+    button `aria-pressed`) it goes back at once. Closing the row or the panel goes back at once. A
+    play, pause or seek the user makes in the player meanwhile is their choice to stay: the video is
+    left where they put it; the element's own pause at its media's end during a preview (`ended`
+    follows) is the preview's end. The element is the video only while its media's `duration` is within
+    2 s (or 2 %) of the video's: an ad played in the same element, or no media yet (NaN), shows no
+    playhead, Preview or Start/End here and is neither read nor driven (checked again on
+    `durationchange`, `loadedmetadata` and `emptied`). Other media loading into the element (`emptied`,
+    `loadstart`) ends a hold without touching it, and in the YouTube panel another video (a new key)
+    lets the hold go instead of putting the player back (amendment 2026-11-17).
+  - **Sending.** Activating a quality row sends that quality with the part (`downex:offer-add` /
+    `downex:page-video-add` with `clipStartMs`, and `clipEndMs` unless the part runs to the end:
+    `clipFields`); a row activated while an error shows sends nothing. Every control of the row, the
+    disclosure too, is disabled while a pick is being sent and after it was sent (the track ignores the
+    pointer, the sliders get `aria-disabled` and leave the tab order), so the row keeps showing the
+    part that went. The popup's media list gets no part controls: Confirm download in Downex offers
+    them. `lib/clip.ts` repeats `media.ParseClipTime`; its table `CLIP_TIMES` is held to Go by
+    `internal/media` `TestClipTimesMatchExtension`.
+  - **Forced colours.** The rail and chips are outlined in CanvasText/ButtonText, the part filled and
+    the handles drawn in Highlight, the playhead in CanvasText; focus rings are Highlight.
+- **The YouTube panel's Part row** (2026-11; `VideoOverlay`, SITE-MEDIA-SPEC §5.1): the same row
+  (`lib/part-row.ts`: the trimmer above, its texts and rules), under the quality rows and the "Audio"
+  select, before the status line. Under Audio rather than between the rows and Audio: Audio belongs
+  to the rows (it changes their sizes and what each one sends), while the part is a separate choice
+  about whatever row is activated next; it also keeps the order of the panel over any video. Shown
+  only while the qualities are listed with a known duration (`videoInfo.durationMs > 0`; never for a
+  live stream or an unknown length) and the connected Downex lists `clips` (`downex:video-features`,
+  asked when the panel opens and again when the qualities arrive, since Downex may connect only for
+  them); an older Downex gets no row (and the relay client would refuse the fields with
+  `outdated_downex`). The YouTube panel has no short form: it is never taller than the room left in
+  the frame (the popover cannot draw past it), and with less than 160 px under the button (a small
+  embedded player) it goes over the button (`data-covered` hides the button meanwhile), down to the
+  frame's bottom; there it scrolls, with the overflow fade, so the row is never dropped or drawn out
+  of sight. Opening the row scrolls the panel (smoothly, unless reduced motion) so the whole row
+  shows; frames up to 420 px tall get a slimmer track and no end labels.
+  - The timeline's video is the player's own `<video>` (`.html5-main-video` of the player the overlay
+    is mounted in, else its first `<video>`; `playerVideo`).
+  - While the row is open with a valid part, every row's size is the part's estimate, always "~"
+    (the desktop's `ClipSize`, SITE-MEDIA-SPEC §5.3: the size × (To − From + 5 s, rounded up to a
+    second) ÷ the duration; `clipSize` in `video-picker.ts`), in the visible size and the row's name.
+  - A row activated while an error shows sends nothing: the chip the error is about (the one typed
+    into) opens as a field and takes the focus. Another video (a new key) closes and empties the row.
 
 ### 5.3 Popup and badge
 - **"Videos on this page"** (it replaces "Media on this page"):
@@ -1257,6 +1878,17 @@ fragment index, PID), never a URL.
 - **"This tab" card** gains "Show Download buttons on <host>" (`downex:set-site-hidden`). It is
   locked on, with the reason, when a wildcard pattern hides the host.
 - **"Find the video on this page"** stays for tabs without a curated or YouTube video.
+- **Audio pages** (*amended 2026-11-18*, `SITE-MEDIA-SPEC.md` §3.13). An answer whose `container`
+  is `m4a` or `mp3` lists audio tracks only: the rows are "Audio" with the codec, rate and size
+  ("Audio · AAC · 96 kbit/s · 1.7 MB"; the track's note leads when it has one), a row sends its track
+  as the audio of the pick (no video), the card's line says the file type ("SoundCloud · M4A"), and no
+  Part row is shown. A curated `audio` address (§3.8) shows its page row and counts in the badge from
+  its address alone.
+- **Posts and share links** (*amended 2026-11-18, review*). A `post` or `link` address (§3.8) only
+  may hold a video: most posts and pins are text or images. Its page-video row and its badge count
+  appear only once a frame of the tab reported a video that plays (`FrameReports.playable`, as the
+  look-ahead requires); until then the tab offers "Find the video on this page". Other kinds count
+  from their address alone.
 - **Badge** (blue count; `!` still wins). It counts groups:
   - each page video (curated or YouTube), which absorbs its frame's network items
   - each frame with at least one stream that was not refused
@@ -1275,7 +1907,8 @@ fragment index, PID), never a URL.
   - "Don't show the button on these sites" (`hiddenSites`, one pattern per line, the same syntax and
     validation messages as the excluded hosts)
   - the existing "Prepare video qualities while you watch" (its hint now names the curated sites)
-  - the existing "Send my sign-in cookies when a video needs it"
+  - "Use my sign-in for videos that need it" (`useSignInForVideos`, on by default since
+    2026-11-18; SITE-MEDIA-SPEC §6.3)
 - **Which host.** The decision uses the **tab's** host, so a site's embedded players follow the
   site. Hiding applies to YouTube too.
 - **Updates.** Content scripts re-ask `downex:overlay-state` on `storage.onChanged` of `videoOptions`.
@@ -1310,6 +1943,12 @@ fragment index, PID), never a URL.
   - `tools_installing`/`tools_unavailable`/`site_media_off` still pause all look-aheads until the
     user's next video request.
 - **No cookies.** A look-ahead never carries cookies (unchanged).
+- **Pointing at the button** (*amended 2026-11-19*). When the pointer enters a Download button of
+  the top frame of a curated video address whose dwell is still being counted, the dwell ends at
+  once (`PrefetchDwell.now`, `TrackerApi.lookAheadNow`): the same look-ahead request goes out, under
+  every rule above (options, visibility, the background's checks, budget and throttles), so the
+  click usually finds the qualities already got. Nothing else changes; a stay already reported is
+  not reported again.
 
 ### 5.6 Texts (extension; with SITE-MEDIA-SPEC §5.5)
 - Group and action texts:
@@ -1324,7 +1963,22 @@ fragment index, PID), never a URL.
   have expired. Play the video again, then download it."
 - `encrypted` and `live` (also for elements refused at click time): the SITE-MEDIA-SPEC §5.5 texts.
 - An element without any source: "Downex found no video it can save here." plus "Look for more
-  qualities" when yt-dlp was not asked yet.
+  qualities" when yt-dlp was not asked yet. On a `network` site (§3.8, *2026-11-18*): "Downex can't
+  read this site's videos yet. Play the video, then try again." while the video has not played
+  (its `played` ranges are empty and its position is 0), else "Downex can't save this site's videos
+  yet." (a `blob:` or MSE player that gave the browser nothing to list; playing again never
+  helps). *Amended 2026-11-18:* these two texts stay only for elements without a Played source
+  (Firefox, and links of the context menu). The feed texts "Open this video's own page to download
+  it." and "Open this video's comments, …" are removed (§5.1 "Feed videos").
+- Played (SITE-MEDIA-SPEC §2.9, *2026-11-18*): the source tag "Playing"; "Getting this video…"
+  while its files are not known; after 20 s "Downex hasn't seen this video load yet. It appears here
+  as soon as it plays."; "Update Downex to save this video." for a relay without `played`; a Site
+  source that failed while another row exists says nothing; one that failed with no row left says
+  "Downex couldn't get this video from the site." on any site but YouTube.
+- Compact buttons (§5.1 "Social sites", *2026-11-18*): the label "Download", widened with the
+  hint "Download · 1080p · 24 MB" once known; "Sent to Downex" after Downex took the video;
+  accessible name "Download this video with Downex" (with the hint: ", 1080p, 24 MB"; sent:
+  ", sent to Downex"); a tile's "Download the video of this post with Downex".
 
 ### 5.7 Desktop and CLI
 See §3.9. The completion view of a stream reads "HLS stream, saved as MP4" (`mediaFormatText`,
@@ -1332,6 +1986,13 @@ See §3.9. The completion view of a stream reads "HLS stream, saved as MP4" (`me
 A legacy record still reads "…, saved as MPEG-TS".
 
 ## 6. Security and privacy
+0. **What is played** (*amendment 2026-11-18*, SITE-MEDIA-SPEC §2.9). `PlayedLog` keeps, per tab and
+   for 30 minutes, the address, total, type hint, frame and request times of the media responses
+   its pages fetched; never a body, a header value or a cookie; never of a private window; never the
+   extension's own requests. It leaves the browser only on a click, to the local Downex, as the
+   addresses and the first 64 KiB of at most 16 of those files (read again by the extension, as the
+   player read them). The option "Watch videos as they play" turns it off. A Played ticket is bound
+   to exactly those addresses.
 1. **Untrusted input everywhere.**
    - Response headers, URLs, element state, content-script messages, relay answers and every byte of
      a TS fragment are untrusted.
@@ -1343,6 +2004,11 @@ A legacy record still reads "…, saved as MPEG-TS".
    - The one exception is the element file (§2.6). It is built only from the element's own
      `currentSrc`, http(s) with an `.mp4`/`.m4v` path, never carries recorded headers or cookies, and
      is sent only on the user's click.
+   - The feed post address (§5.1 "Feed videos", *2026-11-18*) is the other one. It is a link's
+     `href` near the clicked video, read only on the click. The background takes it only as a
+     curated video address on the sender frame's own origin: the same check as
+     `downex:page-video-probe`'s `url`, so a page can name nothing through it that it could not
+     name through that message. It goes only to the local Downex.
    - Headers and full URLs never reach a web page's DOM: the panel lives in a closed shadow root and
      shows host + last path segment.
    - A closed shadow root is an isolation boundary for the DOM API, **not a confidentiality
@@ -1355,8 +2021,10 @@ A legacy record still reads "…, saved as MPEG-TS".
      `onSendHeaders`, with `extraHeaders` on Chromium), and nothing else. It never uses
      `cookies.getAll` (§9 #3).
    - Streams keep the M5 rules (BROWSER-SPEC §5).
-   - yt-dlp probes keep SITE-MEDIA-SPEC §6.3: never a Cookie for generic pages or look-aheads, the
-     page's Cookie only with "Send my sign-in cookies" on curated sites and YouTube.
+   - yt-dlp probes keep SITE-MEDIA-SPEC §6.3 (amendment 2026-11-18): never a Cookie for a
+     look-ahead; a user's probe or add first without one, then once more with the site's sign-in
+     (a curated site's fixed domain, a generic page's exact host) only after `auth_required` and
+     only with "Use my sign-in for videos that need it" on.
    - In the daemon, cookies go only to the origin they came from (MEDIA-SPEC §7; the engine's
      redirect rules for files).
 4. **What runs automatically.** Nothing reaches Downex while the user only browses, except the
@@ -1707,10 +2375,35 @@ the browser behaviour is checked by the user (§8.4).
   - **Detection:** native HLS playback (segment-like rule); worker and service-worker players
     (missed by design); ads before videos (short-clip rule).
 - **Curated sites:** Vimeo (public and unlisted), X, Facebook, Instagram, TikTok, Dailymotion,
-  Reddit, Twitch VODs and clips, Streamable:
+  Reddit, Twitch VODs and clips, Streamable, and the sites added on 2026-11-18 (§3.8):
   - the look-ahead timing and per-site throttles
-  - `auth_required` behaviour without and with the sign-in option
+  - `auth_required` behaviour without and with the sign-in option: the automatic second request
+    with the site's cookies (SITE-MEDIA-SPEC §6.3) was checked against local stand-in pages only,
+    never with a real account
   - the address shapes against what the sites show today
+  - Threads and Snapchat: whether the browser fetches a whole MP4 there (File rows) at all
+  - Rumble and Kick VODs (`network`): whether yt-dlp reads them from other networks (Rumble
+    answered HTTP 403 for every address, Kick VODs "NOT_FOUND", from one machine on 2026-11-18),
+    and whether their players give the browser a Stream row
+- **In-page button on social sites** (2026-11-18, §2.5, §5.1): the button on TikTok, Instagram,
+  Facebook, X and Pinterest feeds and post pages. Things to check:
+  - whether the feed walk finds the clicked video's own post with today's markup on each site
+    (TikTok For You is expected to find none and say so: the comments hint, then the button on the
+    video's own address)
+  - the panel's size over vertical players
+  - quiet marks on landing pages with background loops
+  - the Part row's duration from the element on Instagram
+  - *the compact button (2026-11-18, §5.1 "Social sites")*: its free corner beside each site's
+    own controls (like, comment and share rails, mute, menus, captions, progress bars), its size
+    over feed cards, grid tiles and vertical players, carousels (the shown slide's own post), grid
+    tiles (Instagram, X media, TikTok and Facebook profiles), Instagram stories and highlights
+    with a real sign-in, post viewers opened over a feed, embeds of these sites on other pages,
+    and the late-mount observer's cost on long feeds. Checked only in a local harness of stand-in
+    pages (each surface, light and dark, at desktop and phone sizes) with the real tracker and
+    layer.
+- **Context menu** (2026-11-18): "Download video from this link with Downex" and "Show Downex
+  download panel" in Chrome, Edge and Firefox (the grouping under "Downex", `blob:` players, players
+  that cover their `<video>` with their own layer, closed shadow roots, sub-frames).
 - **Signed CDN files.** Expiry of signed direct-file URLs during long downloads, and whether the
   first URL of a redirect chain renews them.
 - **Playback of converted MP4s** in Windows Media Player / Films & TV, VLC, Chrome, Firefox and
@@ -1748,7 +2441,8 @@ the browser behaviour is checked by the user (§8.4).
 10. **`match_origin_as_fallback`** (players in `blob:`/`data:` frames). → **Not in v1.** Chromium
     needs 119+, and the frames are rare.
 11. **Sign-in cookies per site** (so look-aheads keep working where the option is off). → **Keep
-    the one global option.**
+    the one global option.** Since 2026-11-18 (SITE-MEDIA-SPEC §6.3) look-aheads run with it on
+    too: the click's first request is anonymous, and the sign-in goes only after `auth_required`.
 12. **A visible "Protected" button on DRM videos** instead of none. → **No button** (user decision 1).
     The popup says "Protected".
 13. **HEVC in TS.** → **In v1** (the same scheme as H.264 with `hvcC`). Lane A may deliver it after
@@ -1844,7 +2538,8 @@ committed.
     would otherwise send more than the browser did.
   - `MediaItem` has no separate `mime`: `contentType` holds the essence.
   - The badge counts a curated page video even when the page plays none (§5.3 literally; only the
-    look-ahead requires a reported video).
+    look-ahead requires a reported video). *2026-11-18:* posts and share links count only with a
+    reported video that plays (§5.3 "Posts and share links").
   - Segment-like rule: 4 or more distinct MP4s of one directory within 60 s in one frame are hidden.
   - When the same URL is in two frames, URL-based popup lookups take the most recently seen item. Key
     lookups are exact.

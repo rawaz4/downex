@@ -19,6 +19,7 @@ import (
 
 	"downex/internal/engine"
 	"downex/internal/model"
+	"downex/internal/polite"
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/internal/rpc/downex/v1/downexv1connect"
 	"downex/internal/store"
@@ -62,6 +63,8 @@ type harnessOptions struct {
 	media MediaJobs
 	// openProgress is Config.OpenProgress; nil = none.
 	openProgress func(int64) error
+	// showBrowserAdd is Config.ShowBrowserAdd; nil = none.
+	showBrowserAdd func(int64, AddWindow) error
 	// setConns replaces the engine's SetMaxConnections; nil keeps the engine's.
 	setConns func(model.DownloadID, int) error
 	// now is Config.Now (the clock that times runs); nil = time.Now.
@@ -80,6 +83,9 @@ type harnessOptions struct {
 	post    *PostProcessor
 	// log is Config.Logger for a test that reads the daemon's log; nil = testLogger.
 	log *slog.Logger
+	// politeProber is Config.PoliteProber, with the harness's transport peers and
+	// loopback anchors (the test servers listen there); nil = no Polite mode.
+	politeProber polite.Prober
 }
 
 func newHarness(t *testing.T, o harnessOptions) *harness {
@@ -105,9 +111,10 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 		DownloadsDir: func() (string, error) { return o.dir, nil },
 		Logger:       logger, Version: "test-version", Endpoint: "test-endpoint",
 		LaunchAtLogin: o.launchAtLogin, OpenConfirmation: o.openConfirmation, Media: o.media,
-		OpenProgress: o.openProgress, Now: o.now,
+		OpenProgress: o.openProgress, ShowBrowserAdd: o.showBrowserAdd, Now: o.now,
 		Clock: o.clock, Location: o.location, Power: o.power, Quit: o.quit, Wake: o.wake, KeepAwake: o.awake,
 		Network: o.network, PostProcess: o.post,
+		PoliteProber: o.politeProber, Peers: politePeers(tf, o.politeProber), PoliteLoopback: o.politeProber != nil,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +161,14 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 		srv.Close()
 	})
 	return h
+}
+
+// politePeers is the factory's peer table when the harness has a prober.
+func politePeers(tf *transport.HTTPFactory, p polite.Prober) PeerSource {
+	if p == nil {
+		return nil
+	}
+	return tf.Peers()
 }
 
 // testLogger logs through t until the test ends; later records are dropped.

@@ -53,6 +53,29 @@ func (m *Main) closeConfirm(id int64) {
 	}
 }
 
+// SetConfirmElsewhere tells the window whether the standalone Confirm download window is open
+// (docs/DESKTOP-SPEC.md §1): while it is, the confirm queue opens no dialog by itself (one the
+// user asks for still opens). Call ConfirmElsewhereChanged when the answer changes.
+func (m *Main) SetConfirmElsewhere(open func() bool) { m.elsewhere = open }
+
+// ConfirmElsewhereChanged: the standalone Confirm download window opened or closed (UI thread).
+func (m *Main) ConfirmElsewhereChanged() { m.refresh() }
+
+// ConfirmShownElsewhere: the standalone Confirm download window shows the confirmation of id
+// (UI thread). This window's dialog of it goes, and does not open again by itself: the user
+// can still ask for it (the list's Review).
+func (m *Main) ConfirmShownElsewhere(id int64) {
+	m.closeConfirm(id)
+	if on := m.confirmOn; on != nil && m.confirmID == id {
+		m.confirmOn = nil
+		if m.App.Dialogs.Dialog() == views.Modal(on) {
+			on.removed = true
+			on.Modal.DismissModal()
+		}
+	}
+	m.refresh()
+}
+
 // confirmEffect shows the next confirmation dialog, oldest first, once nothing else is open,
 // with the settings read just before (a failed read waits for the next one); and takes away a
 // dialog whose download was confirmed or removed elsewhere.
@@ -73,6 +96,10 @@ func (m *Main) confirmEffect() {
 	var key confirmKey
 	if ds.Ready() && !ds.Stale() && loaded {
 		key.id, key.ok = confirm.Next(ds.All(), m.dismissed, m.preferred)
+		// The standalone window confirms the browser's downloads: none opens here by itself.
+		if key.ok && key.id != m.preferred && m.elsewhere != nil && m.elsewhere() {
+			key.id, key.ok = 0, false
+		}
 	}
 	key.dialog, key.menu = a.Dialogs.DialogOpen(), a.Dialogs.MenuOpen()
 	if key == m.confirmKey {

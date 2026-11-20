@@ -77,11 +77,13 @@ type NetworkForm struct {
 
 // IntegrationForm is Settings → Integration.
 type IntegrationForm struct {
-	ClipboardMonitor    bool
-	MarkDownloadedFiles bool
-	AVScanEnabled       bool
-	AVScanCommand       string
-	AVScanArgs          string
+	ClipboardMonitor bool
+	// CheckDownloadedFiles is Settings field 27, the file check (DESKTOP-SPEC §9.9).
+	CheckDownloadedFiles bool
+	MarkDownloadedFiles  bool
+	AVScanEnabled        bool
+	AVScanCommand        string
+	AVScanArgs           string
 }
 
 // UpdatesForm is Settings → Updates.
@@ -292,11 +294,12 @@ func NewNetworkForm(s *downexv1.Settings, firstKey int) NetworkForm {
 // NewIntegrationForm is the Integration page's form for settings.
 func NewIntegrationForm(s *downexv1.Settings) IntegrationForm {
 	return IntegrationForm{
-		ClipboardMonitor:    s.GetClipboardMonitor(),
-		MarkDownloadedFiles: s.GetMarkDownloadedFiles(),
-		AVScanEnabled:       s.GetAvScanEnabled(),
-		AVScanCommand:       s.GetAvScanCommand(),
-		AVScanArgs:          s.GetAvScanArgs(),
+		ClipboardMonitor:     s.GetClipboardMonitor(),
+		CheckDownloadedFiles: s.GetCheckDownloadedFiles(),
+		MarkDownloadedFiles:  s.GetMarkDownloadedFiles(),
+		AVScanEnabled:        s.GetAvScanEnabled(),
+		AVScanCommand:        s.GetAvScanCommand(),
+		AVScanArgs:           s.GetAvScanArgs(),
 	}
 }
 
@@ -688,6 +691,9 @@ type SettingsForm struct {
 	ShowTrayIcon            bool
 	ShowProgressWindow      bool
 	ShowCompleteDialog      bool
+	// PoliteMode is Polite mode's switch (docs/POLITE-SPEC.md §8); polite_target_ms is not in
+	// the window and keeps its loaded value.
+	PoliteMode bool
 	// Network is Settings → Network (M6); nil = the loaded values are kept. So are
 	// Integration, Updates and Video.
 	Network     *NetworkForm
@@ -695,6 +701,9 @@ type SettingsForm struct {
 	Updates     *UpdatesForm
 	// Video is Settings → Video sites (SITE-MEDIA-SPEC §5.4).
 	Video *VideoForm
+	// RenewLinks is Settings → Downloads' "Expired links" (DESKTOP-SPEC §10, Settings field
+	// 28); UNSPECIFIED keeps the loaded value.
+	RenewLinks downexv1.RenewLinks
 }
 
 // ValidateSettingsForm checks the Settings dialog. The result starts from base, the settings as
@@ -754,6 +763,7 @@ func ValidateSettingsForm(form SettingsForm, base *downexv1.Settings) (*downexv1
 	}
 	if integration != nil {
 		s.ClipboardMonitor = integration.ClipboardMonitor
+		s.CheckDownloadedFiles = integration.CheckDownloadedFiles
 		s.MarkDownloadedFiles = integration.MarkDownloadedFiles
 		s.AvScanEnabled = integration.AVScanEnabled
 		s.AvScanCommand = integration.AVScanCommand
@@ -783,5 +793,9 @@ func ValidateSettingsForm(form SettingsForm, base *downexv1.Settings) (*downexv1
 	s.ShowTrayIcon = form.ShowTrayIcon
 	s.ShowProgressWindow = form.ShowProgressWindow
 	s.ShowCompleteDialog = form.ShowCompleteDialog
+	if form.RenewLinks != downexv1.RenewLinks_RENEW_LINKS_UNSPECIFIED {
+		s.RenewLinks = form.RenewLinks
+	}
+	s.PoliteMode = form.PoliteMode
 	return s, errs, true
 }

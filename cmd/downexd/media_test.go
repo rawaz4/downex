@@ -312,7 +312,7 @@ func (f *jobFakes) jobs() mediaJobs {
 		return os.WriteFile(out, b.Bytes(), 0o600)
 	}
 	return mediaJobs{
-		assemble: func(_ context.Context, inputs []remux.Input, out string) (string, error) {
+		assemble: func(_ context.Context, inputs []remux.Input, out string, _ remux.Window) (remux.Result, error) {
 			f.mu.Lock()
 			f.assembled = append(f.assembled, inputs...)
 			container := f.container
@@ -327,7 +327,7 @@ func (f *jobFakes) jobs() mediaJobs {
 				}
 				paths = append(paths, in.Fragments...)
 			}
-			return container, join(paths, out)
+			return remux.Result{Container: container, Exact: true}, join(paths, out)
 		},
 		checkTS: func(_ []byte, k remux.Kind) error {
 			f.mu.Lock()

@@ -55,13 +55,18 @@ type StatusState struct {
 	DriveLabel string
 	// NeedBytes is what is left to download (active, queued and paused, known sizes).
 	NeedBytes int64
+	// Polite is Polite mode's status as downexd last reported it (nil: none yet, or an
+	// older downexd); PoliteOn is the polite_mode setting (read with the limit).
+	Polite   *downexv1.PoliteStatus
+	PoliteOn bool
 }
 
 // StatusOptions are the status bar's actions; a nil OnLimit or OnPostAction leaves its menu
-// out.
+// out, a nil OnPolite the limit menu's "Polite mode" item.
 type StatusOptions struct {
 	OnLimit      func(views.LimitChoice)
 	OnPostAction func(views.WhenDoneChoice)
+	OnPolite     func(on bool)
 }
 
 // The status bar's metrics (StatusBar.svelte).
@@ -264,6 +269,63 @@ func LimitText(limit int64, known bool) string {
 	return "Unlimited"
 }
 
+// politeOf is Polite mode as the bar shows it: whether it is on (the setting once read, else
+// what downexd reports) and its state (UNSPECIFIED while it is off or not reported yet).
+func politeOf(st StatusState) (bool, downexv1.PoliteState, int64) {
+	s := st.Polite.GetState()
+	on := s != downexv1.PoliteState_POLITE_STATE_UNSPECIFIED && s != downexv1.PoliteState_POLITE_STATE_OFF
+	if st.LimitKnown {
+		on = st.PoliteOn
+	}
+	if !on || s == downexv1.PoliteState_POLITE_STATE_OFF {
+		return on, downexv1.PoliteState_POLITE_STATE_UNSPECIFIED, 0
+	}
+	return on, s, st.Polite.GetRateLimit()
+}
+
+// PoliteLimitText is the limit control's text with Polite mode (docs/POLITE-SPEC.md §8):
+// "Polite 2.4 MB/s" while it slows downloads under the global limit, "Polite: measuring…"
+// while it measures the line, else LimitText with " · Polite" while it is on.
+func PoliteLimitText(limit int64, known, on bool, state downexv1.PoliteState, rate int64) string {
+	if on {
+		switch state {
+		case downexv1.PoliteState_POLITE_STATE_SLOWED:
+			if rate > 0 && (!known || limit <= 0 || rate < limit) {
+				return "Polite " + format.Speed(float64(rate))
+			}
+		case downexv1.PoliteState_POLITE_STATE_MEASURING:
+			return "Polite: measuring…"
+		}
+		return LimitText(limit, known) + " · Polite"
+	}
+	return LimitText(limit, known)
+}
+
+// PoliteLine is the limit control's tooltip line for Polite mode's state while it is on
+// ("" while it is off). UNSPECIFIED is a state not reported yet.
+func PoliteLine(on bool, state downexv1.PoliteState, rate int64) string {
+	if !on {
+		return ""
+	}
+	switch state {
+	case downexv1.PoliteState_POLITE_STATE_SLOWED:
+		return "Polite: slowed to keep the line smooth. Downloads are held to " + format.Speed(float64(rate)) + " while the line is busy."
+	case downexv1.PoliteState_POLITE_STATE_MEASURING:
+		return "Polite: measuring the line…"
+	case downexv1.PoliteState_POLITE_STATE_NO_SIGNAL:
+		return "Polite mode can't measure this connection, so downloads run at full speed."
+	case downexv1.PoliteState_POLITE_STATE_UNAVAILABLE:
+		return "Polite mode isn't available with this downexd."
+	}
+	return "Polite mode is on: Downex slows down if its downloads make the line laggy."
+}
+
+// PoliteItem is the limit menu's "Polite mode" checkbox.
+func PoliteItem(on bool) widgets.MenuItem {
+	return widgets.MenuItem{ID: "polite", Label: "Polite mode", Kind: widgets.ItemCheckbox, Checked: on, Separated: true,
+		Title: "Slow down when downloads make calls, games or streaming lag"}
+}
+
 // LimitItems are the limit menu's items: the presets, the limit set elsewhere (Settings, the
 // CLI) checked with its "custom" note, and Custom….
 func LimitItems(limit int64) []widgets.MenuItem {
@@ -354,11 +416,25 @@ func (b *StatusBar) Update(st StatusState) {
 	setText(b.countsTxt, CountsText(st.Totals))
 
 	if b.limit != nil {
-		b.limit.setText(LimitText(st.Limit, st.LimitKnown))
-		b.limit.Semantics.Name = "Global speed limit: " + LimitText(st.Limit, st.LimitKnown)
-		b.limit.warn = st.LimitKnown && st.Limit > 0
+		on, ps, rate := politeOf(st)
+		if b.opts.OnPolite == nil {
+			on = false
+		}
+		control := PoliteLimitText(st.Limit, st.LimitKnown, on, ps, rate)
+		line := PoliteLine(on, ps, rate)
+		b.limit.setText(control)
+		b.limit.Semantics.Name = "Global speed limit: " + control
+		if line != "" {
+			b.limit.Semantics.Name += ". " + line
+		}
+		b.limit.warn = (st.LimitKnown && st.Limit > 0) || (on && (ps == downexv1.PoliteState_POLITE_STATE_SLOWED ||
+			ps == downexv1.PoliteState_POLITE_STATE_MEASURING))
 		b.limitMenu.SetDisabled(st.Stale || !st.LimitKnown)
+		// One line: the Windows tooltip control shows a single line (it has no maximum width).
 		b.limit.Tooltip = "Global speed limit"
+		if line != "" {
+			b.limit.Tooltip += ". " + line
+		}
 		if st.Stale {
 			b.limit.Tooltip = "Unavailable while downexd is unreachable"
 		}
@@ -367,6 +443,9 @@ func (b *StatusBar) Update(st StatusState) {
 			lim = st.Limit
 		}
 		b.limitMenu.Items = LimitItems(lim)
+		if b.opts.OnPolite != nil {
+			b.limitMenu.Items = append(b.limitMenu.Items, PoliteItem(st.LimitKnown && st.PoliteOn))
+		}
 		b.limit.Invalidate()
 	}
 	if b.whenDone != nil {
@@ -433,7 +512,8 @@ func (b *StatusBar) same(st StatusState) bool {
 		o.Limit == st.Limit && o.LimitKnown == st.LimitKnown && o.PostAction == st.PostAction &&
 		o.PostActionKnown == st.PostActionKnown && slices.Equal(o.PostActionChoices, st.PostActionChoices) &&
 		o.FreeBytes == st.FreeBytes && o.FreeKnown == st.FreeKnown && o.DriveLabel == st.DriveLabel &&
-		o.NeedBytes == st.NeedBytes
+		o.NeedBytes == st.NeedBytes && o.PoliteOn == st.PoliteOn && o.Polite.GetState() == st.Polite.GetState() &&
+		o.Polite.GetRateLimit() == st.Polite.GetRateLimit()
 }
 
 // State is what the bar shows.
@@ -465,6 +545,12 @@ func (b *StatusBar) OpenWhenDone() bool {
 }
 
 func (b *StatusBar) onLimit(id string) {
+	if id == "polite" {
+		if b.opts.OnPolite != nil {
+			b.opts.OnPolite(!b.st.PoliteOn)
+		}
+		return
+	}
 	if b.opts.OnLimit == nil {
 		return
 	}
@@ -501,8 +587,13 @@ func (b *StatusBar) LimitMenu() *widgets.MenuButton    { return b.limitMenu }
 func (b *StatusBar) WhenDoneMenu() *widgets.MenuButton { return b.whenMenu }
 func (b *StatusBar) Free() *kit.Element                { return b.free.Base() }
 func (b *StatusBar) Short() bool                       { return b.short }
-func (b *StatusBar) Sparkline() *Sparkline             { return b.spark }
-func (b *StatusBar) SpeedText() string                 { return b.speedText.Text() }
+
+// LimitWarns reports that the limit control is in the warning ink (a limit or Polite mode
+// holds the downloads back).
+func (b *StatusBar) LimitWarns() bool { return b.limit != nil && b.limit.warn }
+
+func (b *StatusBar) Sparkline() *Sparkline { return b.spark }
+func (b *StatusBar) SpeedText() string     { return b.speedText.Text() }
 func (b *StatusBar) Parts() map[string]*kit.Element {
 	m := map[string]*kit.Element{
 		"conn": b.conn.Base(), "speed": b.speed.Base(), "counts": b.counts.Base(), "end": b.end,

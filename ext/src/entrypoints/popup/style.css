@@ -348,6 +348,7 @@ ul.cards {
 }
 
 .vact,
+.vcard > .items-note,
 .vcard > .audio-row,
 .vcard > .result,
 .vcard > .link-action {
@@ -872,6 +873,32 @@ details.fold[open] > summary svg.icon {
   line-height: 1.4;
   color: var(--faint);
   overflow-wrap: anywhere;
+}
+
+/* ---------- Downloads: failed in the browser (BROWSER-SPEC §6) ---------- */
+.failed {
+  margin-bottom: 8px;
+}
+
+.hline {
+  font-size: var(--type-meta);
+  line-height: 1.4;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+
+.hline.tone-ok {
+  color: var(--accent-text);
+}
+
+.hline.tone-error {
+  color: var(--danger);
+}
+
+.hacts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ---------- capture log ---------- */

@@ -693,6 +693,26 @@ func TestRunRangedCopy(t *testing.T) {
 	}
 }
 
+// A silent page's progressive video-only MP4 (docs/SITE-MEDIA-SPEC.md §3.11, amendment
+// 2026-11-18) is saved as it is, as a muxed one is; joined instead, the same file is
+// refused after its first chunk (TestRunRangedRefusesAfterTheFirstChunk, "progressive").
+func TestRunRangedCopyVideoOnly(t *testing.T) {
+	data := slices.Concat(ftyp(), box("moov", box("mvhd", make([]byte, 100)), box("trak", box("tkhd", make([]byte, 84)))),
+		box("mdat", filler(1500<<10, 11)))
+	s := newSiteServer(t)
+	s.add("/0.mp4", data)
+	opts := rangedOptions(t)
+	sel := RangedSelection{Output: OutputCopy, Tracks: []media.RangedTrack{
+		rangedTrack("0", media.KindVideo, "mp4", s.url("/0.mp4"), int64(len(data))),
+	}}
+	if container, err := RunRanged(testContext(t), opts, sel, nil, nil, nil); err != nil || container != "mp4" {
+		t.Fatalf("RunRanged = %q, %v", container, err)
+	}
+	if !bytes.Equal(readFile(t, opts.OutPath), data) {
+		t.Fatal("the copied output differs from the served file")
+	}
+}
+
 func TestRunRangedServerIgnoresRanges(t *testing.T) {
 	s := newSiteServer(t)
 	sel, v, a := pairSelection(t, s, "/")
@@ -791,8 +811,8 @@ func TestRunRangedFailsOn403AfterRefresh(t *testing.T) {
 	opts.CheckpointInterval = 10 * time.Millisecond
 	_, err := RunRanged(testContext(t), opts, sel, nil, nil, rec.onCheckpoint)
 	var se *StatusError
-	if !errors.As(err, &se) || se.Code != http.StatusForbidden {
-		t.Fatalf("RunRanged = %v, want HTTP 403", err)
+	if !errors.As(err, &se) || se.Code != http.StatusForbidden || !errors.Is(err, ErrRefusedAgain) {
+		t.Fatalf("RunRanged = %v, want HTTP 403 refused again", err)
 	}
 	if strings.Contains(err.Error(), s.ts.URL) {
 		t.Errorf("error repeats the URL: %v", err)
@@ -1189,13 +1209,15 @@ func TestRunRangedSelectionChecks(t *testing.T) {
 		want error
 	}{
 		{"no track", RangedSelection{Output: OutputRemux}, ErrInvalidSelection},
-		{"audio alone", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{audio}}, ErrInvalidSelection},
+		{"part of an audio track", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{audio}, Clip: media.Clip{Start: time.Second}}, ErrInvalidSelection},
 		{"audio first", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{audio, video}}, ErrInvalidSelection},
 		{"three tracks", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{video, audio, audio}}, ErrInvalidSelection},
 		{"muxed plus audio", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{muxed, audio}}, ErrInvalidSelection},
 		{"WebM", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{webm, audio}}, media.ErrUnsupported},
 		{"copy of a pair", RangedSelection{Output: OutputCopy, Tracks: []media.RangedTrack{video, audio}}, ErrInvalidSelection},
-		{"copy of a video track", RangedSelection{Output: OutputCopy, Tracks: []media.RangedTrack{video}}, ErrInvalidSelection},
+		{"copy of an audio WebM", RangedSelection{Output: OutputCopy, Tracks: []media.RangedTrack{rangedTrack("251", media.KindAudio, "webm", s.url("/o"), 1<<20)}}, media.ErrUnsupported},
+		{"audio pair", RangedSelection{Output: OutputRemux, Tracks: []media.RangedTrack{audio, audio}}, ErrInvalidSelection},
+		{"copy of a WebM video", RangedSelection{Output: OutputCopy, Tracks: []media.RangedTrack{webm}}, media.ErrUnsupported},
 		{"unknown output", RangedSelection{Output: "mkv", Tracks: []media.RangedTrack{muxed}}, ErrInvalidSelection},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/ui/core/categories"
 	"downex/ui/core/format/formattest"
 	"downex/ui/kit"
 	"downex/ui/kit/widgets"
@@ -389,7 +390,7 @@ func TestOpenDialog(t *testing.T) {
 			}
 			d := dialogs.NewOpen(h.App, views.OpenRequest{ID: 1, WithApp: c.with}, confirm)
 			show(h, d)
-			title, desc, action := dialogs.OpenTexts(c.danger, c.with)
+			title, desc, action := dialogs.OpenTexts(c.danger, c.with, "")
 			if d.Card().Semantics.Name != c.title || title != c.title || action != c.action || d.Card().Semantics.Description != desc {
 				t.Errorf("title %q, action %q", d.Card().Semantics.Name, action)
 			}
@@ -420,7 +421,10 @@ func TestOpenDialog(t *testing.T) {
 			}
 		})
 	}
-	if !dialogs.NeedsOpenConfirm("a.exe") || !dialogs.NeedsOpenConfirm("a\u202Etxt.pdf") || dialogs.NeedsOpenConfirm("a.pdf") {
+	if !categories.NeedsOpenConfirm(file(1, "a.exe", state.StateCompleted)) ||
+		!categories.NeedsOpenConfirm(file(1, "a\u202Etxt.pdf", state.StateCompleted)) ||
+		categories.NeedsOpenConfirm(file(1, "a.pdf", state.StateCompleted)) ||
+		!categories.NeedsOpenConfirm(disguised(file(1, "a.mp4", state.StateCompleted))) {
 		t.Error("NeedsOpenConfirm")
 	}
 }

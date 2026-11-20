@@ -1,0 +1,18 @@
+{"_type": "playlist", "id": "2026/01/27/science/video/example-clock", "extractor_key": "CNN", "playlist_count": 8, "entries": [
+  {"id": "me1", "title": "The first story", "duration": 112, "thumbnail": "https://img.example/news/1.jpg", "extractor_key": "CNN", "formats": [
+    {"format_id": "hls-128", "ext": "mp4", "protocol": "m3u8_native", "vcodec": "none", "acodec": "mp4a.40.2", "manifest_url": "https://media.example/me1/master.m3u8", "url": "https://media.example/me1/a.m3u8"},
+    {"format_id": "hls-5158", "ext": "mp4", "protocol": "m3u8_native", "vcodec": "avc1.4d401f", "acodec": "none", "width": 720, "height": 1280, "fps": 29.97, "tbr": 5158.094, "manifest_url": "https://media.example/me1/master.m3u8", "url": "https://media.example/me1/v.m3u8"},
+    {"format_id": "direct", "ext": "mp4", "protocol": "https", "width": 1080, "height": 1920, "tbr": 8000, "filesize_approx": 112000000, "url": "https://media.example/me1/direct.mp4"}
+  ]},
+  {"id": "me1", "title": "The first story", "duration": 112, "extractor_key": "CNN", "formats": [
+    {"format_id": "direct", "ext": "mp4", "protocol": "https", "width": 1080, "height": 1920, "tbr": 8000, "url": "https://media.example/me1/direct.mp4"}
+  ]},
+  {"id": "me2", "title": "The second story", "duration": 98, "thumbnail": "https://img.example/news/2.jpg", "formats": [
+    {"format_id": "direct", "ext": "mp4", "protocol": "https", "width": 1080, "height": 1920, "tbr": 8000, "filesize_approx": 98000000, "url": "https://media.example/me2/direct.mp4"}
+  ]},
+  {"_type": "url", "id": "me3", "url": "https://www.example.com/video/me3", "ie_key": "CNN"},
+  {"id": "me4", "title": "A live desk", "live_status": "is_live", "formats": []},
+  {"id": "me5", "title": "Only WebM", "duration": 30, "formats": [
+    {"format_id": "vp9", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "opus", "width": 1280, "height": 720, "url": "https://media.example/me5/v.webm"}
+  ]}
+]}

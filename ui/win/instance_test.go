@@ -11,6 +11,7 @@ import (
 	"time"
 	"unsafe"
 
+	"downex/ui/kit"
 	"downex/ui/win/internal/w32"
 )
 
@@ -137,6 +138,64 @@ func TestBringToFront(t *testing.T) {
 	if !visible() {
 		t.Fatal("a hidden window stayed hidden")
 	}
+}
+
+// Raise puts a minimised or hidden window, restored and shown, above another program's
+// window without activating it (the foreground window stays the one the user types in),
+// and never leaves it always on top.
+func TestRaise(t *testing.T) {
+	_ = onTestDesktop(t)
+	a, w := openTest(t, &testRoot{}, WindowOptions{Software: true})
+	other, err := a.NewWindow(&testRoot{t: t}, WindowOptions{Software: true, NoActivate: true, Placed: true,
+		At: w32.Point{X: 60, Y: 60}, Size: kit.Size{W: 320, H: 200}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := func() bool { return w32.ShowWindow(w.hwnd, w32.SW_SHOWNA) } // reports the previous visibility
+	for _, c := range []struct {
+		name string
+		hide func()
+		done func() bool
+	}{
+		{"minimised", func() { w32.ShowWindow(w.hwnd, 7 /* SW_SHOWMINNOACTIVE */) }, func() bool { return w32.IsIconic(w.hwnd) }},
+		{"hidden", func() { w32.ShowWindow(w.hwnd, 0 /* SW_HIDE */) }, func() bool { return !w32.IsWindowVisible(w.hwnd) }},
+	} {
+		c.hide()
+		pump(t, a, w, c.name, 5*time.Second, c.done)
+		// The other window is the top one, as the browser is when its add arrives.
+		if !other.Raise() {
+			t.Fatalf("%s: the other window cannot come to the top", c.name)
+		}
+		if above(w.hwnd, other.hwnd) {
+			t.Fatalf("%s: already above the other window", c.name)
+		}
+		fg := w32.GetForegroundWindow()
+		if !w.Raise() {
+			t.Fatalf("%s: Raise failed", c.name)
+		}
+		if w32.IsIconic(w.hwnd) || !visible() {
+			t.Fatalf("%s: not shown", c.name)
+		}
+		if !above(w.hwnd, other.hwnd) {
+			t.Fatalf("%s: not above the other window", c.name)
+		}
+		if got := w32.GetForegroundWindow(); got != fg {
+			t.Fatalf("%s: the foreground moved from %#x to %#x", c.name, fg, got)
+		}
+		if ex := w32.GetWindowLongPtr(w.hwnd, -20 /* GWL_EXSTYLE */); ex&0x8 /* WS_EX_TOPMOST */ != 0 {
+			t.Fatalf("%s: left always on top", c.name)
+		}
+	}
+}
+
+// above reports whether h comes before other in the z-order (GW_HWNDNEXT from h reaches it).
+func above(h, other w32.HWND) bool {
+	for n := w32.GetWindow(h, 2 /* GW_HWNDNEXT */); n != 0; n = w32.GetWindow(n, 2) {
+		if n == other {
+			return true
+		}
+	}
+	return false
 }
 
 // The listener keeps at most MaxPendingHandoffs payloads its thread has not handed on yet:

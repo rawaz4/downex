@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Eyevinn/mp4ff/avc"
@@ -425,6 +426,12 @@ func (j *describeJob) apply() {
 	}
 	if t.Codecs == "" {
 		t.Codecs = pic.Codecs
+	}
+	if t.Kind == media.KindMuxed && t.Bandwidth == 0 && pic.Codecs != "" && !strings.Contains(pic.Codecs, ",") {
+		// A bare media playlist measured to carry a picture and no sound (the codecs
+		// name the audio after a comma whenever there is one): offered as video, so the
+		// row says it has no sound (docs/MEDIA-SPEC.md §7, amendment 2026-11-19).
+		t.Kind = media.KindVideo
 	}
 	if t.Name == declared {
 		t.Name = media.QualityName(t.Width, t.Height, t.FrameRate, false)

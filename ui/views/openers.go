@@ -120,6 +120,17 @@ type ConfirmRequest struct {
 	Requested bool
 }
 
+// RescueRequest opens the Rescue partial file dialog (docs/DESKTOP-SPEC.md §11); Partial,
+// when set, is the partial file already chosen.
+type RescueRequest struct {
+	Partial string
+}
+
+// RenewRequest opens the New link dialog of a download (docs/DESKTOP-SPEC.md §10).
+type RenewRequest struct {
+	ID int64
+}
+
 // Openers open the window's dialogs and screens. The composition (views/app) fills every
 // field with App.svelte's logic (the stale check and its toast, the confirm queue, the files'
 // check before Download again) and the lanes' constructors; screens call them and never
@@ -135,6 +146,11 @@ type Openers struct {
 	Remove func(RemoveRequest)
 	// Restart is requestRestart: the Restart / Download again dialog.
 	Restart func(RestartRequest)
+	// Renew is the New link dialog of a download whose link expired (or any paused or
+	// failed file download; unavailable while stale).
+	Renew func(RenewRequest)
+	// Rescue is the Rescue partial file dialog (unavailable while stale).
+	Rescue func(RescueRequest)
 	// Open is the open confirmation of a program or a name with hidden controls.
 	Open func(OpenRequest)
 	// MoveToQueue is the Move to queue dialog for the ids (the menu's move-queue; Commands
@@ -198,6 +214,9 @@ type Actions struct {
 	SetGlobalLimit func(LimitChoice)
 	// SetWhenDone is the status bar's When done menu (Other queues… opens Queues).
 	SetWhenDone func(WhenDoneChoice)
+	// SetPolite turns Polite mode on or off (the limit menu's checkbox, the palette;
+	// docs/POLITE-SPEC.md §8).
+	SetPolite func(on bool)
 	// OpenLimitMenu and OpenWhenDoneMenu open the status bar's menus (the palette's
 	// "Set global speed limit…" and "When done…").
 	OpenLimitMenu, OpenWhenDoneMenu func()
@@ -205,6 +224,9 @@ type Actions struct {
 	SetDownloadLimit func(id int64, bytesPerSecond int64)
 	// AddSiteLogin opens Settings → Network with a login for the download's server.
 	AddSiteLogin func(id int64)
+	// OpenPage opens the page a download came from in the browser ("Open page"; the user
+	// always clicks for it); a failure is the toast "Downex could not open the page.".
+	OpenPage func(id int64)
 	// CancelPostAction cancels a queue's post-queue countdown.
 	CancelPostAction func(queueID int64)
 	// OpenMenu opens the download context menu at a point (window DIPs) for the selection.

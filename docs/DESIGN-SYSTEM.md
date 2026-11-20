@@ -851,6 +851,11 @@ Size variants: `row` (6 px), `compact` (4 px), `mini` (4 px, 90 px wide, for pal
    Choosing an item does the full settings round-trip: `getSettings()`, `{...s, globalSpeedLimit}`,
    `updateSettings()`, `applySettings()`, then a toast "Global speed limit: 10 MB/s". It is disabled
    while stale.
+   *Polite mode (POLITE-SPEC §8):* the menu ends with a separated checkbox "Polite mode" (full settings
+   round-trip; toasts "Polite mode on" / "Polite mode off"). While it is on the control reads "Polite
+   2.4 MB/s" (`--warn`) when it slows downloads under the global limit, "Polite: measuring…" (`--warn`)
+   while it measures, else the limit's text + " · Polite"; the tooltip adds the state's line after
+   "Global speed limit." and the accessible name is "Global speed limit: <text>. <line>".
 5. **When done**: a `MenuButton` with the power icon + **"When done: keep running ▾"**, and for the other
    actions "When done: quit Downex", "… sleep", "… hibernate", "… shut down". Power actions show in
    `--warn`. The menu has the heading "When the main queue is done" and radio items from
@@ -932,6 +937,9 @@ combobox's "Search commands".
   - Pause all: "Stops the 3 active downloads, keeps their progress"
   - Set speed limit…: "Now unlimited · applies to every download"
   - When done…: "Do nothing, sleep, shut down, or quit Downex"
+  - *Polite mode (POLITE-SPEC §8):* "Turn on Polite mode" / "Turn off Polite mode" (after "Set global
+    speed limit…"): "Slow down when downloads make the line laggy" / "Now slowed to 2.4 MB/s to keep
+    the line smooth"
   - Density: compact: "One line per download, about 18 rows"
   - Unavailable commands keep their `disabledReason`.
 - **Download row**: tile 20, name with matched letters in `--accent-text` 600, then for running downloads
@@ -973,6 +981,16 @@ Centred in the list area, max width 420 px:
 - **Stale list**: the banner above (§3.17); the list stays visible, with dimmed live values.
 
 ### 3.19 Video card and quality cards (L3)
+
+- **Part of the video** (the picker's companion, `MEDIA-SPEC.md` §8): a group named "Part of the video"
+  of one check box row ("Save only part of the video"; its hint as the box's description and tooltip).
+  Checked, it opens below: the hint (12.5 `--muted`), one row of the Chapter select (flex 2, only with
+  chapters), From and To (text inputs, flex 1 each, inputs named "From"/"To", described "Time, like
+  1:20"), one `--danger` error line (assertive), and the note. Placement keeps the 0.8.2 fit rule: in
+  Confirm under the quality cards when there are up to six (12 px above), else under the audio track;
+  in Add under the cards. Unchecked it is one row; the states it pushes past the small windows are in
+  the fit test's ALLOW (`ui/views/add/fit_test.go`), and the reference comparison takes the row's
+  height out of the dialog box (`withoutPart`).
 
 - **Video card** (compact, 0.8.2 fit rule): `--surface-2`, 1 px `--line`, radius 12, padding 10, 12 px gap.
   - **Poster** 96×54 (the popup's) with radius 8. No page image is ever fetched: a pale `--c-video` tint
@@ -1060,6 +1078,25 @@ long pages scroll in the pane.
   sections; each setting row is a label/hint/control grid; switches per §3.6.
 - **Footer**: Cancel / Save as today. Appearance changes apply at once and are not part of Save; the page
   says "Saved on this computer right away."
+
+### 3.21 File check notes (native window; DESKTOP-SPEC §9.7)
+- **Note** (`views.FileCheckNote`): a `.note.fail` (DANGER) or `.note.warn` (CAUTION) with role alert;
+  the heading in 600 `--type-cell` in `--danger` / `--warn`, then the summary and the detail as
+  `--ink-2` paragraphs, 4 px apart. Never a "safe" state: a download without a warning shows nothing.
+- **Placements:** the details pane under the error note, inset like it (DANGER adds "Remove and delete
+  file…", a small danger-text button at the start); the progress window's Status tab under the facts
+  (EARLY, or NAME before it, while unfinished); the complete view between the facts and "Don’t show this dialog again";
+  the Confirm dialog's File name field under its error (the DANGER heading and the NAME summary
+  only). A NOTE has no note: only the fact "Contents" ("PNG image · named as JPEG image").
+- **Row:** a completed DANGER/CAUTION row reads "Check file" in `--danger` / `--warn` with the alert
+  mark (DANGER: the failed diamond; CAUTION: the same diamond in `--warn`, `icons.MarkCheckWarn`); an
+  unfinished row (EARLY or NAME result) keeps its status text and takes the mark; the status tooltip
+  is the summary.
+- **Open dialog, DANGER variant:** title "This file is not what its name says", the summary and the
+  detail as the description, the danger alert icon, Cancel focused first, then "Open anyway", "Run
+  anyway" or "Choose app anyway…".
+- **Settings → Integration → Safety:** the first row of the card is the switch "Warn when a file is not
+  what its name says" with its hint (both skins); the page still fits per `TestStatesFitTheWindow`.
 
 ---
 
@@ -1268,6 +1305,16 @@ suggestion and the failure list stay as `--info-soft` and `--danger-soft` notes.
     `resume(id, {restart: true, existingFile})` for completed downloads only. One download started this
     way gets its progress window (DESKTOP-SPEC §7).
 
+- **New link** (`ui/views/dialogs/renew.go`, `ModalRenew`; DESKTOP-SPEC §10.2): `DialogSm`, icon
+  `link` in the info tone, one field (`.mono`, "New link") with an inline danger note under it (a live
+  region) for refusals, a `Link` button "Open the download page" at the start of the footer, Cancel and
+  the primary "Continue download" ("Checking…" while busy; "Continue anyway" / "Download from the start"
+  after the refusals that offer them).
+- **Confirm offer card** (DESKTOP-SPEC §10.3): a `NoteInfo` note at the top of a file's Confirm body: a
+  label-weight title, the cell-size text, and a Primary `SizeSm` "Continue that download" at the start,
+  inside the 44rem dialog. Fit fixtures: the scene token `renew` (an expired download, a held add, an
+  awaiting add with an offer).
+
 ### 4.8 Progress window and complete dialog (`ProgressWindow.svelte`, `lib/progress.ts`, L3)
 
 Separate processes, 520×300 (expanded 560) with the **native frame** (§6.2). The sizes stay as they are, in
@@ -1347,7 +1394,7 @@ The shell is §3.20. Pages and their content (every existing field is kept; only
 | Page (tab name) | Icon | Content |
 | --- | --- | --- |
 | General | gear | **Start-up**: Launch at login, Show the tray icon. **Notifications**: When a download completes, When a download fails. **Windows**: Show a progress window when a download starts; End with the download complete dialog |
-| Downloads | arrow-down | **Downloads**: Simultaneous downloads (1–16), Connections per download (1–32), Global speed limit (value + unit `Select`; `focusField: 'globalSpeedLimit'` focuses it), Default folder (Browse…). **Categories**: "Save downloads into their category's folder" + the category table (name, extensions, folder, browse, remove; Add category) |
+| Downloads | arrow-down | **Downloads**: Simultaneous downloads (1–16), Connections per download (1–32), Global speed limit (value + unit `Select`; `focusField: 'globalSpeedLimit'` focuses it), Default folder (Browse…). **Categories**: "Save downloads into their category's folder" + the category table (name, extensions, folder, browse, remove; Add category). *Polite mode (POLITE-SPEC §8):* a switch row "Polite mode" after the category-folders switch in the limits grid, spanning like it |
 | Network | globe | Proxy mode as a radio `SegmentedControl` (System / No proxy / Manual / PAC script) under its label and hint, `fill` up to 30rem, a `Select` where it has less than 24rem (`selectWhenNarrow`) + the mode's fields; host rules (their unit `Select`s); site logins (the editor and its "Address" label stay) |
 | Integration | plug | **Browser**: Ask before saving downloads from the browser (`confirmBrowserDownloads`, moved here from General) + the extension's steps, which are the target of "Get the browser extension": Chrome or Edge (Load unpacked) and Firefox (Load Temporary Add-on…), each with this installation's absolute extension folder (`extension-chrome`/`extension-firefox`: `extension\chrome-mv3` or `firefox-mv3` next to the programs, `Contents/Resources/extension/…` in Downex.app) and Copy path / Open folder, then the relay with **Register with browsers again** (runs `downex-nmhost register` next to the programs, no shell; a polite status beside it on success, a `.note.fail` alert under it on failure). **Clipboard**: monitor. **Safety**: mark downloaded files, antivirus scan (command, arguments) |
 | Video sites | stream | Unchanged content; the yt-dlp releases control becomes a `Select` (label "yt-dlp releases" stays; disabled as today) |
@@ -1451,9 +1498,13 @@ Read-only; nothing on it is saved. From the top:
        `role="combobox"`, listbox options per class, the same APG keyboard as §3.5; audio as a second
        select only when there is a choice) and a **labelled** primary "Download" button (26 px, icon +
        text). Its `aria-label` stays "Download ‹title›, ‹quality›" as today.
-     - The states (sending, sent, refusal, sign-in, retry) render as today's chips under the actions.
+     - The states (sending, sent, refusal, retry) render as today's chips under the actions; an
+       answer that needed the user's sign-in says "Used your sign-in for ‹domain›." in its status
+       line (SITE-MEDIA-SPEC §6.3), as the in-page panels do on every site. There is no sign-in
+       button.
    - "Find the video on this page" (secondary button) with the chip **"No cookies sent"**, shown only while
-     the sign-in option is off.
+     the sign-in option is off (with it on, a page that answers `auth_required` is asked once more with
+     its exact host's cookies, SITE-MEDIA-SPEC §6.3).
    - **Streams and files**: rows with `FileIcon` 20, a two-line-clamped name, the meta "5.0 MB ·
      files.example.com", and an end icon button (28 px, download glyph, `aria-label="Download ‹name›"`,
      tooltip "Download"). Folds (short clips…) are disclosure rows.
@@ -1480,6 +1531,9 @@ Read-only; nothing on it is saved. From the top:
    There is no "Start Downex" button: the popup cannot start the app, so it does not offer to.
 
 Dark: `popup-page-dark.png` with the dark tokens.
+
+*Polite mode (POLITE-SPEC §8):* while downexd reports that Polite mode slows downloads, the status
+chip's tooltip ends with "Polite: slowed to keep the line smooth."; the chip's text does not change.
 
 ### 4.12 Extension options and confirm pages (L5)
 

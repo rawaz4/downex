@@ -41,8 +41,9 @@ type Window struct {
 	Session *host.Session
 
 	h        *Host
-	instance *fileLock // a progress window's download lock (Wails' starts find it)
-	observe  func()    // its Wails notification
+	hooks    confirmHooks // the main window's (SetConfirmHooks)
+	instance *fileLock    // a progress window's download lock (Wails' starts find it)
+	observe  func()       // its Wails notification
 	win      *mac.Window
 	prefs    *prefs.File
 	defers   []func()
@@ -141,6 +142,15 @@ func (h *Host) request(args []string) error {
 	if !h.Role.hostsMain() {
 		return h.startApp(h.otherExe(false), args...)
 	}
+	if v.IsConfirm() {
+		// A download the user just started in the browser: its own Confirm download window;
+		// the main window is left as it is.
+		if w := h.confirm; w != nil {
+			w.Session.SecondInstance(args, w.front)
+			return nil
+		}
+		return h.open(h.newWindow(v, args, nil))
+	}
 	if w := h.main; w != nil {
 		w.Session.SecondInstance(args, w.front)
 		return nil
@@ -198,9 +208,13 @@ func (h *Host) newWindow(v host.View, args []string, inst *fileLock) *Window {
 		}),
 	}
 	h.windows = append(h.windows, w)
-	if v.IsProgress() {
+	switch {
+	case v.IsProgress():
 		h.progress[v.Progress] = w
-	} else {
+	case v.IsConfirm():
+		h.confirm = w
+		h.confirmChanged()
+	default:
 		h.main = w
 	}
 	return w
@@ -415,6 +429,10 @@ func (w *Window) end() {
 	}
 	if h.progress[w.View.Progress] == w {
 		delete(h.progress, w.View.Progress)
+	}
+	if h.confirm == w {
+		h.confirm = nil
+		h.confirmChanged()
 	}
 }
 

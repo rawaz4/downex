@@ -69,9 +69,10 @@
 // # Ownership
 //
 // A Manager owns one engine.Engine shared by every download, so per-host connection
-// limits and 429/503 penalties apply across downloads; a global limiter.Limiter whose
-// children throttle the individual downloads; the daemon settings; and one run
-// goroutine per running download. The store is supplied by the caller, who closes it
+// limits and 429/503 penalties apply across downloads; the speed limit chain global →
+// polite → queue → download (queue_limit.go; the polite level is Polite mode's cap,
+// docs/POLITE-SPEC.md §5, set by its monitor in polite.go); the daemon settings; and one
+// run goroutine per running download. The store is supplied by the caller, who closes it
 // after Shutdown returns.
 //
 // While a download runs, only the engine (for a media download, its run goroutine,

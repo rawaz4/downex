@@ -20,8 +20,11 @@ are resolved only by running yt-dlp as an external process (`SITE-MEDIA-SPEC.md`
   SegmentList (SegmentURL media/mediaRange), SegmentBase (indexRange → needs sidx, report as such),
   initialization. `type="dynamic"` (live) → `ErrLive`.
 - `Plan` — a uniform fragment plan for one selected track:
-  `[]Fragment{URL string; ByteRange *[2]int64 (inclusive); Duration time.Duration; Index int; Init bool}`
-  plus container kind (`ts`, `fmp4`, `webm`, `unknown`).
+  `[]Fragment{URL string; ByteRange *[2]int64 (inclusive); Duration time.Duration; Index int; Init bool;
+  Start time.Duration (plan time: the sum of the media durations before it); FullIndex int}` plus
+  container kind (`ts`, `fmp4`, `webm`, `unknown`). `Plan.Window`/`WindowFrom` cut the window of a part
+  (§8 C4); `ParseSidx` reads a segment index (ISO/IEC 14496-12 §8.16.3; at most 100,000 references, §8
+  C15); `Clip`, `ParseClipTime`, `FormatClipTime` and `ClipName` are the rules of a part (§8).
   `PlanHLS(media *HLSPlaylist)` and `PlanDASH(mpd *MPD, representationID string)`.
 - Quality options: `Options(...) []Track{ID, Kind (video|audio|muxed), Bandwidth, Width, Height, Codecs,
   Language, Name}` for the picker; best-video + best-audio default pairing helper.
@@ -53,6 +56,10 @@ Extension stream detection (MIME/extension sniffing in observe-only webRequest),
   2026-10-23 with a checkpoint keep the byte-for-byte join (`remux.ConcatTS`).
 - WebM/Matroska is never offered (MP4 only, `SITE-MEDIA-SPEC.md` amendment 2026-10-22). No FFmpeg sidecar
   is planned.
+- Parts (§8): `remux.AssembleWindow(ctx, inputs, out, Window{Start, End, Origin, Late})` cuts the assembled
+  tracks (C6–C8; the zero Window writes what `Assemble` writes, byte for byte), `remux.TrimMP4` cuts a
+  progressive MP4 from its sample tables (whole, or a span of it at `DataBase`), and `remux.SampleSpan`
+  gives that span.
 
 ## 6. End-to-end flow (M5 part 2)
 1. **Detect (extension):** observe-only webRequest flags responses whose Content-Type is
@@ -93,13 +100,18 @@ Extension stream detection (MIME/extension sniffing in observe-only webRequest),
    converted into `<name>.mp4`, after an early `remux.CheckTS` of each TS track's first fragment
    (scrambled → `encrypted`, unconvertible → `media_unsupported`, unparsable → `media_invalid`). Only a
    legacy `.ts` record with a checkpoint (`LegacyTS`) is still concatenated into `<name>.ts`.
-6. **CLI:** `downex media <manifest-url> [--list] [--video ID] [--audio ID] [-o dir] [--name f] [-H ...]`.
+6. **CLI:** `downex media <manifest-url> [--list] [--video ID] [--audio ID] [-o dir] [--name f] [-H ...]
+   [--from t] [--to t] [--chapter N]` (a part, §8; `confirm` also `--whole`; `--list` prints a page's
+   "Chapters:"; `info` the "Part:" line).
    `ls` and `info` show a stream that is not completed as downexd does, also without a running
    downexd (`info` always reads the database): its size is an estimate ("~", extrapolated from the
    durable fragments; unknown before the first one) and its percent counts fragments
    (`internal/dlview`, SITE-MEDIA-SPEC §3.7).
 
 ## 7. Status and deviations (M5 part 2, 2026-10-20)
+- *Open (2026-11):* manifest streams whose fragment addresses expire are not renewed: the expired-link
+  renewal of `ENGINE-SPEC.md` §7.2-7.3 covers file downloads only; a renewal by a manifest re-probe is
+  future work.
 Implemented as specified above, with these decisions and deviations. *Updated 2026-10-23:* the TS→MP4
 remuxer, MP4-only MANIFEST probes and legacy `.ts` records of `VIDEO-DETECT-SPEC.md` are implemented
 (its §10 has the gates and deviations); their notes below are marked with that date. *0.7.1
@@ -144,9 +156,28 @@ picture, codecs and name); a stream's size is estimated while it downloads (`Dow
   fallback). The movie fragments of one file may describe at most as much sample data as its `mdat`
   boxes hold, and at most 1M samples of the default size 0 (which occupy no file bytes at all).
 - **Requests.** `Cookie`, `Cookie2` and `Authorization` are sent only to the manifest URL's origin;
-  `Referer`, `User-Agent` and other headers to every host. Retries: exponential backoff with jitter,
+  `Referer`, `User-Agent` and other headers to every host. Every request asks for
+  `Accept-Encoding: identity`. A manifest (playlist or MPD) is asked for whole, without a `Range`
+  header: measured 2026-11-18, a video CDN answered playlist requests that carried `Range: bytes=0-`
+  (mostly over HTTP/2) with a `206` of a gzip-coded copy (`Content-Encoding: gzip`, `Content-Range`
+  over the coded bytes) despite `identity`, and the same request without `Range` with the playlist.
+  A manifest that comes content-coded anyway is decoded when the coding is `gzip` (`x-gzip`) or
+  `deflate` (RFC 9110 §8.4.1), still bounded by the 8 MiB limit after decoding; another coding is
+  refused as `media_unsupported`, never parsed as a playlist. A coded answer to a byte-range request
+  (fragments, init segments) is refused and retried, never written as media.
+  Retries: exponential backoff with jitter,
   `Retry-After` honoured, 408/421/425/429/5xx and network errors transient. Error messages never contain
   URLs.
+- **A level without its master** (amendment 2026-11-19). When the stream handed over is a bare HLS
+  media playlist (the player's recording held a level, not its master; seen on Pinterest, whose levels
+  `<id>_720w.m3u8` carry the picture only and whose sound is the master's audio rendition), the probe
+  and the run each ask once, without retries and within 8 s, for `<id>.m3u8` in the level's folder (the
+  name up to the first `_`, the level's query kept). It is used instead of the level only when it is a
+  master playlist listing that level (host and path) as a variant whose `AUDIO` group has a rendition
+  with a URI: the qualities are then the master's and the default has sound. Anything else (no `_`,
+  missing, not a master, not this level's) leaves the level as it was. A bare playlist whose
+  initialization section (or first TS segment) is measured to carry a picture and no sound is offered
+  as a `video` track, so the row says "No sound".
 - **Refusals.** Error codes (Download.error_code, and the code of a refused `AddMedia`/`ProbeMedia`, which
   is `InvalidArgument` for a stream that cannot be downloaded and `FailedPrecondition` for a failed fetch):
   `encrypted`, `live`, `media_unsupported`, `media_invalid`, plus the file codes (`http_status`, `network`,
@@ -237,3 +268,133 @@ picture, codecs and name); a stream's size is estimated while it downloads (`Dow
   chunk without its bit, `partial`), and a manifest-only page by `Run` on the fresh
   manifest URL with the stored keys. Host rules (connections, speed, `max_request_bytes`) now also apply
   to `Run`, and a media job's full volume fails with `disk_full`.
+
+## 8. Parts of a video (clips)
+A stream (HLS/DASH) or a web page's video (`SITE-MEDIA-SPEC.md` §2.7) can be saved as one part, chosen
+by From/To times or by a chapter. Downex downloads only what the part needs and writes one MP4 without
+re-encoding. Public standards: ISO/IEC 14496-12 (edit lists §8.6.6, segment index §8.16.3, sync samples
+`stss` and sample flags), RFC 8216 (`EXTINF`, discontinuities), ISO/IEC 23009-1 (SegmentTemplate,
+SegmentTimeline).
+
+**C1 Model and inputs.** A part is `[Start, End)` in presentation time from the presentation's start;
+End 0 = to the end. 0 ≤ Start < End ≤ 168 h, End − Start ≥ 1 s. Start 0 with End 0 or End ≥ the duration
+is no part (an End at most 1 s past a known duration is the end). The part is fixed when the download is
+added (`AddMediaRequest.clip`) or confirmed (`ConfirmRequest.clip`: unset keeps it, set with start 0 and
+end 0 is the whole video); it is kept by Pause, Resume and Download again (which forgets only what the
+last run reported, C20). It is stored in `model.Media.Clip` (the JSON `media` column: no SQL migration).
+
+**C2 Eligibility.** Kind MEDIA only (a file download: `clip_invalid: a part can be chosen only for a
+video or stream`). Live and encrypted presentations are refused as always (`live`, `encrypted`); a
+legacy `.ts` record (`VIDEO-DETECT-SPEC.md` §3.3) is `media_unsupported: a part cannot be saved from a
+download stored as .ts`. Bad times are `clip_invalid: <reason>`, the reason one of "the part must start
+before it ends", "the part must be at least 1 second long", "the part ends after the video (h:mm:ss)",
+"times must be between 0 and 168 hours". All are InvalidArgument with the `Downex-Error-Code` metadata.
+`internal/validate.ClipMs` (relay and daemon) and `media.Clip.Validate` (daemon, with the duration)
+give the same texts (`TestClipReasonsMatchValidate`).
+
+**C3 Anchoring.** Stream times are anchored to the video (or muxed) window's first media fragment: its
+plan time (the sum of the media durations before it, `Fragment.Start`) is taken as the start of the first
+assembled input (`remux.OriginFirst`: its first decode time for fragmented MP4, its earliest presentation
+time for a transport stream), never as the start of a separate audio track, whose window may begin up to
+a fragment earlier. DASH SegmentTemplate/SegmentTimeline
+plan times are exact; HLS plan times are EXTINF sums, accurate to their rounding (an integer EXTINF before
+protocol version 3 may be off by up to 0.5 s per segment). Site media are anchored on the resource's own
+media timeline (`remux.OriginMedia`: `tfdt` of a fragmented file, the sample tables after the edit list of
+a progressive one), which is exact. *Not built:* the HLS anchor probe (one request of at most 256 KiB of
+the first segment to measure its PTS); stream times always use the anchor above.
+
+**C4 Segment window.** `Plan.Window(clip, leadIn)`: the media fragments f with f.Start < End (any, for an
+open end) and f.Start + f.Duration > Start, the initialization entry that applies to the first of them and
+every map change between them. Fragments keep `FullIndex`, their index in the full plan. A separate audio
+track keeps its fragments that overlap [the video window's start, End) (`Plan.WindowFrom`). A plan with a
+media fragment without a duration cannot be windowed: every fragment is fetched and the part cut locally
+(C9).
+
+**C5 Lead-in.** Fragments are assumed to start with a sync sample. When the assembler finds no sync sample
+at or before Start (`remux.ErrNoKeyframe`), the window is extended back by one more media fragment, stored
+in the checkpoint (`leadIn`) before that fragment is fetched, and assembled again; at most 4 times, never
+before the first fragment. A transport stream window without any decodable picture (fragments inside one
+picture group) is `ErrNoKeyframe` too. After that C6's late start applies.
+
+**C6 Start cut.** The first kept video sample is the sync sample with the greatest presentation time ≤
+Start (its time is the keyframe time K); without one, the first sync sample after Start (K > Start, and
+the visible start is K; a K at or after End leaves nothing to show and is `media_unsupported`). Audio is kept from the sample whose interval contains K (or the first one after
+it), so a player that ignores edit lists stays in sync. *Not built:* dropping the HEVC RASL pictures of a
+CRA at the cut (they precede K in presentation and the edit list hides them).
+
+**C7 End cut.** Video keeps the samples in decode order with decode time < End, audio those with
+presentation time < End: no kept frame references a dropped one.
+
+**C8 Edit list.** Every track of a part gets an `elst`: an empty edit only when the track's first kept
+sample starts after max(Start, K); then one media edit with media_time = the track's media time of
+max(Start, K) (the source track's own edit, e.g. a composition shift, included) and segment_duration =
+End′ − max(Start, K) in the movie timescale (End′ = End, or the kept samples' end for an open end), rate
+1. The output's presentation starts at 0. Players that ignore edit lists show [K, the last kept sample].
+A part with more than 4M kept samples (the in-memory tables' bound) is `media_unsupported: the part is too
+long to cut`: the fragmented output written for whole presentations that large is not cut.
+
+**C9 Local cut.** A site resource without a known size or without ranges, a fragmented file without a
+top-level `sidx` before its media (or with a hierarchical one), and a stream plan without fragment times
+are downloaded whole and cut by the same rules; `Media.Clip.FetchedWhole` is then set (site media).
+
+**C10 Output.** Always one MP4, written as `<name>.dxpart` and renamed (`placeOutput`). A copied site file
+(OutputCopy) is cut with `remux.TrimMP4` from its sample tables instead of renamed.
+
+**C11 Fragment files.** In a part's run `<kind>-<id>/<i>.frag` uses the fragment's full-plan index; the
+checkpoint of such a track records `first` (the full-plan index of the window's first fragment) and counts
+`total` and the `done` bits in full-plan indexes from it. A lead-in moves `first` back and keeps the files.
+
+**C12 Resume.** The manifest (or page) is resolved again and the window computed again with the same part
+and lead-in. A track continues only when its key (or ID) matches and its checkpoint covers the same window
+(or the same window but for an earlier start, a lead-in); otherwise only that track starts over. Ranged
+site tracks also need the same `base` and `head` (SITE-MEDIA-SPEC §2.7).
+
+**C13 Progress and size.** FragmentsTotal counts the window; a stream's size is the usual estimate; a site
+span's size is exact once its head is known. The completed size is the file's. Before a run the probed
+size is scaled to the part: size × (To − From + 5 s, rounded up to a second) ÷ duration, always marked
+"~" (`dlview.ClipFraction`, the window's `media.ClipSize`).
+
+**C14 Chapters.** Only from yt-dlp's `chapters` (start_time, end_time, title); manifest probes have none.
+`validate.Chapters`: an entry needs 0 ≤ start < end and, with a known duration, end ≤ duration + 1 s; its
+title is cleaned like a title and cut to 200 bytes; entries are sorted by start and one that overlaps the
+one before it is dropped; more than 512 entries (or a value that is not a list) mean no chapters.
+`MediaInfo.chapters`, `model.Media.Chapters`. Chapters are for choosing a part only, never embedded.
+
+**C15 Limits.** At most 100,000 `sidx` references (`media.MaxSidxRefs`); a hierarchical index → C9. A
+progressive `moov` ≤ 64 MiB. At most 4M kept samples. A site head ≤ 8 MiB; its box walk ≤ 64 requests.
+WebM never; changing fMP4 initialization segments inside the window are `media_unsupported` as before.
+
+**C16** Head and range requests carry the headers of their track only (the existing policy); errors never
+contain URLs.
+
+**C17** Encryption checks are unchanged: `CheckInit` on every initialization segment and on a site head's
+`moov` before any span byte is requested; `CheckTS` on the first kept TS fragment.
+
+**C18** Free space: a site job checks room for its spans, the output and 64 MiB as for whole tracks; a
+copied file's part counts its output too (it is written beside the track, not moved).
+
+**C19 Naming.** `media.ClipName` is the one rule (the daemon's proposal, Confirm and runMedia; the
+window's previews): the suffix " (01m20s-02m45s)" before the extension, times "MMmSSs" below an hour and
+"HhMMmSSs" from an hour, the start floored and the end ceiled to whole seconds, an open end "end"
+(`Talk (1h02m03s-end).mp4`). It replaces a suffix of the same pattern, so a name never gets two, and the
+whole video removes one. A name the user typed is used as typed. The daemon keeps a name within the
+file-name limit by shortening its stem, never the suffix.
+
+**C20 Result.** When the run completes, downexd records on `Media.Clip`: `keyframe_ms` (K in presentation
+time), `fetch_start_ms`/`fetch_end_ms` (the window that was fetched) and `fetched_whole`. They are shown
+only after completion (`downex info`, the details pane, the complete view's Part fact).
+
+**What is downloaded (B7).**
+
+| Source | Requests |
+| --- | --- |
+| HLS, DASH SegmentTemplate/SegmentList | the window's media fragments (C4, C5), the init/EXT-X-MAP that applies and the map changes inside |
+| DASH SegmentBase | not saved by stream jobs at all (unchanged, `media_unsupported`) |
+| Site fragmented MP4 with a top-level `sidx` | the head (ftyp+moov+sidx), then one span of subsegments `[ref(k).offset, ref(m).end)` |
+| Site progressive MP4 (copied) | the head or, after a box walk, the `moov`; then one span `[min offset, max end)` of the kept samples |
+| Anything else | the whole resource, then the local cut (C9) |
+
+**Players and edit lists (to verify on real hardware).** An exact visible start depends on the player
+honouring `elst` media_time; Downex wrote edit lists before parts too (composition shifts, empty edits).
+Not verified: Windows Media Player, Films & TV, VLC, Chrome, Edge, Firefox, QuickTime, Safari, the iOS
+and Android galleries, Explorer thumbnails (they may show the keyframe before From).

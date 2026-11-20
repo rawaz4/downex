@@ -34,7 +34,9 @@ func millis(ts *timestamppb.Timestamp) int64 {
 func AwaitingInOrder(list []*downexv1.Download) []*downexv1.Download {
 	var out []*downexv1.Download
 	for _, d := range list {
-		if d.GetState() == downexv1.DownloadState_DOWNLOAD_STATE_AWAITING_CONFIRMATION {
+		// A held add (renew_check) is asked about only once downexd has checked its link
+		// (docs/DESKTOP-SPEC.md §10).
+		if d.GetState() == downexv1.DownloadState_DOWNLOAD_STATE_AWAITING_CONFIRMATION && !d.GetRenewCheck() {
 			out = append(out, d)
 		}
 	}

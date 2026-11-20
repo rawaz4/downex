@@ -35,6 +35,12 @@ type Store interface {
 	SaveCheckpoint(ctx context.Context, d *model.Download, segs []model.Segment) error
 	LoadSegments(ctx context.Context, id model.DownloadID) ([]model.Segment, error)
 
+	// SetFileCheck replaces the file check of download id (docs/DESKTOP-SPEC.md §9);
+	// nil clears it. It is the only writer of Download.FileCheck: CreateDownload stores
+	// none, and UpdateDownload and SaveCheckpoint keep the stored one, because runs write
+	// copies of the record that were read before the check. An unknown id is ErrNotFound.
+	SetFileCheck(ctx context.Context, id model.DownloadID, fc *model.FileCheck) error
+
 	Close() error
 }
 

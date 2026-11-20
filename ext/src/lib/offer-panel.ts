@@ -6,8 +6,9 @@
 // the state (pure: requests, timers and rendering injected); OfferPanelDom draws it with DOM calls
 // only (no HTML strings) inside the layer's closed shadow root.
 
+import type { ClipCheck, ClipRange } from './clip';
 import type { SiteHiddenResponse } from './messages';
-import type { FrameOffers, OfferKey, SiteOffer } from './offer-types';
+import type { FrameOffers, OfferKey, SiteOffer, StreamOffer } from './offer-types';
 import {
   allRows,
   bareAnswer,
@@ -19,7 +20,9 @@ import {
   streamOrder,
   streamRefused,
 } from './offer-rows';
+import { type PartField, PartRow, PartTrimmer, type PartVideo, type PartView, sizeAt } from './part-row';
 import { type AddedResult, errorMessage, failure, type Outcome, type ProtocolError, systemTimers, type Timers, type VideoInfoResult } from './protocol';
+import { NETWORK_ONLY_TEXT, NETWORK_PLAYED_TEXT } from './site-video';
 import {
   fileFailureText,
   gettingInfoText,
@@ -30,6 +33,9 @@ import {
   OFFER_TEXTS,
   offerAddedText,
   otherVideosText,
+  PLAYED_SETTLE_MS,
+  PLAYED_WAIT_MS,
+  siteNote,
   streamFailureText,
   streamRefusal,
   type Tone,
@@ -50,11 +56,26 @@ import {
   skeleton,
   statusTone,
 } from './video-overlay';
-import { MP4_NOTE, VideoPanel, type VideoPanelView } from './video-panel';
-import { audioLabel, audioTracks, isVideoTrack, needsAudio, type TrackPick } from './video-picker';
+import { type ClickedVideo, clickedItem, ITEM_STRIP_CSS, ItemStrip } from './item-strip';
+import { MP4_NOTE, VideoPanel, type VideoPanelItems, type VideoPanelView } from './video-panel';
+import {
+  audioLabel,
+  audioTracks,
+  clipSize,
+  defaultAudio,
+  isVideoTrack,
+  needsAudio,
+  pickSize,
+  RECOMMENDED_TEXT,
+  sizeLabel,
+  trackById,
+  type TrackPick,
+} from './video-picker';
 
 /** The panel asks for the frame's offers again this often while it is open. */
 export const OFFER_POLL_MS = 2000;
+/** … and this often while the Played source has not answered (its rows show as soon as it does). */
+export const PLAYED_POLL_MS = 250;
 /** Streams probed when the panel opens (matched first, then newest) … */
 export const MAX_STREAM_PROBES = 4;
 /**
@@ -62,6 +83,13 @@ export const MAX_STREAM_PROBES = 4;
  * master), older ones up to this many in all, so that the master is found.
  */
 export const MAX_STREAM_PROBES_FOR_MASTER = 12;
+/**
+ * … and, while no answer has the clicked element's length (a grid of previews whose players all
+ * fetched their streams; review 2026-11-18, a video search of 12 tiles and 50 playlists), one stream
+ * of each group not asked yet (StreamOffer.group), up to this many in all, so that the clicked
+ * video's stream is found; then the other streams of its group (its master).
+ */
+export const MAX_STREAM_PROBES_FOR_LENGTH = 24;
 /** Below this frame width the rows wrap and the codec text is left out … */
 export const NARROW_FRAME_PX = 320;
 /** … and below this frame height only the default row is shown. */
@@ -75,6 +103,13 @@ export interface PanelTarget {
   mse: boolean;
   drm: boolean;
   live: boolean;
+  /** Whether the element has played (read on every render); undefined: not known. */
+  played?: () => boolean;
+  /**
+   * The element's own duration in ms (read on every render; 0 unknown): the Part row's duration
+   * when the site or stream gives none (VIDEO-DETECT-SPEC §5.2 "Its duration").
+   */
+  durationMs?: () => number;
 }
 
 export type GroupId = 'more' | 'other';
@@ -101,8 +136,8 @@ export interface OfferPanelView {
   groups: OfferGroupView[];
   defaultId: string | undefined;
   status?: { text: string; tone: Tone; elapsed?: string };
-  /** The site source's action under the status: allow the sign-in, or try again. */
-  action?: { kind: 'allow-sign-in' | 'retry'; text: string };
+  /** The site source's action under the status: try again. */
+  action?: { kind: 'retry'; text: string };
   /** "Look for more qualities": the site source was not asked yet. */
   lookForMore: boolean;
   /** "Audio" of the default row's source, with several MP4 audio tracks. */
@@ -120,25 +155,44 @@ export interface OfferPanelView {
    * whose tone it shares. Set only when true.
    */
   working?: true;
+  /**
+   * The Part row (MEDIA-SPEC §8, VIDEO-DETECT-SPEC §5.2): only for a stream or a page video, and
+   * only when the relay lists `clips` (an older one would save the whole video).
+   */
+  part?: PartView;
+  /**
+   * The site video's page has several videos (SITE-MEDIA-SPEC §3.12, VIDEO-DETECT-SPEC §5.2
+   * "Several videos"): the item row above the qualities.
+   */
+  items?: VideoPanelItems;
 }
+
+/** The Part row (part-row.ts, shared with the YouTube panel). */
+export type { PartView } from './part-row';
 
 export interface OfferPanelDeps {
   /** `downex:frame-offers` for the clicked element. */
   offers: (src: string, mse: boolean) => Promise<Outcome<FrameOffers>>;
   streamProbe: (key: OfferKey) => Promise<Outcome<VideoInfoResult>>;
-  /** `downex:offer-add`: a file, an element file, or a stream with tracks ("" = default pick). */
-  offerAdd: (key: OfferKey, pick: TrackPick) => Promise<Outcome<AddedResult>>;
-  siteProbe: (site: SiteOffer) => Promise<Outcome<VideoInfoResult>>;
-  siteAdd: (site: SiteOffer, pick: TrackPick) => Promise<Outcome<AddedResult>>;
+  /** `downex:offer-add`: a file, an element file, or a stream with tracks ("" = default pick) and a part. */
+  offerAdd: (key: OfferKey, pick: TrackPick, clip?: ClipRange) => Promise<Outcome<AddedResult>>;
+  /** The site's qualities; with `entryId`, of that video of a page with several (SITE-MEDIA-SPEC §3.12). */
+  siteProbe: (site: SiteOffer, entryId?: string) => Promise<Outcome<VideoInfoResult>>;
+  siteAdd: (site: SiteOffer, pick: TrackPick, clip?: ClipRange, entryId?: string) => Promise<Outcome<AddedResult>>;
   /** "Don't show on <host>" (`downex:set-site-hidden`). */
   hideSite: () => Promise<SiteHiddenResponse | undefined>;
-  /** Turns on the sign-in option after `auth_required` on a curated site. */
-  allowSignIn?: () => Promise<void>;
-  signInAllowed?: () => boolean;
   render: (view: OfferPanelView) => void;
   timers?: Timers;
   /** The frame's viewport (small frames show less). */
   viewport?: () => { width: number; height: number };
+  /**
+   * The carousel slide the frame's address shows (addressSlide; undefined: none, or the site video
+   * is a linked post's): with the clicked element's length, it picks the item of a page with several
+   * videos the panel opens on (clickedItem).
+   */
+  itemPosition?: () => number | undefined;
+  /** Whether the pointer is on the panel (its default row then never moves). */
+  pointerOn?: () => boolean;
 }
 
 type SendState =
@@ -154,6 +208,21 @@ interface SiteSource {
   asked: boolean;
 }
 
+/** The best quality class an answer lists: its picture's shorter side (0 none). */
+function bestHeight(info: VideoInfoResult | undefined): number {
+  return Math.max(0, ...(info?.tracks ?? []).filter(isVideoTrack).map((t) => (t.width > 0 && t.height > 0 ? Math.min(t.width, t.height) : t.height)));
+}
+
+/** A stream's length is the clicked element's: within max(1 s, 5 %) (§2.6 "Several HLS streams"). */
+function sameLength(ms: number, el: number): boolean {
+  return ms > 0 && el > 0 && Math.abs(ms - el) <= Math.max(1000, el / 20);
+}
+
+/** A stream's length is close enough to end the search: the played files' tolerance, max(0.3 s, 1.5 %). */
+function closeLength(ms: number, el: number): boolean {
+  return ms > 0 && el > 0 && Math.abs(ms - el) <= Math.max(300, el * 0.015);
+}
+
 export class OfferPanel {
   readonly #deps: OfferPanelDeps;
   readonly #timers: Timers;
@@ -165,11 +234,17 @@ export class OfferPanel {
   #loading = false;
   readonly #probes = new Map<OfferKey, StreamProbe>();
   readonly #streamAudio = new Map<OfferKey, string>();
+  /** The audio chosen for the Played source's qualities (undefined: its default). */
+  #playedAudio: string | undefined;
+  /** The default row the panel showed, kept while it is listed (a panel with a Played source). */
+  #shownDefault: string | undefined;
   #site: SiteSource | undefined;
   #send: SendState | undefined;
   readonly #expanded = new Set<GroupId>();
   #pollTimer: unknown;
   #hiding = false;
+  /** The Part row: open, the part's times, a time typed that cannot be used. */
+  readonly #part = new PartRow();
 
   constructor(deps: OfferPanelDeps) {
     this.#deps = deps;
@@ -212,9 +287,12 @@ export class OfferPanel {
     this.#loading = false;
     this.#probes.clear();
     this.#streamAudio.clear();
+    this.#playedAudio = undefined;
+    this.#shownDefault = undefined;
     this.#send = undefined;
     this.#expanded.clear();
     this.#target = undefined;
+    this.#part.reset();
   }
 
   // --- user actions ----------------------------------------------------------------------------
@@ -230,6 +308,12 @@ export class OfferPanel {
       void this.#probeStream(row.key);
       return;
     }
+    // A part with an error is never sent: the row shows the error (B3).
+    const part = this.#partCheck();
+    if (part?.error) {
+      this.#render();
+      return;
+    }
     if (row.source === 'site') {
       await this.#site?.panel.download(row.pick.video);
       return;
@@ -240,7 +324,8 @@ export class OfferPanel {
     this.#render();
     let outcome: Outcome<AddedResult>;
     try {
-      outcome = await this.#deps.offerAdd(row.key, row.pick);
+      outcome =
+        row.source === 'stream' && part?.clip ? await this.#deps.offerAdd(row.key, row.pick, part.clip) : await this.#deps.offerAdd(row.key, row.pick);
     } catch (e) {
       outcome = failure('internal', `Background unavailable: ${errorMessage(e)}`);
     }
@@ -255,6 +340,17 @@ export class OfferPanel {
     this.#render();
   }
 
+  /**
+   * Another video of the site video's page (SITE-MEDIA-SPEC §3.12): its qualities are got, and the
+   * part is chosen again (another video has another length).
+   */
+  chooseItem(id: string): void {
+    const site = this.#site;
+    if (!site?.asked || this.#busy() || site.panel.entryId === id) return;
+    this.#part.reset();
+    site.panel.chooseItem(id);
+  }
+
   /** "Look for more qualities": the site's qualities (yt-dlp) for the frame's address. */
   lookForMore(): void {
     if (!this.#site || this.#site.asked) return;
@@ -267,23 +363,104 @@ export class OfferPanel {
     this.#render();
   }
 
+  /** The Part row's disclosure. */
+  togglePart(): void {
+    this.#part.toggle();
+    this.#render();
+  }
+
+  /** A handle of the timeline moved (`push`: Start here, End here). */
+  setPartMs(which: PartField, ms: number, push = false): void {
+    const info = this.#partInfo();
+    if (info && this.#part.setMs(which, ms, info.durationMs, push)) this.#render();
+  }
+
+  /** A time typed into a chip was committed. */
+  editPart(which: PartField, text: string): void {
+    const info = this.#partInfo();
+    if (!info) return;
+    this.#part.edit(which, text, info.durationMs);
+    this.#render();
+  }
+
+  /** A chapter (1 first) becomes the part. */
+  choosePartChapter(n: number): void {
+    const info = this.#partInfo();
+    if (!info) return;
+    this.#part.chooseChapter(n, info.chapters ?? [], info.durationMs);
+    this.#render();
+  }
+
+  /** "Whole video". */
+  wholePart(): void {
+    this.#part.whole();
+    this.#render();
+  }
+
+  /**
+   * The info the Part row works on: the default row's (a stream's probe, the site's answer). Without
+   * a duration there (Instagram answers 0) it takes the clicked element's own; with neither, no row
+   * (VIDEO-DETECT-SPEC §5.2 "Its duration").
+   */
+  #partInfo(): VideoInfoResult | undefined {
+    if (!this.#offers?.features.clips) return undefined;
+    const row = this.#defaultRow();
+    let info: VideoInfoResult | undefined;
+    // A played video is saved whole (SITE-MEDIA-SPEC §2.9 "Never"): no Part row.
+    if (row?.source === 'played') return undefined;
+    if (row?.source === 'site') info = this.#site?.panel.info;
+    else if (row?.source === 'stream' && row.key !== undefined && row.action === 'add') {
+      const probe = this.#probes.get(row.key);
+      if (probe?.phase === 'listed') info = probe.info;
+    }
+    if (!info || info.durationMs > 0) return info;
+    const own = this.#elementDuration();
+    return own > 0 ? { ...info, durationMs: own } : undefined;
+  }
+
+  /** The clicked element's own duration (ms), 0 unknown or live. */
+  #elementDuration(): number {
+    if (this.#target?.live) return 0;
+    let ms = 0;
+    try {
+      ms = this.#target?.durationMs?.() ?? 0;
+    } catch {
+      ms = 0;
+    }
+    return Number.isFinite(ms) && ms > 0 ? ms : 0;
+  }
+
+  /** The Part row's check: undefined while the row is closed or not shown. */
+  #partCheck(): ClipCheck | undefined {
+    return this.#part.check(this.#partInfo());
+  }
+
+  /** The row as drawn; its readout's size is the default row's, for the part ("~", clipSize). */
+  #partView(): PartView | undefined {
+    const info = this.#partInfo();
+    if (!info) return undefined;
+    const row = this.#defaultRow();
+    const size = row ? sizeLabel(clipSize(pickSize(info, row.pick), this.#part.clip(info), info.durationMs)) : '';
+    return this.#part.view(info, sizeAt(size, row?.quality ?? ''));
+  }
+
   chooseAudio(id: string): void {
     const audio = this.view().audio;
     if (!audio?.options.some((o) => o.id === id)) return;
     const row = this.#defaultRow();
     if (row?.source === 'site') this.#site?.panel.chooseAudio(id);
-    else if (row?.key !== undefined) {
+    else if (row?.source === 'played') {
+      this.#playedAudio = id;
+      this.#render();
+    } else if (row?.key !== undefined) {
       this.#streamAudio.set(row.key, id);
       this.#render();
     }
   }
 
-  /** The site source's action: allow the sign-in, or try again. */
+  /** The site source's action: try again. */
   siteAction(): void {
-    const site = this.#site;
-    if (!site) return;
-    if (site.view.action?.kind === 'allow-sign-in') void site.panel.allowSignIn();
-    else site.panel.retry();
+    this.#site?.panel.retry();
   }
 
   /** "Don't show on <host>": true when the buttons are hidden on the host now. */
@@ -334,10 +511,15 @@ export class OfferPanel {
 
   #schedulePoll(): void {
     if (!this.#open || this.#pollTimer !== undefined) return;
-    this.#pollTimer = this.#timers.setTimeout(() => {
-      this.#pollTimer = undefined;
-      if (this.#open) void this.#load(false);
-    }, OFFER_POLL_MS);
+    const played = this.#offers?.played;
+    const pending = played !== undefined && !(played.probe && 'result' in played.probe) && played.waitingMs < PLAYED_WAIT_MS;
+    this.#pollTimer = this.#timers.setTimeout(
+      () => {
+        this.#pollTimer = undefined;
+        if (this.#open) void this.#load(false);
+      },
+      pending ? PLAYED_POLL_MS : OFFER_POLL_MS,
+    );
   }
 
   #stopPoll(): void {
@@ -359,18 +541,27 @@ export class OfferPanel {
       this.#site?.panel.reset();
       const holder: { source?: SiteSource } = {};
       const deps: ConstructorParameters<typeof VideoPanel>[0] = {
-        probe: () => this.#deps.siteProbe(holder.source?.offer ?? offer),
-        add: (pick) => this.#deps.siteAdd(holder.source?.offer ?? offer, pick),
+        probe: (entryId) =>
+          entryId ? this.#deps.siteProbe(holder.source?.offer ?? offer, entryId) : this.#deps.siteProbe(holder.source?.offer ?? offer),
+        add: (pick, entryId) => {
+          const site = holder.source?.offer ?? offer;
+          const clip = this.#partCheck()?.clip;
+          if (entryId) return this.#deps.siteAdd(site, pick, clip, entryId);
+          return clip ? this.#deps.siteAdd(site, pick, clip) : this.#deps.siteAdd(site, pick);
+        },
         render: (view) => {
           if (!holder.source) return;
           holder.source.view = view;
           if (this.#site === holder.source) this.#render();
         },
+        itemHint: (items, leftOut) => {
+          const seen: ClickedVideo = { durationMs: this.#elementDuration() };
+          const slide = this.#deps.itemPosition?.();
+          if (slide !== undefined) seen.slide = slide;
+          return clickedItem(items, leftOut, seen);
+        },
         timers: this.#timers,
       };
-      // Sign-in cookies go only with curated sites' videos (SITE-MEDIA-SPEC §6.3).
-      if (offer.curated && this.#deps.allowSignIn) deps.allowSignIn = this.#deps.allowSignIn;
-      if (offer.curated && this.#deps.signInAllowed) deps.signInAllowed = this.#deps.signInAllowed;
       const panel = new VideoPanel(deps);
       holder.source = { offer, panel, view: panel.view(), asked: false };
       this.#site = holder.source;
@@ -410,19 +601,50 @@ export class OfferPanel {
     const wantMaster =
       answers.some((p) => p.phase === 'listed' && bareAnswer(p.info)) &&
       !answers.some((p) => p.phase === 'probing' || (p.phase === 'listed' && !bareAnswer(p.info)));
+    for (const s of streams) {
+      if (this.#probes.has(s.key) || !(s.probe && 'result' in s.probe)) continue;
+      const r = s.probe.result;
+      this.#probes.set(s.key, r.ok ? { phase: 'listed', info: r.value } : { phase: 'failed', error: r.error });
+      started++;
+    }
+    // A grid of previews (§2.6): look for the stream of the clicked element's length.
+    const el = this.#elementDuration();
+    const search = el > 0 && streams.length > MAX_STREAM_PROBES && answers.some((p) => p.phase === 'listed') && !answers.some((p) => p.phase === 'probing');
+    // Searching stops at a length within the matching tolerance of played files (max(0.3 s, 1.5 %)):
+    // a grid's other tile can be within the looser one (a 11.03 s playlist for a 10.24 s tile).
+    const found = search ? streams.find((s) => closeLength(this.#streamLength(s), el)) : undefined;
+    if (found) {
+      // Its group's other playlists (its master, with every quality and the sound), while none listed qualities.
+      const group = streams.filter((s) => s.group !== undefined && s.group === found.group);
+      if (group.some((s) => { const p = this.#probes.get(s.key); return p?.phase === 'listed' && !bareAnswer(p.info); })) return;
+      for (const s of group.slice(0, MAX_STREAM_PROBES_FOR_MASTER)) if (!this.#probes.has(s.key)) void this.#probeStream(s.key);
+      return;
+    }
+    if (search) {
+      // A group is asked once one of its streams answered (a refusal leaves it to its next stream).
+      const asked = new Set(streams.filter((s) => this.#probes.get(s.key)?.phase === 'listed').map((s) => s.group ?? s.key));
+      for (const s of streamOrder(streams)) {
+        if (started >= MAX_STREAM_PROBES_FOR_LENGTH) break;
+        const g = s.group ?? s.key;
+        if (this.#probes.has(s.key) || asked.has(g)) continue;
+        asked.add(g);
+        started++;
+        void this.#probeStream(s.key);
+      }
+      return;
+    }
     const limit = wantMaster ? MAX_STREAM_PROBES_FOR_MASTER : MAX_STREAM_PROBES;
     for (const s of streamOrder(streams)) {
-      if (this.#probes.has(s.key)) continue;
-      if (s.probe && 'result' in s.probe) {
-        const r = s.probe.result;
-        this.#probes.set(s.key, r.ok ? { phase: 'listed', info: r.value } : { phase: 'failed', error: r.error });
-        started++;
-        continue;
-      }
-      if (started >= limit) continue;
+      if (this.#probes.has(s.key) || started >= limit) continue;
       started++;
       void this.#probeStream(s.key);
     }
+  }
+
+  /** A stream's length as its answer says (0 unknown). */
+  #streamLength(s: StreamOffer): number {
+    const p = this.#probes.get(s.key);
+    return p?.phase === 'listed' ? p.info.durationMs : 0;
   }
 
   async #probeStream(key: OfferKey): Promise<void> {
@@ -458,16 +680,96 @@ export class OfferPanel {
     return this.#send?.phase === 'sent' || this.#site?.view.phase === 'sent';
   }
 
-  #rows(): OfferRows {
+  /** The Played source's answer once Downex matched the clicked video's files (§2.9). */
+  #playedInfo(): VideoInfoResult | undefined {
+    const probe = this.#offers?.played?.probe;
+    return probe && 'result' in probe && probe.result.ok ? probe.result.value : undefined;
+  }
+
+  /**
+   * Whether the Played source has not answered yet, for at most PLAYED_SETTLE_MS: the panel names no
+   * default row meanwhile, so the default never changes under the user's pointer (§2.9 "The panel").
+   */
+  #playedSettling(): boolean {
+    const played = this.#offers?.played;
+    if (!played || played.waitingMs >= PLAYED_SETTLE_MS) return false;
+    return !(played.probe && 'result' in played.probe);
+  }
+
+  /**
+   * A panel with a Played source keeps the default row it showed while that row is listed, and
+   * names none while the Played source settles (#playedSettling). Other panels (YouTube's among
+   * them) are unchanged.
+   */
+  #steady(rows: OfferRows): OfferRows {
+    if (!this.#offers?.played) return rows;
+    const kept = this.#shownDefault;
+    if (kept !== undefined && allRows(rows).some((r) => r.id === kept && !r.disabled)) {
+      const best = allRows(rows).find((r) => r.recommended);
+      // A higher quality with sound listed later (the site's, seconds after the played rows) is
+      // recommended and the default, unless the user already chose a row or points at the panel.
+      const still = this.#send !== undefined || this.#deps.pointerOn?.() === true;
+      const keptRow = allRows(rows).find((r) => r.id === kept);
+      const choice = keptRow?.source === 'played' || keptRow?.source === 'site';
+      if (best && choice && best.id !== kept && !best.disabled && !still) return rows;
+      rows.defaultId = kept;
+      // The badge stays with the row shown recommended while the default is kept; it is never
+      // taken from every row.
+      if (allRows(rows).some((r) => r.id === kept && r.recommended)) {
+        for (const r of allRows(rows)) if (r.recommended && r.id !== kept) delete r.recommended;
+      }
+    } else if (this.#playedSettling()) rows.defaultId = undefined;
+    return rows;
+  }
+
+  /**
+   * The frame's streams, a matched one whose answer says a length other than the clicked element's
+   * (by more than max(1 s, 5 %)) no longer matched: another video's stream (a grid of previews).
+   */
+  #streamsOfElement(streams: readonly StreamOffer[]): StreamOffer[] {
+    const el = this.#elementDuration();
+    if (el === 0) return [...streams];
+    // Once a matched stream says the element's own length, the matched ones that said nothing yet
+    // are no longer matched either, but for its own group's: the clicked video's stream (the closest
+    // in length) leads.
+    let found: StreamOffer | undefined;
+    for (const s of streams) {
+      const ms = this.#streamLength(s);
+      if (s.matched && sameLength(ms, el) && (!found || Math.abs(ms - el) < Math.abs(this.#streamLength(found) - el))) found = s;
+    }
+    return streams.map((s) => {
+      const ms = this.#streamLength(s);
+      if (!s.matched) return s;
+      const other = found !== undefined && s.key !== found.key && (found.group === undefined || s.group !== found.group);
+      if (ms > 0 ? !sameLength(ms, el) || other : other) return { ...s, matched: false };
+      return s;
+    });
+  }
+
+  /** The rows; with clip (the part being sent), their sizes are the part's. */
+  #rows(clip?: ClipRange): OfferRows {
+    return this.#steady(this.#builtRows(clip));
+  }
+
+  #builtRows(clip?: ClipRange): OfferRows {
     const offers = this.#offers;
     const site = this.#site;
     const info = site?.panel.info;
+    const played = this.#playedInfo();
     return buildOfferRows({
       files: offers?.files ?? [],
-      streams: offers?.streams ?? [],
+      streams: this.#streamsOfElement(offers?.streams ?? []),
       site: site && info && info.tracks.some(isVideoTrack) ? { name: cleanSiteText(site.offer.site), info, audio: site.view.pick.audio } : undefined,
       probes: this.#probes,
       streamAudio: this.#streamAudio,
+      clip,
+      played:
+        played && offers?.played ? { key: offers.played.key, info: played, audio: this.#playedAudio ?? defaultAudio(played) } : undefined,
+      // The frame's own address is the video, its servers answer more than browsers, and it offers
+      // a better picture than what played (measured 2026-11-18: an Instagram reel's site rows had
+      // no picture at all, the played ones 720p and 360p) (§2.6).
+      siteFirst:
+        site !== undefined && site.offer.curated && !site.offer.linked && info?.browserFetch !== true && bestHeight(info) > bestHeight(played),
     });
   }
 
@@ -478,7 +780,9 @@ export class OfferPanel {
 
   view(): OfferPanelView {
     const offers = this.#offers;
-    const title = cleanSiteText(offers?.title.trim() ?? '') || OFFER_TEXTS.untitled;
+    // A feed video's own post: the site's title for it, once known (a feed's title is not the video's).
+    const linkedTitle = this.#site?.offer.linked ? cleanSiteText(this.#site.panel.info?.title.trim() ?? '') : '';
+    const title = linkedTitle || cleanSiteText(offers?.title.trim() ?? '') || OFFER_TEXTS.untitled;
     const vp = this.#deps.viewport?.();
     const narrow = vp !== undefined && vp.width > 0 && vp.width < NARROW_FRAME_PX;
     const short = vp !== undefined && vp.height > 0 && vp.height < SHORT_FRAME_PX;
@@ -515,10 +819,12 @@ export class OfferPanel {
       return view;
     }
 
-    const rows = this.#rows();
+    // The rows' sizes follow the part, as the readout's does (and the YouTube panel's rows).
+    const rows = this.#rows(this.#partCheck()?.clip);
     const locked = busy || this.#sent();
     const decorate = (r: OfferRow): OfferRowView => ({ ...r, disabled: r.disabled || locked, selected: r.id === rows.defaultId });
     view.defaultId = rows.defaultId;
+    if (this.#open && rows.defaultId !== undefined && offers?.played) this.#shownDefault = rows.defaultId;
     view.rows = rows.main.map(decorate);
     if (rows.more.length > 0) {
       view.groups.push({ id: 'more', label: moreSourcesText(rows.more.length), expanded: this.#expanded.has('more'), rows: rows.more.map(decorate) });
@@ -533,7 +839,15 @@ export class OfferPanel {
     // Status: an add of a file or stream, else what the site source says, else the empty text,
     // else the MP4 note.
     const siteView = site?.asked ? site.view : undefined;
-    const siteStatus = siteView?.status && !(siteView.phase === 'list' && siteView.status.tone === 'ok') ? siteView.status : undefined;
+    // A failure of the site's source is never the panel's result while another row exists
+    // (VIDEO-DETECT-SPEC §2.6, amendment 2026-11-18), and on any site but YouTube it never names a
+    // sign-in (SITE-MEDIA-SPEC §6.3).
+    const siteFailed = siteView?.phase === 'error';
+    let siteStatus = siteView?.status && !(siteView.phase === 'list' && siteView.status.tone === 'ok') ? siteView.status : undefined;
+    if (siteFailed && anyRow) siteStatus = undefined;
+    else if (siteStatus && siteFailed && /sign[ -]?in|cookies/i.test(siteStatus.text)) siteStatus = { text: OFFER_TEXTS.siteFailed, tone: 'warn' };
+    const playedOffer = offers?.played;
+    const playedProbe = playedOffer?.probe;
     if (this.#send?.phase === 'sending') {
       view.status = { text: 'Sending…', tone: 'warn' };
       view.working = true;
@@ -543,25 +857,68 @@ export class OfferPanel {
       if (siteView?.action) view.action = siteView.action;
       if (siteView?.phase === 'probing' || siteView?.phase === 'sending') view.working = true;
     } else if (!anyRow && this.#allStreamsLive()) view.status = { text: VIDEO_TEXTS.live, tone: 'warn' };
-    else if (!anyRow) view.status = { text: OFFER_TEXTS.foundNothing, tone: 'warn' };
+    else if (!anyRow && playedOffer) {
+      // Save what's playing (SITE-MEDIA-SPEC §2.9): never a dead end. A refusal that waiting does
+      // not change (protected, an older Downex) says so; otherwise the panel waits for the video.
+      const refusal = playedProbe && 'result' in playedProbe && !playedProbe.result.ok ? playedProbe.result.error : undefined;
+      if (refusal && streamRefusal(refusal) === 'encrypted') view.status = { text: VIDEO_TEXTS.encrypted, tone: 'warn' };
+      else if (refusal?.code === 'outdated_downex') view.status = { text: refusal.message, tone: 'warn' };
+      else if (playedOffer.waitingMs < PLAYED_WAIT_MS) {
+        view.status = { text: OFFER_TEXTS.playedGetting, tone: 'warn' };
+        view.working = true;
+      } else view.status = { text: OFFER_TEXTS.playedNotSeen, tone: 'warn' };
+    } else if (!anyRow) {
+      const text = offers?.networkOnly ? this.#networkOnlyText() : OFFER_TEXTS.foundNothing;
+      view.status = { text, tone: 'warn' };
+    } else if (rows.defaultId === undefined && this.#playedSettling()) {
+      // The rows are listed and clickable; the default waits for what is playing.
+      view.status = { text: OFFER_TEXTS.playedGetting, tone: 'warn' };
+      view.working = true;
+    }
     else {
       // A failed stream's row says only the reason's lead: the whole reason is said here.
       const problem = this.#streamProblem();
-      view.status = problem ? { text: problem, tone: 'error' } : { text: MP4_NOTE, tone: 'ok' };
+      // The site's answer that needed the user's sign-in says so (SITE-MEDIA-SPEC §6.3), and one
+      // the browser fetches (§2.8).
+      const info = siteView ? site?.panel.info : undefined;
+      const def = this.#defaultRow();
+      const played = def?.source === 'played' ? this.#playedInfo() : undefined;
+      let note = siteNote(info, MP4_NOTE);
+      if (played) {
+        // What played is saved; a video file without its sound says so (§5.5).
+        const silent = def?.pick.audio === '' && trackById(played, def.pick.video)?.kind === 'video';
+        note = silent ? `${OFFER_TEXTS.noSound} ${OFFER_TEXTS.playedNote}` : `${OFFER_TEXTS.playedNote} ${MP4_NOTE}`;
+        if (played.browserFetch) note = siteNote({ browserFetch: true }, note);
+      }
+      view.status = problem ? { text: problem, tone: 'error' } : { text: note, tone: 'ok' };
     }
 
     view.phase = this.#send?.phase === 'sending' || siteView?.phase === 'sending' ? 'sending' : this.#sent() ? 'sent' : 'ready';
     const audio = this.#audioChoice(rows);
     if (audio) view.audio = audio;
+    const part = this.#partView();
+    if (part && !short) view.part = part;
+    if (siteView?.items) view.items = siteView.items;
 
     if (short) {
       // A small frame: the default row only; the toolbar menu lists the rest.
-      const first = [...view.rows, ...view.groups.flatMap((g) => g.rows)].find((r) => r.id === rows.defaultId);
+      const first = [...view.rows, ...view.groups.flatMap((g) => g.rows)].find((r) => r.id === rows.defaultId) ?? view.rows[0];
       view.rows = first ? [first] : [];
       view.groups = [];
       view.note = OFFER_TEXTS.moreInToolbar;
     }
     return view;
+  }
+
+  /** A `network` site with no row: playing is advice only while the video has not played yet. */
+  #networkOnlyText(): string {
+    let played = false;
+    try {
+      played = this.#target?.played?.() === true;
+    } catch {
+      played = false;
+    }
+    return played ? NETWORK_PLAYED_TEXT : NETWORK_ONLY_TEXT;
   }
 
   /** The whole reason of the first failed stream whose row shows it shortened (shortFailure). */
@@ -591,10 +948,13 @@ export class OfferPanel {
   #audioChoice(rows: OfferRows): OfferPanelView['audio'] {
     const row = allRows(rows).find((r) => r.id === rows.defaultId);
     if (row?.source === 'site') return this.#site?.view.audio;
-    if (row?.source !== 'stream' || row.key === undefined || row.action !== 'add') return undefined;
-    const probe = this.#probes.get(row.key);
-    if (probe?.phase !== 'listed') return undefined;
-    const info = probe.info;
+    let info: VideoInfoResult | undefined;
+    if (row?.source === 'played') info = this.#playedInfo();
+    else if (row?.source === 'stream' && row.key !== undefined && row.action === 'add') {
+      const probe = this.#probes.get(row.key);
+      if (probe?.phase === 'listed') info = probe.info;
+    }
+    if (!info || !row) return undefined;
     const tracks = audioTracks(info);
     if (tracks.length < 2 || !needsAudio(info, row.pick.video)) return undefined;
     return { value: row.pick.audio, options: tracks.map((t) => ({ id: t.id, label: audioLabel(t) })) };
@@ -672,6 +1032,7 @@ export const OFFER_PANEL_CSS = `
 .dx-more:disabled { opacity: 0.5; cursor: default; }
 .dx-more:focus-visible, .dx-hide:focus-visible { outline: 2px solid var(--p-focus); outline-offset: 2px; }
 .dx-note { margin: 0; padding: 0 10px; font-size: 12px; color: var(--p-muted); }
+.dx-offers[data-short='true'] .dx-items-list { display: none; }
 .dx-foot { display: flex; align-items: center; padding: 4px 2px 0; border-top: 1px solid var(--p-line); }
 .dx-hide {
   display: inline-flex;
@@ -738,12 +1099,26 @@ export interface OfferPanelDomDeps {
   onHide: () => void;
   /** Esc or ×: `focusButton` returns the focus to the button. */
   onClose: (focusButton: boolean) => void;
+  /** The Part row: its disclosure, a handle moved, a time typed, a chapter, "Whole video". */
+  onPartToggle?: () => void;
+  onPartSet?: (which: PartField, ms: number, push: boolean) => void;
+  onPartEdit?: (which: PartField, text: string) => void;
+  onPartChapter?: (n: number) => void;
+  onPartWhole?: () => void;
+  /** The clicked `<video>`, in this frame (the Part row's playhead, preview, Start/End here). */
+  partVideo?: () => PartVideo | undefined;
+  /** Another video of a page with several was chosen in the item row. */
+  onItem?: (id: string) => void;
+  timers?: Timers;
 }
 
 interface RowDom {
   button: HTMLButtonElement;
   li: HTMLLIElement;
   q: HTMLElement;
+  /** The quality's text in `q`, and the "Recommended" badge after it while the row is recommended. */
+  qt: HTMLElement;
+  rec: HTMLElement;
   c: HTMLElement;
   s: HTMLElement;
   t: HTMLElement;
@@ -756,7 +1131,7 @@ interface GroupDom {
 }
 
 /** The glyph of a source's run header. */
-const SOURCE_GLYPH: Record<OfferRow['source'], GlyphName> = { site: 'site', stream: 'stream', file: 'file' };
+const SOURCE_GLYPH: Record<OfferRow['source'], GlyphName> = { site: 'site', stream: 'stream', file: 'file', played: 'mark' };
 
 let nextPanelId = 0;
 
@@ -774,6 +1149,8 @@ export class OfferPanelDom {
   readonly #groups: Record<GroupId, GroupDom>;
   readonly #audioEl: HTMLLabelElement;
   readonly #audioSelect: HTMLSelectElement;
+  readonly #part: PartTrimmer;
+  readonly #items: ItemStrip;
   readonly #statusEl: HTMLElement;
   readonly #statusText: HTMLElement;
   readonly #elapsedEl: HTMLElement;
@@ -827,6 +1204,7 @@ export class OfferPanelDom {
     this.#subEl = noteLine(doc);
     head.append(this.#titleEl, close, this.#subEl);
     this.#skelEl = skeleton(doc);
+    this.#items = new ItemStrip({ doc, thumbnails: true, isTrusted: this.#isTrusted, onChoose: (itemId) => deps.onItem?.(itemId) });
 
     this.#rowsEl = doc.createElement('ul');
     this.#rowsEl.className = 'dx-rows';
@@ -855,6 +1233,21 @@ export class OfferPanelDom {
     this.#audioEl.hidden = true;
     this.#audioSelect = doc.createElement('select');
     this.#audioEl.append('Audio', this.#audioSelect);
+    this.#part = new PartTrimmer({
+      doc,
+      id,
+      isTrusted: this.#isTrusted,
+      onLayout: () => this.#updateMore(),
+      handlers: {
+        toggle: () => deps.onPartToggle?.(),
+        set: (which, ms, push) => deps.onPartSet?.(which, ms, push),
+        edit: (which, text) => deps.onPartEdit?.(which, text),
+        chapter: (n) => deps.onPartChapter?.(n),
+        whole: () => deps.onPartWhole?.(),
+      },
+      ...(deps.partVideo ? { video: deps.partVideo } : {}),
+      ...(deps.timers ? { timers: deps.timers } : {}),
+    });
 
     this.#statusEl = doc.createElement('p');
     this.#statusEl.className = 'dx-status';
@@ -892,11 +1285,13 @@ export class OfferPanelDom {
 
     this.el.append(
       head,
+      this.#items.el,
       this.#skelEl,
       this.#rowsEl,
       this.#groups.more.section,
       this.#groups.other.section,
       this.#audioEl,
+      this.#part.section,
       this.#statusEl,
       this.#meter.el,
       this.#actionEl,
@@ -939,6 +1334,8 @@ export class OfferPanelDom {
     if (!v) {
       this.#activated = undefined;
       this.#sentId = undefined;
+      // The player goes back where it was, unless the user took it over meanwhile.
+      this.#part.stop();
     }
   }
 
@@ -999,6 +1396,8 @@ export class OfferPanelDom {
       if (this.#audioSelect.value !== view.audio.value) this.#audioSelect.value = view.audio.value;
       this.#audioSelect.disabled = view.busy;
     }
+    this.#part.render(view.part, view.busy || view.phase === 'sent');
+    this.#items.render(view.items, view.busy);
     // The live region changes only when its text does: the seconds beside it are not announced.
     setText(this.#statusText, initialCapital(view.status?.text ?? ''));
     setText(this.#elapsedEl, view.status?.elapsed ?? '');
@@ -1012,16 +1411,20 @@ export class OfferPanelDom {
     const anyRow = view.rows.length > 0 || view.groups.length > 0;
     this.#skelEl.hidden = !(working && !anyRow && !view.busy && !metered);
     // The MP4 note is drawn under the title while there are rows. The status of a usable list
-    // (phase `ready`, tone ok; the only ok status of that phase, see view()) is that note: the
-    // live region keeps announcing it, visually hidden, so it is neither drawn twice nor lost.
+    // (phase `ready`, tone ok; the only ok status of that phase, see view()) is that note, with
+    // what the site's answer adds (siteNote: the sign-in used, the browser fetch): drawn there in
+    // full, while the live region keeps announcing it, visually hidden, so it is neither drawn
+    // twice nor lost.
     this.#subEl.hidden = !anyRow;
-    if (view.phase === 'ready' && view.status?.tone === 'ok' && !working) this.#statusEl.dataset.note = 'true';
+    const note = view.phase === 'ready' && view.status?.tone === 'ok' && !working ? view.status.text : undefined;
+    setText(this.#subEl, note ?? MP4_NOTE);
+    if (note !== undefined) this.#statusEl.dataset.note = 'true';
     else delete this.#statusEl.dataset.note;
     this.#actionEl.hidden = view.action === undefined;
     setText(this.#actionText, view.action?.text ?? '');
     if (view.action) {
       this.#actionEl.dataset.kind = view.action.kind;
-      setGlyph(this.#doc, this.#actionEl, view.action.kind === 'allow-sign-in' ? 'key' : 'retry');
+      setGlyph(this.#doc, this.#actionEl, 'retry');
     }
     this.#moreEl.hidden = !view.lookForMore;
     this.#moreEl.disabled = view.busy;
@@ -1096,6 +1499,12 @@ export class OfferPanelDom {
         button.dataset.id = r.id;
         const q = this.#doc.createElement('span');
         q.className = 'dx-q';
+        const qt = this.#doc.createElement('span');
+        qt.className = 'dx-qt';
+        const rec = this.#doc.createElement('span');
+        rec.className = 'dx-rec';
+        rec.textContent = RECOMMENDED_TEXT;
+        q.append(qt);
         const c = this.#doc.createElement('span');
         c.className = 'dx-c';
         const s = this.#doc.createElement('span');
@@ -1105,10 +1514,10 @@ export class OfferPanelDom {
         t.setAttribute('aria-hidden', 'true');
         button.append(q, c, s, t, goDisc(this.#doc));
         li.append(button);
-        el = { li, button, q, c, s, t };
+        el = { li, button, q, qt, rec, c, s, t };
         this.#rowEls.set(r.id, el);
       }
-      const label = cleanSiteText(r.label);
+      const label = r.recommended ? `${cleanSiteText(r.label)}, ${RECOMMENDED_TEXT}` : cleanSiteText(r.label);
       if (el.button.disabled !== r.disabled) el.button.disabled = r.disabled;
       if (el.button.getAttribute('aria-current') !== String(r.selected)) el.button.setAttribute('aria-current', String(r.selected));
       if (el.button.getAttribute('aria-label') !== label) el.button.setAttribute('aria-label', label);
@@ -1119,7 +1528,9 @@ export class OfferPanelDom {
       const title = r.title ? cleanSiteText(r.title) : '';
       if (el.button.title !== title) el.button.title = title;
       el.button.dataset.source = r.source;
-      setText(el.q, cleanSiteText(r.quality));
+      setText(el.qt, cleanSiteText(r.quality));
+      if (r.recommended && el.rec.parentNode !== el.q) el.q.append(el.rec);
+      else if (!r.recommended && el.rec.parentNode) el.rec.remove();
       setText(el.c, cleanSiteText(r.detail));
       setText(el.s, r.size);
       setText(el.t, tag);
@@ -1141,6 +1552,8 @@ export class OfferPanelDom {
       return;
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    // Up and Down keep their own meaning in a field, a select or a slider (the Part row's, Audio).
+    if ((e.target as Element | null)?.closest?.('input, select, textarea, [role="slider"]')) return;
     const items = this.#visibleSelectable();
     if (items.length === 0) return;
     const i = items.indexOf(this.#activeElement() as HTMLButtonElement);

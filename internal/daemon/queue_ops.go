@@ -129,7 +129,7 @@ func (m *Manager) CreateQueue(ctx context.Context, p *downexv1.Queue) (*downexv1
 		return nil, errInternal("create queue", err)
 	}
 	m.mu.Lock()
-	qs := newQueueState(q, m.global)
+	qs := newQueueState(q, m.queueParent())
 	m.queues[q.ID] = qs
 	m.hub.publishQueue(q.ID, kindUpdated)
 	pq := m.protoQueueLocked(qs)

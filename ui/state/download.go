@@ -204,6 +204,7 @@ func DefaultSettings() *downexv1.Settings {
 		ShowCompleteDialog:      true,
 		Proxy:                   &downexv1.ProxySettings{Mode: downexv1.ProxyMode_PROXY_MODE_SYSTEM},
 		MarkDownloadedFiles:     true,
+		CheckDownloadedFiles:    true,
 		AvScanArgs:              "[File]",
 		AutoCheckUpdates:        true,
 		SiteMedia:               true,

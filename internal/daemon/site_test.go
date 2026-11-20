@@ -119,7 +119,7 @@ func TestSiteAddConfirmAnotherQuality(t *testing.T) {
 		r.opts.MaxConnections != DefaultMaxConnections {
 		t.Errorf("run = %+v", r)
 	}
-	if c := h.m.siteCookies.get(model.DownloadID(d.GetId())); c != "" {
+	if c := h.m.siteCookies.get(model.DownloadID(d.GetId())); c != (siteSignIn{}) {
 		t.Errorf("the cookie is kept after completion")
 	}
 
@@ -175,15 +175,18 @@ func TestSiteAddRequestedTracks(t *testing.T) {
 		t.Errorf("an audio track keeps the video: %q, %v", med.SelectedVideo, err)
 	}
 	// The file name falls back to the requested title, then the page's last segment.
-	for _, c := range []struct{ requested, site, title, page, want string }{
-		{"clip.webm", "Site title", "", testPage, "clip.mp4"},
-		{"", "Site title", "Tab", testPage, "Site title.mp4"},
-		{"", "", "Tab", testPage, "Tab.mp4"},
-		{"", "", "", "https://site.test/videos/my-clip", "my-clip.mp4"},
-		{"", "", "", "https://site.test/", "video.mp4"},
+	for _, c := range []struct{ requested, site, title, page, container, want string }{
+		{"clip.webm", "Site title", "", testPage, "mp4", "clip.mp4"},
+		{"", "Site title", "Tab", testPage, "mp4", "Site title.mp4"},
+		{"", "", "Tab", testPage, "mp4", "Tab.mp4"},
+		{"", "", "", "https://site.test/videos/my-clip", "mp4", "my-clip.mp4"},
+		{"", "", "", "https://site.test/", "mp4", "video.mp4"},
+		// An audio page's file (docs/SITE-MEDIA-SPEC.md §3.13).
+		{"", "Track", "", testPage, "m4a", "Track.m4a"},
+		{"song.mp4", "Track", "", testPage, "mp3", "song.mp3"},
 	} {
-		if got := siteFileName(c.requested, c.site, c.title, c.page); got != c.want {
-			t.Errorf("siteFileName(%q, %q, %q, %q) = %q, want %q", c.requested, c.site, c.title, c.page, got, c.want)
+		if got := siteFileName(c.requested, c.site, c.title, c.page, c.container); got != c.want {
+			t.Errorf("siteFileName(%q, %q, %q, %q, %q) = %q, want %q", c.requested, c.site, c.title, c.page, c.container, got, c.want)
 		}
 	}
 }
@@ -365,6 +368,14 @@ func TestSiteRequestErrors(t *testing.T) {
 		{"header", &downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage,
 			Headers: []*downexv1.Header{{Name: "Cookie", Value: "a\nb"}}}, "Cookie"},
 		{"origin", &downexv1.ProbeMediaRequest{Origin: downexv1.MediaOrigin(9), PageUrl: testPage}, "origin"},
+		{"cookie domain of another site", &downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage,
+			Headers: siteHeaders(), CookieDomain: "other.test"}, "cookie_domain"},
+		{"cookie domain a public suffix", &downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage,
+			Headers: siteHeaders(), CookieDomain: "test"}, "cookie_domain"},
+		{"cookie domain not a name", &downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage,
+			Headers: siteHeaders(), CookieDomain: "Video.Test"}, "cookie_domain"},
+		{"cookie past 16 KiB", &downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage,
+			Headers: []*downexv1.Header{{Name: "Cookie", Value: "a=" + strings.Repeat("s", 16<<10)}}}, "Cookie"},
 	} {
 		_, err := h.probeMedia(c.req)
 		if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), c.want) {
@@ -374,7 +385,7 @@ func TestSiteRequestErrors(t *testing.T) {
 			t.Errorf("%s: the error repeats a password: %v", c.name, err)
 		}
 		add := &downexv1.AddMediaRequest{Origin: c.req.GetOrigin(), PageUrl: c.req.GetPageUrl(), ManifestUrl: c.req.GetManifestUrl(),
-			Headers: c.req.GetHeaders()}
+			Headers: c.req.GetHeaders(), CookieDomain: c.req.GetCookieDomain()}
 		if _, err := h.addMediaReq(add); connect.CodeOf(err) != connect.CodeInvalidArgument {
 			t.Errorf("%s: AddMedia = %v, want InvalidArgument", c.name, err)
 		}
@@ -783,5 +794,81 @@ func TestSiteMediaRunsGetHostRules(t *testing.T) {
 	_, mediaRuns := fm.calls()
 	if len(siteRuns) != 1 || siteRuns[0].opts.HostRules != rt || len(mediaRuns) != 1 || mediaRuns[0].opts.HostRules != rt {
 		t.Errorf("host rules: site %+v, manifest %+v", siteRuns, mediaRuns)
+	}
+}
+
+// TestSiteCookieDomain: the domain of the user's sign-in (docs/SITE-MEDIA-SPEC.md §6.3)
+// reaches the resolver with the cookie, for the probe, the add, its runs and a Confirm
+// that resolves the page again; a manifest takes none, and a look-ahead never carries
+// cookies.
+func TestSiteCookieDomain(t *testing.T) {
+	fs := newFakeSite(1)
+	h := newSiteHarness(t, harnessOptions{}, siteHarnessOptions{site: fs, tools: newFakeTools()})
+	headers := []*downexv1.Header{{Name: "Cookie", Value: "SID=1"}}
+	if _, err := h.probeMedia(&downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage, Headers: headers,
+		CookieDomain: "video.test"}); err != nil {
+		t.Fatal(err)
+	}
+	d := h.addMedia(&downexv1.AddMediaRequest{Origin: originSite, PageUrl: testPage, Source: sourceBrowser, Headers: headers,
+		CookieDomain: "video.test"})
+	if got := h.m.siteCookies.get(model.DownloadID(d.GetId())); got != (siteSignIn{"SID=1", "video.test"}) {
+		t.Errorf("kept sign-in = %+v", got)
+	}
+	if _, err := h.confirmReq(&downexv1.ConfirmRequest{Id: d.GetId(), Start: true}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCompleted(d.GetId())
+	probes, runs := fs.calls()
+	if len(probes) == 0 || len(runs) != 1 {
+		t.Fatalf("%d probes, %d runs", len(probes), len(runs))
+	}
+	for _, p := range probes {
+		if p.Cookie != "SID=1" || p.CookieDomain != "video.test" {
+			t.Errorf("probe = %+v", p)
+		}
+	}
+	if r := runs[0].sel; r.Cookie != "SID=1" || r.CookieDomain != "video.test" {
+		t.Errorf("run = %+v", r)
+	}
+	if b, err := json.Marshal(storedState(t, h.st, d.GetId())); err != nil || bytes.Contains(b, []byte("SID=1")) {
+		t.Errorf("the stored record carries the cookie: %s (%v)", b, err)
+	}
+
+	before := len(probes)
+	_, err := h.probeMedia(&downexv1.ProbeMediaRequest{Origin: originSite, PageUrl: testPage, Headers: headers, Prefetch: true})
+	if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), "never carries cookies") {
+		t.Errorf("look-ahead with a cookie: %v", err)
+	}
+	_, err = h.probeMedia(&downexv1.ProbeMediaRequest{ManifestUrl: testManifest, CookieDomain: "video.test"})
+	if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), "cookie_domain") {
+		t.Errorf("manifest with a cookie domain: %v", err)
+	}
+	_, err = h.addMediaReq(&downexv1.AddMediaRequest{ManifestUrl: testManifest, CookieDomain: "video.test"})
+	if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), "cookie_domain") {
+		t.Errorf("AddMedia of a manifest with a cookie domain: %v", err)
+	}
+	if probes, _ := fs.calls(); len(probes) != before {
+		t.Errorf("refused requests reached the resolver: %+v", probes[before:])
+	}
+}
+
+// TestSiteCookiesForgottenOnRemove: the sign-in of a site download stays in memory for
+// its runs only (docs/SITE-MEDIA-SPEC.md §6.3): a paused one keeps it for its next run,
+// a removed one forgets it.
+func TestSiteCookiesForgottenOnRemove(t *testing.T) {
+	fs := newFakeSite(1)
+	h := newSiteHarness(t, harnessOptions{}, siteHarnessOptions{site: fs, tools: newFakeTools()})
+	headers := []*downexv1.Header{{Name: "Cookie", Value: "sessionid=SECRET"}}
+	d := h.addMedia(&downexv1.AddMediaRequest{Origin: originSite, PageUrl: testPage, Source: sourceBrowser,
+		Headers: headers, CookieDomain: "video.test", StartPaused: true})
+	id := model.DownloadID(d.GetId())
+	if got := h.m.siteCookies.get(id); got != (siteSignIn{"sessionid=SECRET", "video.test"}) {
+		t.Fatalf("paused download: kept sign-in = %+v", got)
+	}
+	if _, err := h.dl.Remove(ctxT(t), connect.NewRequest(&downexv1.RemoveRequest{Id: d.GetId()})); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.m.siteCookies.get(id); got != (siteSignIn{}) {
+		t.Errorf("removed download %d: the sign-in %+v is still held in memory", id, got)
 	}
 }

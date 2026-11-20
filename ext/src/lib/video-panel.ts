@@ -3,6 +3,7 @@
 // yt-dlp or resolves the page, for up to 5 min), the pick, sending it, and the texts of §5.5.
 // Pure: the background requests, the timers and the rendering are injected.
 
+import type { ClipRange } from './clip';
 import {
   type AddedResult,
   daemonCode,
@@ -13,12 +14,16 @@ import {
   systemTimers,
   type Timers,
   type VideoInfoResult,
+  type VideoItem,
 } from './protocol';
 import {
   canRetryVideo,
   elapsedText,
   gettingInfoText,
   isVideoRetry,
+  signInRetries,
+  signInUsedText,
+  siteNote,
   type Tone,
   toolsInstallingText,
   VIDEO_TEXTS,
@@ -29,11 +34,14 @@ import { VIDEO_RETRY_LIMIT_MS, VIDEO_RETRY_MS } from './video-handoff';
 import {
   audioLabel,
   audioTracks,
+  clipSize,
   defaultPick,
+  fileTypeLabel,
   pickedAudio,
   pickSize,
   type QualityRow,
   qualityRows,
+  recommendedPick,
   showsAudioChoice,
   sizeLabel,
   type TrackPick,
@@ -56,31 +64,48 @@ export interface VideoPanelView {
    */
   status?: { text: string; tone: Tone; elapsed?: string };
   /** One MP4 quality per class, best first, with the size it has with the chosen audio. */
-  rows: (QualityRow & { selected: boolean })[];
+  /** `recommended`: the quality the panel recommends (VideoPanelDeps.recommend). */
+  rows: (QualityRow & { selected: boolean; recommended?: boolean })[];
   /** Only with a video-only pick and several MP4 audio tracks. */
   audio?: { value: string; options: { id: string; label: string }[] };
   pick: TrackPick;
   /** Size of the pick ("" unknown; "~" for an estimate). */
   size: string;
-  /** A button under the status: allow the browser sign-in (after auth_required), or try again. */
-  action?: { kind: 'allow-sign-in' | 'retry'; text: string };
+  /** A button under the status: try again. */
+  action?: { kind: 'retry'; text: string };
   /** Requests are running: the controls are disabled. */
   busy: boolean;
+  /** What the pick is saved as: "MP4", or an audio page's "M4A" or "MP3" (SITE-MEDIA-SPEC §3.13). */
+  fileType: string;
+  /**
+   * A page with several videos (SITE-MEDIA-SPEC §3.12): its items, the chosen one marked, while
+   * there are two or more, or other items left out. Kept while another item's qualities are got.
+   */
+  items?: VideoPanelItems;
+}
+
+/** The item row of a page with several videos. */
+export interface VideoPanelItems {
+  options: (VideoItem & { selected: boolean })[];
+  /** Index of the chosen item in options (-1 while none is). */
+  index: number;
+  /** Other items of the page (photos, links, videos past 20): not downloaded. */
+  leftOut: number;
+  /** The item shown is an audio page's (SITE-MEDIA-SPEC §3.13): the items are tracks. */
+  audio?: boolean;
 }
 
 export interface VideoPanelDeps {
-  probe: () => Promise<Outcome<VideoInfoResult>>;
-  add: (pick: TrackPick) => Promise<Outcome<AddedResult>>;
+  /** The qualities; with `entryId`, of that video of a page with several (SITE-MEDIA-SPEC §3.12). */
+  probe: (entryId?: string) => Promise<Outcome<VideoInfoResult>>;
+  /** Sends the pick; with `entryId`, of that video of a page with several. */
+  add: (pick: TrackPick, entryId?: string) => Promise<Outcome<AddedResult>>;
   /**
-   * Turns on "Send my sign-in cookies when a video needs it"; offered after `auth_required`
-   * while it is off (undefined: never offered).
+   * The item of a page with several videos that the user clicked (SITE-MEDIA-SPEC §3.12 "Which
+   * item"; clickedItem), asked once when the page's items are first known and none was chosen:
+   * when it names another item than the page's default, the panel gets that one instead.
    */
-  allowSignIn?: () => Promise<void>;
-  /**
-   * Whether that option is on now. After `auth_required` with it on, "Try again" is offered
-   * instead (the user may have signed in on the site since).
-   */
-  signInAllowed?: () => boolean;
+  itemHint?: (items: readonly VideoItem[], leftOut: number) => string | undefined;
   render: (view: VideoPanelView) => void;
   timers?: Timers;
   /**
@@ -90,9 +115,18 @@ export interface VideoPanelDeps {
   failureText?: (e: ProtocolError) => string;
   /** The line after Downex took the pick (default videoAddedText; streams: offerAddedText). */
   addedText?: (added: AddedResult) => string;
+  /**
+   * The part of the video that a download sends (the YouTube panel's Part row), undefined for
+   * the whole video: the sizes are then the part's estimates (clipSize, "~").
+   */
+  clip?: () => ClipRange | undefined;
+  /**
+   * Start with the highest quality with sound and badge it "Recommended" (VIDEO-DETECT-SPEC §5.2,
+   * amended 2026-11-19: the sites other than YouTube), instead of Downex's default pick.
+   */
+  recommend?: boolean;
 }
 
-export const ALLOW_SIGN_IN_TEXT = 'Allow Downex to use your browser sign-in for videos';
 export const MP4_NOTE = 'Every quality is saved as one MP4 file.';
 
 export class VideoPanel {
@@ -101,6 +135,12 @@ export class VideoPanel {
   #pick: TrackPick = { video: '', audio: '' };
   #status: VideoPanelView['status'];
   #action: VideoPanelView['action'];
+  /** The item of a page with several videos the user chose (undefined: the page's default). */
+  #entry: string | undefined;
+  /** That page's items, from the last answer that listed them. */
+  #items: { list: VideoItem[]; leftOut: number } | undefined;
+  /** deps.itemHint was asked (once per video). */
+  #hinted = false;
   #open = false;
   /** The add shown as running was sent from an earlier popup (adoptAdd). */
   #adoptedSend = false;
@@ -127,29 +167,67 @@ export class VideoPanel {
 
   view(): VideoPanelView {
     const info = this.#info;
-    const rows = info
-      ? qualityRows(info, this.#pick.audio).map((r) => ({ ...r, selected: r.id === this.#pick.video }))
-      : [];
+    const clip = info ? this.deps.clip?.() : undefined;
+    const listed = info ? qualityRows(info, this.#pick.audio, clip) : [];
+    const recommended = info && this.deps.recommend && listed.length > 1 && !listed[0]?.audio ? recommendedPick(info).video : '';
+    const rows = listed.map((r) => {
+      const row: VideoPanelView['rows'][number] = { ...r, selected: r.id === (r.audio ? this.#pick.audio : this.#pick.video) };
+      if (recommended && r.id === recommended) row.recommended = true;
+      return row;
+    });
     const view: VideoPanelView = {
       phase: this.#phase,
       title: info?.title ?? '',
       rows,
       pick: this.#pick,
-      size: info ? sizeLabel(pickSize(info, this.#pick)) : '',
+      size: info ? sizeLabel(clipSize(pickSize(info, this.#pick), clip, info.durationMs)) : '',
       busy: this.#phase === 'probing' || this.#phase === 'sending',
+      fileType: fileTypeLabel(info),
     };
     if (info && showsAudioChoice(info, this.#pick)) {
       view.audio = { value: this.#pick.audio, options: audioTracks(info).map((t) => ({ id: t.id, label: audioLabel(t) })) };
     }
     if (this.#status) view.status = this.#status;
     if (this.#action) view.action = this.#action;
+    const items = this.#items;
+    if (items && (items.list.length > 1 || items.leftOut > 0)) {
+      const chosen = this.entryId;
+      const options = items.list.map((it) => ({ ...it, selected: it.id === chosen }));
+      view.items = { options, index: options.findIndex((o) => o.selected), leftOut: items.leftOut };
+      if (info && fileTypeLabel(info) !== 'MP4') view.items.audio = true;
+    }
     return view;
+  }
+
+  /** The item the panel is about: the answer's, else the one chosen ("" for the page's default). */
+  get entryId(): string {
+    return this.#info?.entryId || this.#entry || '';
+  }
+
+  /**
+   * Another video of a page with several (SITE-MEDIA-SPEC §3.12): its qualities are got (the list
+   * of items stays), and Download sends it. Ignored while a pick is being sent, and for an id the
+   * list does not have.
+   */
+  chooseItem(id: string): void {
+    if (this.#phase === 'sending' || !this.#items?.list.some((it) => it.id === id) || id === this.entryId) return;
+    this.#generation++;
+    this.#stopTimers();
+    this.#entry = id;
+    this.#info = undefined;
+    this.#pick = { video: '', audio: '' };
+    this.#status = undefined;
+    this.#action = undefined;
+    this.#retryStart = undefined;
+    this.#phase = 'idle';
+    if (this.#open) void this.#probe();
+    else this.#render();
   }
 
   /** The panel was opened: gets the qualities unless they are known or being got. */
   open(): void {
     this.#open = true;
-    if (this.#phase === 'idle' || (this.#phase === 'error' && !this.#info && this.#action?.kind !== 'allow-sign-in')) {
+    if (this.#phase === 'idle' || (this.#phase === 'error' && !this.#info)) {
       void this.#probe();
       return;
     }
@@ -172,7 +250,7 @@ export class VideoPanel {
   clearSent(): void {
     if (this.#phase !== 'sent') return;
     this.#phase = this.#info ? 'list' : 'idle';
-    this.#status = this.#info ? { text: MP4_NOTE, tone: 'ok' } : undefined;
+    this.#status = this.#info ? { text: this.#listNote(this.#info), tone: 'ok' } : undefined;
   }
 
   /** Another video: everything is forgotten. */
@@ -185,6 +263,9 @@ export class VideoPanel {
     this.#status = undefined;
     this.#action = undefined;
     this.#retryStart = undefined;
+    this.#entry = undefined;
+    this.#items = undefined;
+    this.#hinted = false;
     this.#render();
   }
 
@@ -248,7 +329,8 @@ export class VideoPanel {
     this.#render();
     let outcome: Outcome<AddedResult>;
     try {
-      outcome = await this.deps.add(pick);
+      const entry = this.entryId;
+      outcome = await (entry ? this.deps.add(pick, entry) : this.deps.add(pick));
     } catch (e) {
       outcome = failure('internal', `Background unavailable: ${errorMessage(e)}`);
     }
@@ -277,22 +359,6 @@ export class VideoPanel {
     void this.#probe();
   }
 
-  /** "Allow Downex to use your browser sign-in for videos", then the qualities again. */
-  async allowSignIn(): Promise<void> {
-    if (!this.deps.allowSignIn || this.#action?.kind !== 'allow-sign-in') return;
-    this.#action = undefined;
-    try {
-      await this.deps.allowSignIn();
-    } catch (e) {
-      this.#status = { text: `Could not save the option: ${errorMessage(e)}`, tone: 'error' };
-      this.#render();
-      return;
-    }
-    this.#info = undefined;
-    this.#retryStart = undefined;
-    void this.#probe();
-  }
-
   async #probe(): Promise<void> {
     const generation = this.#generation;
     this.#stopTimers();
@@ -304,7 +370,8 @@ export class VideoPanel {
     this.#tick();
     let outcome: Outcome<VideoInfoResult>;
     try {
-      outcome = await this.deps.probe();
+      const entry = this.#entry;
+      outcome = await (entry ? this.deps.probe(entry) : this.deps.probe());
     } catch (e) {
       outcome = failure('internal', `Background unavailable: ${errorMessage(e)}`);
     }
@@ -316,12 +383,31 @@ export class VideoPanel {
     this.#stopTimers();
     if (outcome.ok) {
       this.#info = outcome.value;
-      this.#pick = defaultPick(outcome.value);
+      this.#pick = this.deps.recommend ? recommendedPick(outcome.value) : defaultPick(outcome.value);
+      const items = outcome.value.items;
+      if (items && (items.length > 0 || (outcome.value.itemsLeftOut ?? 0) > 0)) {
+        const chosen = this.#entry !== undefined;
+        this.#items = { list: items, leftOut: outcome.value.itemsLeftOut ?? 0 };
+        if (outcome.value.entryId) this.#entry = outcome.value.entryId;
+        // The page's default item (the page's own id, else the first) may not be the video the
+        // user clicked: what the page shows of that one picks it instead.
+        if (!chosen && !this.#hinted && items.length > 1 && this.deps.itemHint) {
+          this.#hinted = true;
+          const id = this.deps.itemHint(items, this.#items.leftOut);
+          if (id !== undefined && id !== outcome.value.entryId && items.some((it) => it.id === id)) {
+            this.#info = outcome.value;
+            this.chooseItem(id);
+            return;
+          }
+        }
+      } else if (!this.#entry) {
+        this.#items = undefined;
+      }
       this.#retryStart = undefined;
       this.#action = undefined;
       if (outcome.value.tracks.some((t) => t.kind !== 'audio')) {
         this.#phase = 'list';
-        this.#status = { text: MP4_NOTE, tone: 'ok' };
+        this.#status = { text: this.#listNote(outcome.value), tone: 'ok' };
       } else {
         // Downex lists no audio-only page; a list without a video is not one to pick from.
         this.#phase = 'error';
@@ -381,19 +467,21 @@ export class VideoPanel {
       return;
     }
     const final = !canRetryVideo(e);
-    const signedIn = this.deps.signInAllowed?.() === true;
     this.#status = { text: this.#text(e), tone: final ? 'warn' : 'error' };
-    if (code === 'auth_required' && this.deps.allowSignIn && !signedIn) {
-      this.#action = { kind: 'allow-sign-in', text: ALLOW_SIGN_IN_TEXT };
-    } else if (!final || (code === 'auth_required' && signedIn)) {
-      this.#action = { kind: 'retry', text: 'Try again' };
-    } else {
-      this.#action = undefined;
-    }
+    // After the sign-in was used or found missing, the user may sign in on the site and try again (§6.3).
+    this.#action = !final || (code === 'auth_required' && signInRetries(e.signIn)) ? { kind: 'retry', text: 'Try again' } : undefined;
   }
 
+  /** The line after Downex took the pick, saying when the add carried the user's sign-in (§6.3). */
   #added(a: AddedResult): string {
-    return (this.deps.addedText ?? videoAddedText)(a);
+    const text = (this.deps.addedText ?? videoAddedText)(a);
+    if (!a.signedIn) return text;
+    return `${/[.!?…]$/.test(text) ? text : `${text}.`} ${signInUsedText(a.signedIn)}`;
+  }
+
+  /** The status under a list of qualities: the MP4 note, after the sign-in that answer needed (§6.3). */
+  #listNote(info: VideoInfoResult): string {
+    return siteNote(info, MP4_NOTE);
   }
 
   #text(e: ProtocolError): string {

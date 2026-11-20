@@ -12,17 +12,21 @@ import (
 const cookieFileName = "cookies.txt"
 
 // cookieLines returns the Netscape cookie file for yt-dlp (docs/SITE-MEDIA-SPEC.md
-// §4.7) that holds the cookies of a Cookie header for pageURL: after the header line,
-// one line per "name=value" pair whose name is a token and whose value is printable
-// ASCII without ';', each for the page's own host (subdomains not included), path
-// "/", secure when the page is https, a session cookie. Other pairs are left out; nil
-// when none remains.
-func cookieLines(pageURL, header string) []string {
+// §4.7, §6.3) that holds the cookies of a Cookie header for pageURL: after the header
+// line, one line per "name=value" pair whose name is a token and whose value is
+// printable ASCII without ';', path "/", secure when the page is https, a session
+// cookie. With a domain (checked by validate.SiteCookie) each is for ".domain" and its
+// subdomains; without one, for the page's own host only. Other pairs are left out;
+// nil when none remains.
+func cookieLines(pageURL, header, domain string) []string {
 	u, err := url.Parse(pageURL)
 	if err != nil || u.Hostname() == "" {
 		return nil
 	}
-	host := strings.ToLower(u.Hostname())
+	host, subdomains := strings.ToLower(u.Hostname()), "FALSE"
+	if domain != "" {
+		host, subdomains = "."+domain, "TRUE"
+	}
 	secure := "FALSE"
 	if u.Scheme == "https" {
 		secure = "TRUE"
@@ -34,7 +38,7 @@ func cookieLines(pageURL, header string) []string {
 		if !ok || !token(name) || !cookieValue(value) {
 			continue
 		}
-		lines = append(lines, strings.Join([]string{host, "FALSE", "/", secure, "0", name, value}, "\t"))
+		lines = append(lines, strings.Join([]string{host, subdomains, "/", secure, "0", name, value}, "\t"))
 	}
 	if lines == nil {
 		return nil
@@ -42,18 +46,19 @@ func cookieLines(pageURL, header string) []string {
 	return append([]string{"# Netscape HTTP Cookie File"}, lines...)
 }
 
-// writeCookieFile writes the cookie file of a Cookie header into the run folder run
-// (mode 0600) and returns its path; "" when the header holds no usable cookie. yt-dlp
-// rewrites the file when it exits; the run folder is removed with it.
-func writeCookieFile(run, pageURL, header string) (string, error) {
-	lines := cookieLines(pageURL, header)
+// writeCookieFile writes the cookie file of a Cookie header into the run folder run,
+// private to the user (createPrivate), and returns its path and how many cookies it
+// holds; "" when the header holds no usable cookie. yt-dlp rewrites the file when it
+// exits; the run folder is removed with it.
+func writeCookieFile(run, pageURL, header, domain string) (string, int, error) {
+	lines := cookieLines(pageURL, header, domain)
 	if lines == nil {
-		return "", nil
+		return "", 0, nil
 	}
 	path := filepath.Join(run, cookieFileName)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := createPrivate(path)
 	if err != nil {
-		return "", fmt.Errorf("create the cookie file: %w", err)
+		return "", 0, fmt.Errorf("create the cookie file: %w", err)
 	}
 	_, err = f.WriteString(strings.Join(lines, "\n") + "\n")
 	if cerr := f.Close(); err == nil {
@@ -61,9 +66,9 @@ func writeCookieFile(run, pageURL, header string) (string, error) {
 	}
 	if err != nil {
 		_ = os.Remove(path)
-		return "", fmt.Errorf("write the cookie file: %w", err)
+		return "", 0, fmt.Errorf("write the cookie file: %w", err)
 	}
-	return path, nil
+	return path, len(lines) - 1, nil
 }
 
 // token reports a non-empty RFC 9110 token (a cookie name).

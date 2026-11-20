@@ -2,12 +2,16 @@
 // get a Download button. It reads only the public state of video elements (source, size,
 // duration, DRM, visibility), never page text, scripts or storage. It listens to media events in
 // the capture phase and to one IntersectionObserver and one ResizeObserver; there is no subtree
-// MutationObserver, and no layout is read here (the observers deliver sizes). It reports the
-// frame's videos to the background (`downex:frame-videos`) and asks for the overlay UI
-// (`downex:overlay-state`, `downex:video-ui`) only once the frame has a video worth a button. The
-// overlay UI script finds it on `globalThis[Symbol.for('downex.video')]` (TrackerApi). In the top
-// frame of a curated video address it also runs the look-ahead dwell. Pure apart from the DOM:
-// observers, timers, EME, shadow roots, options and messaging are injected.
+// MutationObserver but in the top frame of a compact social site (one whose callback only schedules
+// a check), and no layout is read here (the observers deliver sizes) but once per right-click, once
+// per choice of "Show Downex download panel" and, on compact sites, once per grid tile the pointer
+// enters (VIDEO-DETECT-SPEC §5.1 "Social sites"). It reports the frame's videos to the background
+// (`downex:frame-videos`) and asks for the overlay UI (`downex:overlay-state`, `downex:video-ui`)
+// only once the frame has a video worth a button, or the user asked for a video's panel from the
+// context menu. The overlay UI script finds it on `globalThis[Symbol.for('downex.video')]`
+// (TrackerApi). In the top frame of a curated video address it also runs the look-ahead dwell.
+// Pure apart from the DOM: observers, timers, EME, shadow roots, options and messaging are
+// injected.
 
 import type { ExtensionMessage, FrameMessage, ResponseFor } from './messages';
 import { MAX_FRAME_VIDEOS, MAX_FRAME_VIDEOS_BYTES } from './messages';
@@ -38,10 +42,16 @@ const LIVE_GROWTH_S = 1;
 export const REPORT_INTERVAL_MS = 1000;
 /** Pointer activity looks for new videos at most this often. */
 export const POINTER_CHECK_MS = 1000;
+/** A right-clicked video is kept this long for "Show Downex download panel" (§5.1 "Menu"). */
+export const MENU_VIDEO_MS = 60_000;
 /** The deep scan for videos in shadow roots looks at most at this many elements … */
 export const DEEP_SCAN_MAX_ELEMENTS = 5000;
 /** … and enters at most this many nested shadow roots. */
 export const DEEP_SCAN_MAX_DEPTH = 16;
+/** The late-mount observer's check comes this long after the first change it saw (§5.1 "Social sites"). */
+export const MUTATION_CHECK_MS = 250;
+/** Smallest grid tile (CSS px) that gets a button (§5.1 "Grid tiles"). */
+export const MIN_TILE_PX = 96;
 /** Longest `src` reported (DAEMON-SPEC §4 URL limit). */
 const MAX_SRC_CHARS = 32 * 1024;
 const MAX_ID = 2 ** 31 - 1;
@@ -79,10 +89,27 @@ export interface ObserverLike {
   disconnect(): void;
 }
 
+/** The late-mount observer (`new MutationObserver(cb)` observing childList and subtree). */
+export interface MutationObserverLike {
+  observe(target: Node, options: { childList: boolean; subtree: boolean }): void;
+  disconnect(): void;
+}
+
+/**
+ * A grid tile the pointer is over (VIDEO-DETECT-SPEC §5.1 "Grid tiles"): a link that shows a
+ * picture of a video, with that video's own address (resolved `href`, no fragment).
+ */
+export interface VideoTileTarget {
+  el: Element;
+  url: string;
+}
+
 /** The dwell the top frame runs on a curated video address (PrefetchDwell). */
 export interface DwellLike {
   sync(): void;
   stop(): void;
+  /** The user pointed at a Download button: a stay being counted ends now (PrefetchDwell.now). */
+  now?(): void;
 }
 
 /** A tracked video as the overlay UI sees it. */
@@ -90,6 +117,11 @@ export interface TrackedVideo {
   id: number;
   el: HTMLVideoElement;
   meta: FrameVideoMeta;
+  /**
+   * A decorative loop on a host that is not curated, otherwise worth a button (VIDEO-DETECT-SPEC
+   * §2.5): it gets the mark alone, only while the pointer is over it (§5.1 "Quiet videos").
+   */
+  quiet?: boolean;
   /** When it last started playing or loaded its metadata (`timers.now()`), if it did. */
   startedAt?: number;
 }
@@ -103,6 +135,10 @@ export type TrackerEvent =
   | { type: 'reveal'; id: number }
   /** A video lost its media (`emptied`): its panel closes. */
   | { type: 'emptied'; id: number }
+  /** The pointer entered another grid tile (`tile`, compact sites only). */
+  | { type: 'tile' }
+  /** The user asked for the panel of this video from the context menu (`requested`). */
+  | { type: 'open'; id: number }
   /** The extension went away (reloaded or updated): the UI removes itself for good. */
   | { type: 'invalidated' };
 
@@ -124,6 +160,26 @@ export interface TrackerApi {
   refreshState(): void;
   /** True for the first UI script that mounts; false afterwards (one layer per frame). */
   claimUi(): boolean;
+  /**
+   * The video whose panel the user asked for from the context menu: it gets a button and its
+   * panel even where buttons are not allowed or it is not meaningful (§5.1 "Menu").
+   */
+  readonly requested: number | undefined;
+  /** The requested video's panel closed: the usual rules apply to it again. */
+  release(id: number): void;
+  /** The grid tile the pointer last entered, while it is in the page (§5.1 "Grid tiles"). */
+  readonly tile?: VideoTileTarget | undefined;
+  /**
+   * Whether a video element is shown (its IntersectionObserver ratio at least 0.5): undefined when
+   * it is not tracked or has no ratio yet (the feed walk's carousel rule, §5.1 "Carousels").
+   */
+  shown?(el: Element): boolean | undefined;
+  /**
+   * The pointer entered a Download button (VIDEO-DETECT-SPEC §5.5, amended 2026-11-19): the
+   * look-ahead of the frame's video address, under its usual rules, goes out now instead of after
+   * the rest of the dwell. Optional: an older tracker has none.
+   */
+  lookAheadNow?(): void;
 }
 
 /** Whether `v` is a tracker API of this protocol version. */
@@ -158,6 +214,27 @@ export interface VideoTrackerDeps {
   dwell?: (deps: PrefetchDwellDeps) => DwellLike;
   /** `document.visibilityState === 'visible'`. */
   visible?: () => boolean;
+  /** Whether an event came from the user (`event.isTrusted`; tests substitute it). */
+  isTrusted?: (e: Event) => boolean;
+  /**
+   * Whether an address is on a curated site's host (`siteOfAddress`, VIDEO-DETECT-SPEC §3.8): no
+   * video of such a top frame (`topFrame`) is decorative (§2.5). An embedded frame on such a host
+   * (a player on another site's page, such as a landing page's background loop) keeps the rule.
+   * Undefined: none is.
+   */
+  curatedHost?: (url: string) => boolean;
+  /**
+   * Whether an address is on a compact social site's host (`compactSite`, VIDEO-DETECT-SPEC §5.1
+   * "Social sites"): its top frame also runs the late-mount observer and finds grid tiles.
+   */
+  compactHost?: (url: string) => boolean;
+  /** `new MutationObserver(cb)`; undefined: no late-mount observer. */
+  mutations?: (cb: () => void) => MutationObserverLike | undefined;
+  /**
+   * The post a grid tile's link names in a frame at `frameUrl` (`tilePost`, §3.8 "Tiles", §5.1
+   * "Grid tiles"): its address, else undefined (also on a video address or in private messages).
+   */
+  tileVideo?: (href: string, frameUrl: string) => string | undefined;
 }
 
 interface VideoState {
@@ -223,11 +300,31 @@ export class VideoTracker {
   #state: 'unknown' | 'asking' | 'known' = 'unknown';
   #askAgain = false;
   #allowed = false;
-  #uiAsked = false;
+  /** The frame's videos asked for the overlay UI once (a refusal is not asked again for them). */
+  #uiAskedOnce = false;
   #uiClaimed = false;
   #invalidated = false;
   #dwell: DwellLike | undefined;
   #options: VideoOptions | undefined;
+  /** The pending or answered `downex:video-ui` request: whether the overlay UI is in the frame. */
+  #ui: Promise<boolean> | undefined;
+  /**
+   * The last trusted `contextmenu` event, and when: its `<video>`, or else where it was (a video in
+   * a closed shadow root that was never tracked is looked for there when the menu item is chosen).
+   */
+  #menuVideo: { el?: HTMLVideoElement; x?: number; y?: number; at: number } | undefined;
+  /** The id of the video whose panel the context menu asked for (`showPanel`). */
+  #requested: number | undefined;
+  /** A trusted `pointermove` was seen in the frame: quiet videos may ask for the overlay UI. */
+  #pointed = false;
+  /** The frame address `curatedHost` was last asked about, and its answer. */
+  #curatedFor: { url: string; curated: boolean } | undefined;
+  /** The late-mount observer and its pending check (compact sites' top frames). */
+  #mutations: MutationObserverLike | undefined;
+  #mutationTimer: unknown;
+  /** The grid tile the pointer last entered (§5.1 "Grid tiles"), and the last link judged. */
+  #tile: VideoTileTarget | undefined;
+  #lastLink: Element | undefined;
   readonly api: TrackerApi;
 
   constructor(deps: VideoTrackerDeps) {
@@ -262,6 +359,21 @@ export class VideoTracker {
         this.#uiClaimed = true;
         return true;
       },
+      get requested() {
+        return self.#invalidated ? undefined : self.#requested;
+      },
+      release: (id) => this.#release(id),
+      get tile() {
+        const t = self.#tile;
+        return !self.#invalidated && t?.el.isConnected ? t : undefined;
+      },
+      shown: (el) => {
+        const s = this.#states.get(el);
+        return s?.ratio === undefined ? undefined : s.ratio >= VISIBLE_RATIO;
+      },
+      lookAheadNow: () => {
+        if (!this.#invalidated) this.#dwell?.now?.();
+      },
     };
   }
 
@@ -272,7 +384,12 @@ export class VideoTracker {
       this.#doc.addEventListener(type, onMedia, true);
       this.#cleanup.push(() => this.#doc.removeEventListener(type, onMedia, true));
     }
-    const onPointer = () => {
+    const onPointer = (e: Event) => {
+      if (!this.#pointed && (this.#deps.isTrusted ?? ((x: Event) => x.isTrusted))(e)) {
+        this.#pointed = true;
+        // A quiet video may now ask for the overlay UI (§2.5).
+        this.#changed(false);
+      }
       const now = this.#timers.now();
       if (now - this.#lastPointerCheck < POINTER_CHECK_MS) return;
       this.#lastPointerCheck = now;
@@ -281,8 +398,102 @@ export class VideoTracker {
     const opts: AddEventListenerOptions = { capture: true, passive: true };
     this.#doc.addEventListener('pointermove', onPointer, opts);
     this.#cleanup.push(() => this.#doc.removeEventListener('pointermove', onPointer, opts));
+    // Which video the user right-clicked, for "Show Downex download panel"; never prevented.
+    const onMenu = (e: Event) => this.#onContextMenu(e);
+    this.#doc.addEventListener('contextmenu', onMenu, opts);
+    this.#cleanup.push(() => this.#doc.removeEventListener('contextmenu', onMenu, opts));
+    if (this.#compactFrame()) this.#startCompact(opts);
     this.check();
     this.navigated();
+  }
+
+  /**
+   * A compact social site's top frame (VIDEO-DETECT-SPEC §5.1 "Social sites"): the late-mount
+   * observer, whose callback only schedules one check MUTATION_CHECK_MS later, and the grid tiles'
+   * `pointerover`.
+   */
+  #startCompact(opts: AddEventListenerOptions): void {
+    const mo = this.#deps.mutations?.(() => {
+      if (this.#mutationTimer !== undefined || this.#invalidated) return;
+      this.#mutationTimer = this.#timers.setTimeout(() => {
+        this.#mutationTimer = undefined;
+        this.check();
+      }, MUTATION_CHECK_MS);
+    });
+    if (mo) {
+      try {
+        mo.observe(this.#doc, { childList: true, subtree: true });
+        this.#mutations = mo;
+      } catch {
+        mo.disconnect();
+      }
+    }
+    if (this.#deps.tileVideo) {
+      const onOver = (e: Event) => this.#onPointerOver(e);
+      this.#doc.addEventListener('pointerover', onOver, opts);
+      this.#cleanup.push(() => this.#doc.removeEventListener('pointerover', onOver, opts));
+    }
+  }
+
+  /** Whether this is the top frame of a compact social site (`compactHost`). */
+  #compactFrame(): boolean {
+    if (this.#deps.topFrame !== true || !this.#deps.compactHost) return false;
+    try {
+      return this.#deps.compactHost((this.#deps.location ?? (() => this.#doc.location?.href ?? ''))());
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The pointer entered an element (trusted `pointerover`, compact sites' top frames): when it is
+   * in a link to a video (`tileVideo`) on the frame's origin, holding no `<video>` with a button of
+   * its own and at least MIN_TILE_PX square, that link is the frame's grid tile (§5.1 "Grid tiles"). Only the link's
+   * resolved address and its box are read, locally; the overlay UI is asked for as for a quiet video.
+   */
+  #onPointerOver(e: Event): void {
+    if (this.#invalidated || !(this.#deps.isTrusted ?? ((x: Event) => x.isTrusted))(e)) return;
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+    let link: Element | undefined;
+    for (let i = 0; i < path.length && i < 16; i++) {
+      const n = path[i] as Partial<Element> | null;
+      if (n && n.localName === 'a') {
+        link = n as Element;
+        break;
+      }
+    }
+    if (!link || link === this.#lastLink) return;
+    this.#lastLink = link;
+    if (this.#tile?.el === link) return;
+    const href = (link as HTMLAnchorElement).href;
+    const url = typeof href === 'string' && href !== '' ? this.#deps.tileVideo?.(href, this.#frameUrl()) : undefined;
+    if (!url || this.#holdsButtonVideo(link)) return;
+    const r = link.getBoundingClientRect();
+    if (!(r.width >= MIN_TILE_PX && r.height >= MIN_TILE_PX)) return;
+    this.#tile = { el: link, url };
+    this.#emit({ type: 'tile' });
+    this.#changed(false);
+  }
+
+  /** The frame's address now. */
+  #frameUrl(): string {
+    return (this.#deps.location ?? (() => this.#doc.location?.href ?? ''))();
+  }
+
+  /**
+   * Whether a link holds a `<video>` that gets a button of its own (meaningful, or a quiet loop):
+   * a hover preview too small for one (under MIN_VIDEO_WIDTH × MIN_VIDEO_HEIGHT) leaves the tile
+   * its button (§5.1 "Grid tiles").
+   */
+  #holdsButtonVideo(link: Element): boolean {
+    const videos = link.getElementsByTagName('video');
+    for (let i = 0; i < videos.length; i++) {
+      const s = videos[i] ? this.#states.get(videos[i] as HTMLVideoElement) : undefined;
+      if (!s) continue;
+      const x = this.#examine(s);
+      if (x.meta.meaningful || x.quiet) return true;
+    }
+    return false;
   }
 
   /** Puts the API where the overlay UI script finds it. */
@@ -302,7 +513,8 @@ export class VideoTracker {
     return this.#list
       .filter((s) => s.el.isConnected)
       .map((s) => {
-        const v: TrackedVideo = { id: s.id, el: s.el, meta: this.#meta(s) };
+        const { meta, quiet } = this.#examine(s);
+        const v: TrackedVideo = { id: s.id, el: s.el, meta, quiet };
         if (s.startedAt !== undefined) v.startedAt = s.startedAt;
         return v;
       });
@@ -386,9 +598,51 @@ export class VideoTracker {
     return visited;
   }
 
-  /** A message of the background (validated with isFrameMessage). */
+  /** A message of the background (validated with isFrameMessage); `downex:show-panel` → `showPanel()`. */
   onFrameMessage(m: FrameMessage): void {
     if (m.type === 'downex:frame-media-seen') this.deepScan();
+    else if (m.type === 'downex:show-panel') void this.showPanel();
+  }
+
+  /**
+   * "Show Downex download panel" (VIDEO-DETECT-SPEC §5.1 "Menu"): the video right-clicked in the
+   * last MENU_VIDEO_MS, still in the page, is tracked (room is made for it at the cap), marked
+   * requested and its panel opened by the overlay UI, asked for if it was not yet. A right-click
+   * that named no video looks under the pointer once more after a deep scan (a closed shadow
+   * root's video that never played). False when there is no such video, or the overlay UI could
+   * not be put into the frame (asked again on the next request).
+   */
+  async showPanel(): Promise<boolean> {
+    if (this.#invalidated) return false;
+    const m = this.#menuVideo;
+    this.#menuVideo = undefined;
+    if (!m || this.#timers.now() - m.at > MENU_VIDEO_MS) return false;
+    let el = m.el;
+    if (!el && m.x !== undefined && m.y !== undefined) {
+      this.deepScan();
+      el = this.#videoAt(m.x, m.y);
+    }
+    if (!el || !el.isConnected) return false;
+    let s = this.#states.get(el);
+    if (!s) {
+      if (this.#list.length >= MAX_TRACKED_VIDEOS) {
+        const victim = this.#list.find((x) => x.ratio === 0) ?? this.#list.find((x) => x.id !== this.#requested);
+        if (victim) this.#untrack(victim);
+      }
+      this.#track(el, el.getRootNode() !== this.#doc);
+      s = this.#states.get(el);
+      if (!s) return false;
+    }
+    const id = s.id;
+    this.#requested = id;
+    this.#changed(true);
+    if (!(await this.#askUi())) {
+      if (this.#requested === id) this.#requested = undefined;
+      return false;
+    }
+    if (this.#invalidated || this.#requested !== id) return false;
+    this.#emit({ type: 'open', id });
+    return true;
   }
 
   /** Asks again whether buttons may show (options changed, "Don't show on <host>"). */
@@ -411,6 +665,14 @@ export class VideoTracker {
   /** The frame's address may have changed (SPA navigation, back/forward, page cache). */
   navigated(): void {
     if (this.#invalidated) return;
+    // A tile the new address no longer takes (a video address, private messages) goes (§5.1 "Grid tiles").
+    const tile = this.#tile;
+    if (tile && this.#deps.tileVideo?.(tile.url, this.#frameUrl()) === undefined) {
+      this.#tile = undefined;
+      this.#lastLink = undefined;
+      this.#emit({ type: 'tile' });
+      this.#changed(false);
+    }
     this.#startDwell();
     this.#dwell?.sync();
   }
@@ -439,6 +701,10 @@ export class VideoTracker {
     for (const s of this.#list) this.#untrackListeners(s);
     this.#io?.disconnect();
     this.#ro?.disconnect();
+    this.#mutations?.disconnect();
+    if (this.#mutationTimer !== undefined) this.#timers.clearTimeout(this.#mutationTimer);
+    this.#mutationTimer = undefined;
+    this.#tile = undefined;
     if (this.#evalTimer !== undefined) this.#timers.clearTimeout(this.#evalTimer);
     if (this.#reportTimer !== undefined) this.#timers.clearTimeout(this.#reportTimer);
     this.#evalTimer = undefined;
@@ -480,6 +746,7 @@ export class VideoTracker {
   }
 
   #untrack(s: VideoState): void {
+    if (s.id === this.#requested) this.#requested = undefined;
     this.#untrackListeners(s);
     this.#io?.unobserve(s.el);
     this.#ro?.unobserve(s.el);
@@ -492,6 +759,65 @@ export class VideoTracker {
     if (!onMedia) return;
     for (const type of MEDIA_EVENTS) s.el.removeEventListener(type, onMedia);
     shadowListeners.delete(s.el);
+  }
+
+  /**
+   * A right-click: its target is kept when it is a `<video>` (an open shadow root's too), else a
+   * tracked video under the pointer (one in a closed shadow root, which the event does not name),
+   * else the point, which `showPanel` looks under again after a deep scan. With `showPanel`, the
+   * only place the tracker reads layout.
+   */
+  #onContextMenu(e: Event): void {
+    if (this.#invalidated || !(this.#deps.isTrusted ?? ((x: Event) => x.isTrusted))(e)) return;
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    const t = (path[0] ?? e.target) as Element | null;
+    const at = this.#timers.now();
+    if (t && t.localName === 'video') {
+      this.#menuVideo = { el: t as HTMLVideoElement, at };
+      return;
+    }
+    const { clientX: x, clientY: y } = e as MouseEvent;
+    if (typeof x !== 'number' || typeof y !== 'number') {
+      this.#menuVideo = undefined;
+      return;
+    }
+    const el = this.#videoAt(x, y);
+    this.#menuVideo = el ? { el, at } : { x, y, at };
+  }
+
+  /** The tracked video whose box holds the point (client coordinates). */
+  #videoAt(x: number, y: number): HTMLVideoElement | undefined {
+    return this.#list.find((s) => {
+      if (!s.el.isConnected) return false;
+      const r = s.el.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom && r.width > 0 && r.height > 0;
+    })?.el;
+  }
+
+  /**
+   * Asks the background for the overlay UI once per frame (`downex:video-ui`); a refusal or no
+   * answer lets the next request ask again.
+   */
+  #askUi(): Promise<boolean> {
+    if (!this.#ui) {
+      const asking = this.#send({ type: 'downex:video-ui' }).then((answer) => answer?.ok === true);
+      this.#ui = asking;
+      void asking.then((ok) => {
+        if (!ok && this.#ui === asking) this.#ui = undefined;
+      });
+    }
+    return this.#ui;
+  }
+
+  /** The requested video's panel closed; the overlay UI hears it in a moment (not from inside its close). */
+  #release(id: number): void {
+    if (this.#invalidated || this.#requested !== id) return;
+    this.#requested = undefined;
+    this.#timers.setTimeout(() => {
+      if (this.#invalidated) return;
+      this.#emit({ type: 'state' });
+      this.#emit({ type: 'videos' });
+    }, 0);
   }
 
   #onMedia(e: Event): void {
@@ -550,12 +876,30 @@ export class VideoTracker {
     return this.#examine(s).meta;
   }
 
+  /** Whether the top frame's own address is on a curated site's host (§2.5), asked once per address. */
+  #curatedFrame(): boolean {
+    const ask = this.#deps.curatedHost;
+    if (!ask || this.#deps.topFrame !== true) return false;
+    const url = (this.#deps.location ?? (() => this.#doc.location?.href ?? ''))();
+    if (this.#curatedFor?.url !== url) {
+      let curated = false;
+      try {
+        curated = ask(url);
+      } catch {
+        curated = false;
+      }
+      this.#curatedFor = { url, curated };
+    }
+    return this.#curatedFor.curated;
+  }
+
   /**
    * The video's state (VIDEO-DETECT-SPEC §2.5), and whether it is `notable`: a video the user
    * may be watching (it has media, no camera stream, is visible, large enough and not a
-   * background loop), worth reporting even when protected or live.
+   * background loop), worth reporting even when protected or live. `quiet`: a background loop
+   * that would otherwise be meaningful, off the curated hosts (its mark shows on hover only).
    */
-  #examine(s: VideoState): { meta: FrameVideoMeta; notable: boolean } {
+  #examine(s: VideoState): { meta: FrameVideoMeta; notable: boolean; quiet: boolean } {
     const v = s.el;
     const current = typeof v.currentSrc === 'string' ? v.currentSrc : '';
     const http = /^https?:\/\//i.test(current);
@@ -572,15 +916,24 @@ export class VideoTracker {
     const drm = s.encrypted || (keys !== null && keys !== undefined);
     const visible = this.#io ? (s.ratio ?? 0) >= VISIBLE_RATIO : true;
     const sized = s.width >= MIN_VIDEO_WIDTH && s.height >= MIN_VIDEO_HEIGHT;
-    const decorative = v.muted && v.loop && !v.controls && durationMs >= 0 && durationMs < DECORATIVE_MAX_MS;
+    const loop = v.muted && v.loop && !v.controls && durationMs >= 0 && durationMs < DECORATIVE_MAX_MS;
+    // On a curated site's host such loops are the site's videos (TikTok, Instagram, X, Pinterest).
+    const decorative = loop && !this.#curatedFrame();
+    // A MediaStream (a camera, a call, a screen) is never a button's; any other source object is
+    // Media Source Extensions run from a worker (a MediaSourceHandle: Facebook's players), an MSE
+    // player like a `blob:` one (§2.5, amended 2026-11-18).
+    const object = (v as { srcObject?: unknown }).srcObject;
+    const stream = object != null && typeof (object as { getTracks?: unknown }).getTracks === 'function';
+    const handle = object != null && !stream;
     const source = http || /^blob:/i.test(current) || (v.readyState ?? 0) >= 1;
-    const free = (v as { srcObject?: unknown }).srcObject == null;
-    const notable = v.isConnected && free && source && sized && visible && !decorative;
+    const free = !stream;
+    const watchable = v.isConnected && free && source && sized && visible;
+    const notable = watchable && !decorative;
     return {
       meta: {
         id: s.id,
         src: src.length <= MAX_SRC_CHARS ? src : '',
-        mse: /^blob:/i.test(current),
+        mse: /^blob:/i.test(current) || handle,
         width: count(s.width, 1_000_000),
         height: count(s.height, 1_000_000),
         videoWidth: count(v.videoWidth, 65_535),
@@ -592,6 +945,7 @@ export class VideoTracker {
         meaningful: notable && !live && !drm,
       },
       notable,
+      quiet: watchable && decorative && !live && !drm,
     };
   }
 
@@ -611,14 +965,17 @@ export class VideoTracker {
     // A removed video is let go (its IntersectionObserver entry usually brings us here).
     for (const s of this.#list) if (!s.el.isConnected) this.#untrack(s);
     const examined = this.#list.map((s) => this.#examine(s));
-    const meaningful = examined.some((x) => x.meta.meaningful);
+    // A quiet video asks for the UI only once the pointer moved in the frame (§2.5); a grid tile
+    // only exists once the pointer entered it (§5.1 "Grid tiles").
+    if (this.#tile && !this.#tile.el.isConnected) this.#tile = undefined;
+    const meaningful = examined.some((x) => x.meta.meaningful || (x.quiet && this.#pointed)) || this.#tile !== undefined;
     // Reports start with the first video the user may be watching, protected or live included
     // (they drive the popup's "Protected" and the badge); pages without one cost nothing.
     if (!this.#active) this.#active = examined.some((x) => x.notable);
     if (meaningful && this.#state === 'unknown') this.#askState();
-    if (meaningful && this.#allowed && !this.#uiAsked) {
-      this.#uiAsked = true;
-      void this.#send({ type: 'downex:video-ui' });
+    if (meaningful && this.#allowed && !this.#uiAskedOnce) {
+      this.#uiAskedOnce = true;
+      void this.#askUi();
     }
     this.#emit({ type: 'videos' });
     this.#scheduleReport();

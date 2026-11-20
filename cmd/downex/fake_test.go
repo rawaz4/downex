@@ -70,8 +70,36 @@ type fakeDaemon struct {
 	installErr   error
 	installWait  chan struct{}
 	toolInstalls []*downexv1.InstallToolsRequest
+	// RenewLink answers renewed (renewErr fails it); renews records the requests.
+	renews   []*downexv1.RenewLinkRequest
+	renewed  *downexv1.RenewLinkResponse
+	renewErr error
+	// Rescue answers rescued (rescueErr fails it); rescues records the requests.
+	rescues   []*downexv1.RescueRequest
+	rescued   *downexv1.RescueResponse
+	rescueErr error
 	// watch serves Watch when set; send delivers one batch of events.
 	watch func(ctx context.Context, req *downexv1.WatchRequest, send func(...*downexv1.Event) error) error
+}
+
+func (f *fakeDaemon) RenewLink(_ context.Context, req *connect.Request[downexv1.RenewLinkRequest]) (*connect.Response[downexv1.RenewLinkResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renews = append(f.renews, req.Msg)
+	if f.renewErr != nil {
+		return nil, f.renewErr
+	}
+	return connect.NewResponse(f.renewed), nil
+}
+
+func (f *fakeDaemon) Rescue(_ context.Context, req *connect.Request[downexv1.RescueRequest]) (*connect.Response[downexv1.RescueResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rescues = append(f.rescues, req.Msg)
+	if f.rescueErr != nil {
+		return nil, f.rescueErr
+	}
+	return connect.NewResponse(f.rescued), nil
 }
 
 func (f *fakeDaemon) Add(_ context.Context, req *connect.Request[downexv1.AddRequest]) (*connect.Response[downexv1.AddResponse], error) {

@@ -2,6 +2,7 @@ package shell
 
 import (
 	"downex/ui/core/categories"
+	"downex/ui/core/display"
 	"downex/ui/core/format"
 	"downex/ui/kit"
 	"downex/ui/kit/tokens"
@@ -46,6 +47,9 @@ type HeaderOptions struct {
 	OnDensity                       func(compact bool)
 	OnToggleDetails, OnManageQueues func()
 	OnSelectAll                     func()
+
+	// OnRescue is the menu's "Rescue partial file…" (docs/DESKTOP-SPEC.md §11).
+	OnRescue func()
 }
 
 // The header's metrics (Toolbar.svelte).
@@ -112,6 +116,7 @@ var chipFilters = [3]struct {
 var AddItems = []widgets.MenuItem{
 	{ID: "files", Label: "Add downloads…", Icon: "add", Shortcut: "Ctrl+N"},
 	{ID: "stream", Label: "Add video or stream…", Icon: "stream"},
+	{ID: "rescue", Label: display.RescueLabel, Icon: "restart"}, // docs/DESKTOP-SPEC.md §11
 }
 
 // NewHeader makes the page header.
@@ -192,9 +197,12 @@ func NewHeader(o HeaderOptions) *Header {
 	h.more.Style.Margin = kit.Edges{Start: kit.Px(moreStart), End: kit.Px(moreEnd)}
 
 	h.add = widgets.NewSplitButton("Add", "add", func() { h.call(h.opts.OnAdd) }, AddItems, func(id string) {
-		if id == "stream" && h.opts.OnAddVideo != nil {
+		switch {
+		case id == "stream" && h.opts.OnAddVideo != nil:
 			h.opts.OnAddVideo()
-		} else {
+		case id == "rescue" && h.opts.OnRescue != nil:
+			h.opts.OnRescue()
+		default:
 			h.call(h.opts.OnAdd)
 		}
 	}, "More ways to add", "Add")

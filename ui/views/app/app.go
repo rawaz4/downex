@@ -32,6 +32,8 @@ type Screens struct {
 	Confirm  func(*views.App, views.ConfirmRequest) views.Modal
 	Remove   func(*views.App, views.RemoveRequest) views.Modal
 	Restart  func(*views.App, views.RestartRequest) views.Modal
+	Renew    func(*views.App, views.RenewRequest) views.Modal
+	Rescue   func(*views.App, views.RescueRequest) views.Modal
 	Open     func(*views.App, views.OpenRequest) views.Modal
 	Move     func(*views.App, views.MoveRequest) views.Modal
 	Settings func(*views.App, views.SettingsRequest) views.Modal
@@ -76,6 +78,8 @@ type Main struct {
 	confirmGen int
 	confirmID  int64
 	confirmOn  *confirmModal
+	// elsewhere reports the standalone Confirm download window open (SetConfirmElsewhere).
+	elsewhere func() bool
 
 	arrivals  arrivals
 	toolsWere bool
@@ -137,6 +141,7 @@ func New(app *views.App, o Options) (*Main, error) {
 		Header: shell.HeaderOptions{
 			OnAdd:      func() { app.Open.Add(views.AddRequest{}) },
 			OnAddVideo: func() { app.Open.Add(views.AddRequest{Mode: views.AddStream}) },
+			OnRescue:   func() { app.Open.Rescue(views.RescueRequest{}) },
 			OnResume:   func() { app.Act.Resume(nil) },
 			OnPause:    func() { app.Act.Pause(nil) },
 			OnRemove:   func() { app.Open.Remove(views.RemoveRequest{IDs: m.selectedIDs()}) },
@@ -166,6 +171,7 @@ func New(app *views.App, o Options) (*Main, error) {
 		Status: shell.StatusOptions{
 			OnLimit:      func(c views.LimitChoice) { app.Act.SetGlobalLimit(c) },
 			OnPostAction: func(c views.WhenDoneChoice) { app.Act.SetWhenDone(c) },
+			OnPolite:     func(on bool) { app.Act.SetPolite(on) },
 		},
 		OnRetry: func() { app.Go(app.Main.Downloads.RetryNow) },
 	})
@@ -185,6 +191,7 @@ func New(app *views.App, o Options) (*Main, error) {
 	app.Watch(&ma.Queues.Changes, m.refresh)
 	app.Watch(&ma.Tools.Changes, m.refresh)
 	app.Watch(&ma.Update.Changes, m.refresh)
+	app.Watch(&ma.Polite.Changes, m.refresh)
 	app.Watch(&ma.Changes, m.refresh)
 	app.Watch(&app.Dialogs.Changes, m.refresh)
 	app.Watch(&app.Details.Changes, m.refresh)
@@ -239,6 +246,17 @@ func (m *Main) RequestConfirm(ids []int64) {
 	m.App.UI(func() {
 		for _, id := range ids {
 			m.requestConfirm(id, false)
+		}
+		m.refresh()
+	})
+}
+
+// RequestRenew shows the New link dialogs of ids ("--renew <id>": a progress window's
+// "New link…", docs/DESKTOP-SPEC.md §10), on the UI thread.
+func (m *Main) RequestRenew(ids []int64) {
+	m.App.UI(func() {
+		for _, id := range ids {
+			m.App.Open.Renew(views.RenewRequest{ID: id})
 		}
 		m.refresh()
 	})
@@ -330,6 +348,7 @@ func (m *Main) refresh() {
 			PostAction: wd, PostActionKnown: wdKnown, PostActionChoices: queues.PostActionChoices(a.QueueCaps(), cur),
 			FreeBytes: m.freeBytes, FreeKnown: m.freeKnown, DriveLabel: format.DriveLabel(settings.GetDefaultDir()),
 			NeedBytes: views.NeedBytes(ds.All()),
+			Polite:    m.politeStatus(), PoliteOn: settings.GetPoliteMode(),
 		})
 	}
 
@@ -340,4 +359,10 @@ func (m *Main) refresh() {
 	m.arrivalsEffect()
 	m.confirmEffect()
 	m.updateEffect(stale)
+}
+
+// politeStatus is Polite mode's status as downexd last reported it (nil: none yet).
+func (m *Main) politeStatus() *downexv1.PoliteStatus {
+	st, _ := m.App.Main.Polite.Status()
+	return st
 }

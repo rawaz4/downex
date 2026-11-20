@@ -135,12 +135,20 @@ describe('isExtensionMessage of the video detection', () => {
   it('accepts the requests of the tracker and the overlay UI', () => {
     expect(isExtensionMessage({ type: 'downex:video-ui' })).toBe(true);
     expect(isExtensionMessage({ type: 'downex:overlay-state' })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:video-features' })).toBe(true);
     expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true })).toBe(true);
     expect(isExtensionMessage({ type: 'downex:frame-offers', src: 'https://a.example/v.mp4', mse: false })).toBe(true);
     expect(isExtensionMessage({ type: 'downex:frame-offers', src: 'blob:https://a.example/1', mse: true })).toBe(false);
     expect(isExtensionMessage({ type: 'downex:frame-offers', src: 'https://a.example/v.mp4#x', mse: false })).toBe(false);
     expect(isExtensionMessage({ type: 'downex:frame-offers', src: 'https://a.example/v.mp4' })).toBe(false);
     expect(isExtensionMessage({ type: 'downex:frame-offers', mse: false })).toBe(false);
+    // A feed video's own post (VIDEO-DETECT-SPEC §5.1 "Feed videos"): http(s), no fragment, bounded.
+    expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true, post: 'https://www.example.com/p/1/' })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true, post: '' })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true, post: 'javascript:void 0' })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true, post: 'https://www.example.com/p/1/#c' })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true, post: `https://www.example.com/${'a'.repeat(32 * 1024)}` })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:frame-offers', src: '', mse: true, post: 7 })).toBe(false);
   });
 
   it('accepts stream probes of stream keys and adds of any offer key', () => {
@@ -156,6 +164,14 @@ describe('isExtensionMessage of the video detection', () => {
     }
     expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', videoTrack: '1080p', audioTrack: '' })).toBe(true);
     expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', videoTrack: 'v'.repeat(1025) })).toBe(false);
+    // A part of the video (MEDIA-SPEC §8): a start, and an optional end after it.
+    expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', clipStartMs: 80000, clipEndMs: 165000 })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', clipStartMs: 80000 })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', clipEndMs: 165000 })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', clipStartMs: 9000, clipEndMs: 5000 })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', clipStartMs: 1.5 })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:page-video-add', url: 'https://v.example/1', videoTrack: '', audioTrack: '', clipStartMs: -1 })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:page-video-add', url: 'https://v.example/1', videoTrack: '', audioTrack: '', clipStartMs: 1000 })).toBe(true);
     expect(isExtensionMessage({ type: 'downex:offer-add', key: 's2', audioTrack: 5 })).toBe(false);
     expect(isExtensionMessage({ type: 'downex:offer-add', key: 'x2' })).toBe(false);
     expect(isExtensionMessage({ type: 'downex:offer-add', key: 'youtube:abc' })).toBe(false);
@@ -196,10 +212,24 @@ describe('isExtensionMessage of the video detection', () => {
 describe('isFrameMessage', () => {
   it('accepts the messages the background sends to a frame only', () => {
     expect(isFrameMessage({ type: 'downex:frame-media-seen' })).toBe(true);
+    expect(isFrameMessage({ type: 'downex:show-panel' })).toBe(true);
     expect(isFrameMessage({ type: 'downex:frame-offers', src: '', mse: false })).toBe(false);
     expect(isFrameMessage({ type: 'other' })).toBe(false);
     expect(isFrameMessage({})).toBe(false);
     expect(isFrameMessage(null)).toBe(false);
     expect(isFrameMessage('downex:frame-media-seen')).toBe(false);
+  });
+});
+
+describe('isExtensionMessage of the rescue card (BROWSER-SPEC §6)', () => {
+  it('accepts browser download ids only', () => {
+    expect(isExtensionMessage({ type: 'downex:failed-downloads' })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:finish-download', downloadId: 4 })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:finish-download', downloadId: 4, fromStart: true })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:finish-download', downloadId: 4, fromStart: 'yes' })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:finish-download', downloadId: -1 })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:finish-download', downloadId: '4' })).toBe(false);
+    expect(isExtensionMessage({ type: 'downex:hide-failed', downloadId: 4 })).toBe(true);
+    expect(isExtensionMessage({ type: 'downex:hide-failed', downloadId: 1.5 })).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import (
 
 	"downex/internal/daemon"
 	"downex/internal/engine"
+	"downex/internal/polite"
 )
 
 // testHooks replace parts of the system for the end-to-end tests of internal/e2e, which
@@ -33,4 +34,9 @@ type testHooks struct {
 	// passEnv is the prefix of the variables passed on to yt-dlp and Deno
 	// (tools.Config.PassEnvPrefix): the stand-in tools of the tests read theirs.
 	passEnv string
+	// politeProber answers Polite mode's probes instead of the network
+	// (daemon.Config.PoliteProber; nil: the system's prober), and politeLoopback makes the
+	// test servers on loopback addresses anchors (docs/POLITE-SPEC.md §9).
+	politeProber   polite.Prober
+	politeLoopback bool
 }

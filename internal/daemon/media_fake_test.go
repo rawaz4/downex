@@ -32,20 +32,22 @@ import (
 // return container, or when that is "" what the real job returns: "ts" for a LegacyTS
 // run, else "mp4".
 type fakeMedia struct {
-	mu        sync.Mutex
-	probe     MediaProbe
-	probeErr  error
-	fragments int
-	container string
-	gate      chan struct{}      // nil: no waiting
-	workers   []model.WorkerView // reported with every progress event
-	runErr    error              // returned after failAfter fragments of a run
-	failAfter int
-	inflight  int64 // bytes every progress event reports beyond the durable fragments (requests in flight)
-	probes    []MediaSelection
-	runs      []fakeMediaRun
-	active    int // runs in progress
-	maxActive int
+	mu         sync.Mutex
+	probe      MediaProbe
+	probeErr   error
+	fragments  int
+	container  string
+	gate       chan struct{}      // nil: no waiting
+	workers    []model.WorkerView // reported with every progress event
+	runErr     error              // returned after failAfter fragments of a run
+	failAfter  int
+	beforeFail func()           // called just before a run returns runErr
+	inflight   int64            // bytes every progress event reports beyond the durable fragments (requests in flight)
+	clip       *model.MediaClip // reported after a run with a part completes (Progress.Clip)
+	probes     []MediaSelection
+	runs       []fakeMediaRun
+	active     int // runs in progress
+	maxActive  int
 }
 
 type fakeMediaRun struct {
@@ -128,7 +130,9 @@ func (f *fakeMedia) Run(ctx context.Context, opts MediaRunOptions, sel MediaSele
 	sel.Headers = sel.Headers.Clone()
 	f.runs = append(f.runs, fakeMediaRun{opts: opts, sel: sel, resume: resume.Clone()})
 	n, gate, runErr, failAfter, container, workers := f.fragments, f.gate, f.runErr, f.failAfter, f.container, slices.Clone(f.workers)
+	clip := f.clip
 	inflight := f.inflight
+	beforeFail := f.beforeFail
 	f.active++
 	f.maxActive = max(f.maxActive, f.active)
 	f.mu.Unlock()
@@ -176,6 +180,9 @@ func (f *fakeMedia) Run(ctx context.Context, opts MediaRunOptions, sel MediaSele
 		}
 		if runErr != nil && written == failAfter {
 			_ = checkpoint()
+			if beforeFail != nil {
+				beforeFail()
+			}
 			return "", runErr
 		}
 		if gate != nil {
@@ -225,6 +232,10 @@ func (f *fakeMedia) Run(ctx context.Context, opts MediaRunOptions, sel MediaSele
 	}
 	if err := os.Rename(part, opts.OutPath); err != nil {
 		return "", err
+	}
+	if clip != nil && !sel.Clip.IsZero() {
+		c := *clip
+		onProgress(MediaProgress{FragmentsTotal: n, FragmentsDone: n, BytesDone: received, Clip: &c})
 	}
 	// Like the real job, the part directory is left to the daemon.
 	return container, nil

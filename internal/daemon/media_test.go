@@ -466,15 +466,23 @@ func TestMediaPauseResumeRestartRemove(t *testing.T) {
 		t.Errorf("part dir kept after remove: %v", err)
 	}
 
-	// Remove without delete_file keeps the fragments.
+	// Remove without delete_file deletes the fragments too: nothing resumes them without
+	// the record (amendment 2026-11-19); a file of the user's beside them stays.
 	d3 := h.addMedia(&downexv1.AddMediaRequest{ManifestUrl: testManifest, Dir: dir, Filename: "third"})
 	fm.feed(t, 1)
 	h.waitFor(d3.GetId(), "1 fragment", func(d *downexv1.Download) bool { return d.GetMedia().GetFragmentsDone() >= 1 })
+	mine := filepath.Join(dir, "third.mp4.notes")
+	if err := os.WriteFile(mine, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.dl.Remove(ctxT(t), connect.NewRequest(&downexv1.RemoveRequest{Id: d3.GetId()})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(MediaPartsDir(dir, "third.mp4")); err != nil {
-		t.Errorf("part dir removed without delete_file: %v", err)
+	if _, err := os.Lstat(MediaPartsDir(dir, "third.mp4")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("part dir kept after remove without delete_file: %v", err)
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Errorf("a user file went with the remove: %v", err)
 	}
 }
 
@@ -517,6 +525,25 @@ func TestMediaFailureCodes(t *testing.T) {
 		if want := codes[d.GetId()]; d.GetErrorCode() != want {
 			t.Errorf("after restart: %s has code %q, want %q (%s)", d.GetFilename(), d.GetErrorCode(), want, d.GetError())
 		}
+	}
+}
+
+// A media download that fails with nothing resumable leaves no part directory; one
+// that fails midway keeps it for a resume (amendment 2026-11-19).
+func TestMediaFailedPartsDir(t *testing.T) {
+	fm := newFakeMedia(4)
+	h := newHarness(t, harnessOptions{media: fm})
+	fm.set(func(f *fakeMedia) { f.runErr, f.failAfter = errors.New("boom"), 0 })
+	d := h.addMedia(&downexv1.AddMediaRequest{ManifestUrl: testManifest, Dir: h.dir, Filename: "none"})
+	h.waitState(d.GetId(), stFailed)
+	if _, err := os.Lstat(MediaPartsDir(h.dir, "none.mp4")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("part dir of a failure with nothing resumable: %v", err)
+	}
+	fm.set(func(f *fakeMedia) { f.runErr, f.failAfter = errors.New("boom"), 2 })
+	d = h.addMedia(&downexv1.AddMediaRequest{ManifestUrl: testManifest, Dir: h.dir, Filename: "half"})
+	h.waitState(d.GetId(), stFailed)
+	if _, err := os.Stat(MediaPartsDir(h.dir, "half.mp4")); err != nil {
+		t.Errorf("part dir of a resumable failure: %v", err)
 	}
 }
 
@@ -811,6 +838,8 @@ func TestMediaErrorCodeMapping(t *testing.T) {
 		"mediajob: unexpected HTTP status 403 Forbidden":                         CodeHTTPStatus,
 		"fragment 7: mediajob: response ended early":                             CodeNetwork,
 		"mediajob: server answered with a different byte range":                  CodeHTTPStatus,
+		"fragment 3: mediajob: response has a content coding: gzip":              CodeHTTPStatus,
+		"mediajob: response has a content coding: media: unsupported operation":  CodeMediaUnsupported,
 		"mediajob: invalid track selection: audio with a muxed track":            CodeMediaInvalid,
 		"mediajob: not an HLS playlist or DASH MPD":                              CodeMediaInvalid,
 		"remux: unsupported operation: TS video with separate TS audio":          CodeMediaUnsupported,

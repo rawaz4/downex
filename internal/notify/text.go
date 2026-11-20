@@ -24,6 +24,12 @@ const (
 	titleCompleted = "Download complete"
 	titleFailed    = "Download failed"
 	titleConfirm   = "Confirm download"
+	// Expired links (docs/DESKTOP-SPEC.md §10).
+	titleLinkExpired = "Link expired"
+	titleRenewed     = "Download continues"
+	textLinkExpired  = "Give it a new link in Downex."
+	textKept         = "The data received so far is kept."
+	textRenewed      = "It continues with the new link."
 )
 
 // Clean returns s fit to show in a notification or tooltip: control characters,
@@ -93,6 +99,7 @@ var shortErrors = map[string]string{
 	"validator_changed": "The file changed on the server; restart the download.",
 	"stalled":           "The transfer stalled.",
 	"invalid_request":   "The request could not be sent.",
+	"link_expired":      "The link stopped working.",
 }
 
 var (
@@ -134,9 +141,14 @@ func ShortError(code, message string) string {
 	return "Unknown error."
 }
 
-// Tooltip is the tray tooltip for s: "Downex — N active, X/s".
+// Tooltip is the tray tooltip for s: "Downex — N active, X/s", with " · Polite: slowed"
+// while Polite mode holds the downloads back.
 func Tooltip(s Summary) string {
-	return fmt.Sprintf("Downex — %d active, %s/s", s.Active, FormatBytes(s.Speed))
+	tip := fmt.Sprintf("Downex — %d active, %s/s", s.Active, FormatBytes(s.Speed))
+	if s.PoliteSlowed {
+		tip += " · Polite: slowed"
+	}
+	return tip
 }
 
 // FormatBytes formats n bytes with decimal units (1 KB = 1000 B), like the CLI: "512 B",

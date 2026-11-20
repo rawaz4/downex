@@ -3,6 +3,7 @@
 package update
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -17,9 +18,6 @@ func TestAuthenticodeUnsigned(t *testing.T) {
 		if err := os.WriteFile(p, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := authenticode(p); !errors.Is(err, ErrUnsigned) {
-			t.Errorf("%s: %v, want ErrUnsigned", name, err)
-		}
 		if s, err := VerifyAuthenticode(p); !errors.Is(err, ErrUnsigned) || s.Subject != "" {
 			t.Errorf("VerifyAuthenticode(%s) = %+v, %v, want ErrUnsigned", name, s, err)
 		}
@@ -29,10 +27,10 @@ func TestAuthenticodeUnsigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authenticode(exe); !errors.Is(err, ErrUnsigned) {
+	if _, err := VerifyAuthenticode(exe); !errors.Is(err, ErrUnsigned) {
 		t.Errorf("test binary: %v, want ErrUnsigned", err)
 	}
-	if err := authenticode(filepath.Join(dir, "missing.exe")); err == nil || errors.Is(err, ErrUnsigned) {
+	if _, err := VerifyAuthenticode(filepath.Join(dir, "missing.exe")); err == nil || errors.Is(err, ErrUnsigned) {
 		t.Errorf("missing file: %v, want an error other than ErrUnsigned", err)
 	}
 }
@@ -61,8 +59,13 @@ func TestVerifyAuthenticodeSigner(t *testing.T) {
 		if !strings.Contains(s.Subject, "Microsoft") {
 			t.Errorf("VerifyAuthenticode(%s) subject %q, want a Microsoft signer", p, s.Subject)
 		}
-		if err := authenticode(p); err != nil {
-			t.Errorf("authenticode(%s): %v", p, err)
+		// The full subject distinguished name, DER encoded: the CN is in it, and reading it
+		// twice gives the same bytes (the updater compares them).
+		if len(s.SubjectName) == 0 || !bytes.Contains(s.SubjectName, []byte("Microsoft")) {
+			t.Errorf("VerifyAuthenticode(%s) subject name %q, want the DER subject", p, s.SubjectName)
+		}
+		if again, err := VerifyAuthenticode(p); err != nil || !bytes.Equal(again.SubjectName, s.SubjectName) {
+			t.Errorf("VerifyAuthenticode(%s) again: %q, %v", p, again.SubjectName, err)
 		}
 		return
 	}

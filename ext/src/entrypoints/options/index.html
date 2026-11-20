@@ -22,6 +22,10 @@
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.5v4a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4M12 4.5v10M7.5 10l4.5 4.5 4.5-4.5" /></svg>
             Capture rules
           </a>
+          <a href="#rescue-form">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.25 12a7.25 7.25 0 1 1-2.2-5.2M19.5 4.5v4h-4" /></svg>
+            Failed downloads
+          </a>
           <a href="#video-form">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.75 5.5h14.5a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM10.25 8.5v5l4.25-2.5zM4.5 19.5h3M10.5 19.5h3M16.5 19.5h3" /></svg>
             Videos on web pages
@@ -101,6 +105,39 @@
           </div>
         </form>
 
+        <!-- Failed downloads (BROWSER-SPEC §6): the switch is saved when it changes. -->
+        <form id="rescue-form" class="card" novalidate aria-labelledby="rescue-title">
+          <div class="sec-head">
+            <span class="tile" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M19.25 12a7.25 7.25 0 1 1-2.2-5.2M19.5 4.5v4h-4" /></svg>
+            </span>
+            <h2 id="rescue-title">Failed downloads</h2>
+            <span class="pill">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3.5 6 13.5h5.5l-1 7 7-10H12z" /></svg>
+              Saved as you change it
+            </span>
+            <p class="intro">
+              When a download fails or stops in the browser, the toolbar menu offers to finish it with
+              Downex from the bytes already saved. Downex first checks that the server still has the same
+              file.
+            </p>
+          </div>
+
+          <div class="field">
+            <label class="switch-row">
+              <span class="sw-text">
+                <span id="rescue-notify-label" class="sw-label">Offer to finish failed downloads with a notification</span>
+                <span id="rescue-notify-hint" class="sw-hint">Shows a notification when a download fails in the browser. The browser asks you to allow notifications first.</span>
+              </span>
+              <input id="rescue-notify" type="checkbox" role="switch" aria-labelledby="rescue-notify-label" aria-describedby="rescue-notify-hint" />
+            </label>
+          </div>
+
+          <div class="actions status-bar">
+            <p id="rescue-status" class="muted" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+
         <!-- Videos on web pages: each switch is saved when it changes, the sites when the field is left. -->
         <form id="video-form" class="card" novalidate aria-labelledby="video-title">
           <div class="sec-head">
@@ -143,11 +180,11 @@
               <span class="sw-text">
                 <span id="video-prefetch-label" class="sw-label">Prepare video qualities while you watch</span>
                 <span id="video-prefetch-hint" class="sw-hint">
-                  After you stay 1.5 seconds on a video of YouTube, Vimeo, X, TikTok, Dailymotion, Reddit,
-                  Twitch or Streamable, Downex gets its qualities in the background, so Download lists them at
+                  After you stay 1.5 seconds on a video of YouTube, Vimeo, X, TikTok, Dailymotion, Twitch or
+                  Streamable, Downex gets its qualities in the background, so Download lists them at
                   once. It runs only while the Download button is shown on that site, Downex is running and
                   its video tools are set up: one video at a time, at most about one a minute. It never sends
-                  your sign-in cookies, so it pauses while sending them is allowed.
+                  your sign-in cookies.
                 </span>
               </span>
               <input id="video-prefetch" type="checkbox" role="switch" aria-labelledby="video-prefetch-label" aria-describedby="video-prefetch-hint" />
@@ -157,11 +194,27 @@
           <div class="field">
             <label class="switch-row">
               <span class="sw-text">
-                <span id="video-sign-in-label" class="sw-label">Send my sign-in cookies when a video needs it</span>
+                <span id="watch-played-label" class="sw-label">Watch videos as they play</span>
+                <span id="watch-played-hint" class="sw-hint">
+                  So that Download saves the video you see on sites such as TikTok, Instagram or Facebook, each tab
+                  remembers for 30 minutes the addresses and sizes of the video files its pages loaded (never their
+                  contents or your cookies). Only when you click Download do they go to Downex on this computer.
+                </span>
+              </span>
+              <input id="watch-played" type="checkbox" role="switch" aria-labelledby="watch-played-label" aria-describedby="watch-played-hint" />
+            </label>
+          </div>
+
+          <div class="field">
+            <label class="switch-row">
+              <span class="sw-text">
+                <span id="video-sign-in-label" class="sw-label">Use my sign-in for videos that need it</span>
                 <span id="video-sign-in-hint" class="sw-hint">
-                  For age-checked, members-only or bot-checked videos: the cookies of the video's own page go
-                  to Downex on this computer for that video only, and are never stored. The site may restrict
-                  accounts used this way.
+                  YouTube only, and only when you click Download and YouTube answers that the video needs a sign-in
+                  (age-checked or members-only videos; never for a bot check): Downex asks once more with your
+                  cookies for youtube.com. Other sites are always read without your cookies. They go only to Downex on this computer, which keeps them
+                  in memory for that video’s own download only, never stores them and never sends them anywhere else.
+                  Never from private windows. The site may restrict accounts used this way.
                 </span>
               </span>
               <input id="video-sign-in" type="checkbox" role="switch" aria-labelledby="video-sign-in-label" aria-describedby="video-sign-in-hint" />

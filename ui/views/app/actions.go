@@ -5,6 +5,7 @@ import (
 
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
+	"downex/ui/core/display"
 	"downex/ui/core/format"
 	"downex/ui/core/queues"
 	"downex/ui/core/text"
@@ -24,6 +25,8 @@ func (m *Main) fill() {
 		Confirm:     func(r views.ConfirmRequest) { m.requestConfirm(r.ID, r.Requested); m.refresh() },
 		Remove:      m.requestRemove,
 		Restart:     m.requestRestart,
+		Renew:       m.openRenew,
+		Rescue:      m.openRescue,
 		Open:        func(r views.OpenRequest) { m.show(m.screen(func(s Screens) views.Modal { return call(s.Open, a, r) })) },
 		MoveToQueue: m.openMove,
 		Settings:    m.openSettings,
@@ -61,10 +64,12 @@ func (m *Main) fill() {
 		ToggleDetails:    func() { a.Details.Toggle() },
 		SetGlobalLimit:   m.setGlobalLimit,
 		SetWhenDone:      m.setWhenDone,
+		SetPolite:        m.setPolite,
 		OpenLimitMenu:    func() { m.Shell.StatusBarSlot().OpenLimitMenu() },
 		OpenWhenDoneMenu: func() { m.Shell.StatusBarSlot().OpenWhenDoneMenu() },
 		SetDownloadLimit: m.setDownloadLimit,
 		AddSiteLogin:     m.addSiteLogin,
+		OpenPage:         m.openPage,
 		CancelPostAction: func(q int64) { m.cancelPostAction(q, nil) },
 		OpenMenu:         m.openMenu,
 		CloseMenu:        func() { m.closeMenu(true) },
@@ -142,6 +147,53 @@ func (m *Main) openMove(r views.MoveRequest) {
 	}
 	m.show(m.screen(func(s Screens) views.Modal { return call(s.Move, m.App, r) }))
 }
+
+// openRenew opens the New link dialog of a download (docs/DESKTOP-SPEC.md §10): a file
+// download that is paused or failed; unavailable while stale.
+func (m *Main) openRenew(r views.RenewRequest) {
+	m.closeMenu(false)
+	if m.App.Stale() {
+		m.App.Unavailable()
+		return
+	}
+	if d, ok := m.App.Main.Downloads.Get(r.ID); !ok || !display.Renewable(d) {
+		return
+	}
+	m.show(m.screen(func(s Screens) views.Modal { return call(s.Renew, m.App, r) }))
+}
+
+// openRescue opens the Rescue partial file dialog (docs/DESKTOP-SPEC.md §11); unavailable
+// while stale.
+func (m *Main) openRescue(r views.RescueRequest) {
+	m.closeMenu(false)
+	if m.App.Stale() {
+		m.App.Unavailable()
+		return
+	}
+	m.show(m.screen(func(s Screens) views.Modal { return call(s.Rescue, m.App, r) }))
+}
+
+// openPage opens the page a download came from in the browser (Open page).
+func (m *Main) openPage(id int64) {
+	m.closeMenu(false)
+	d, ok := m.App.Main.Downloads.Get(id)
+	page := ""
+	if ok {
+		page = display.PageURL(d)
+	}
+	if page == "" {
+		return
+	}
+	a := m.App
+	m.do(func(ctx contextT) {
+		if err := a.Platform.OpenPage(ctx, page); err != nil {
+			a.Error(OpenPageFailed)
+		}
+	})
+}
+
+// OpenPageFailed is the toast of an "Open page" the browser did not take.
+const OpenPageFailed = display.OpenPageFailed
 
 // requestRemove is App.svelte's requestRemove: nothing for no ids, unavailable while stale.
 func (m *Main) requestRemove(r views.RemoveRequest) {
@@ -311,8 +363,9 @@ func (m *Main) resumeAll() {
 }
 
 // openDownload is a row's Enter or double-click: the dialog of one awaiting confirmation, the
-// progress window of an unfinished one, the file of a completed one (programs and names with
-// hidden bidi controls are confirmed first: opening them can run code).
+// progress window of an unfinished one, the file of a completed one (programs, names with
+// hidden bidi controls and files that are not what their names say are confirmed first:
+// opening them can run code; categories.NeedsOpenConfirm).
 func (m *Main) openDownload(id int64) {
 	a := m.App
 	d, ok := a.Main.Downloads.Get(id)
@@ -336,8 +389,7 @@ func (m *Main) openDownload(id int64) {
 		m.openProgress(id)
 		return
 	}
-	raw := categories.RawName(d)
-	if categories.IsExecutableName(raw) || text.HasBidiControls(raw) {
+	if categories.NeedsOpenConfirm(d) {
 		a.Open.Open(views.OpenRequest{ID: id})
 		return
 	}
@@ -456,6 +508,32 @@ func (m *Main) setGlobalLimit(c views.LimitChoice) {
 			a.Success("Global speed limit: " + format.Speed(float64(l)))
 		} else {
 			a.Success("Global speed limit: unlimited")
+		}
+	})
+}
+
+// setPolite turns Polite mode on or off with a full settings round-trip (docs/POLITE-SPEC.md
+// §8); polite_target_ms and every other field stay as downexd has them.
+func (m *Main) setPolite(on bool) {
+	a := m.App
+	if a.Stale() {
+		a.Unavailable()
+		return
+	}
+	m.do(func(ctx contextT) {
+		saved, err := host.EditSettings(ctx, a.Daemon, func(s *downexv1.Settings) error {
+			s.PoliteMode = on
+			return nil
+		})
+		if err != nil {
+			a.Error("Could not change Polite mode: " + errText(err))
+			return
+		}
+		a.Main.SetSettings(saved)
+		if saved.GetPoliteMode() {
+			a.Success("Polite mode on")
+		} else {
+			a.Success("Polite mode off")
 		}
 	})
 }

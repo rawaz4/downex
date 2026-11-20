@@ -7,12 +7,15 @@ import (
 	"downex/internal/limiter"
 )
 
-// The speed limits form a chain (docs/M6-SPEC.md §1): global → queue → download. The
-// global limiter is a limiter root; every queue and every run has a chainLink below its
-// parent. A run's parent is the limiter of the queue its download is in now: moveLocked
-// re-points it when the download changes queues, also when DeleteQueue moves it to the
-// main queue, so that the old queue's limit stops applying at once (a limiter level
-// cannot change its parent).
+// The speed limits form a chain (docs/M6-SPEC.md §1, docs/POLITE-SPEC.md §5): global →
+// polite → queue → download. The global limiter is a limiter root; Polite mode's level
+// (polite.go) is a chainLink below it whose own limit is Polite mode's cap (0 while it
+// does not slow anything), and every queue and every run has a chainLink below its
+// parent. A queue's parent is the polite level. A run's parent is the limiter of the
+// queue its download is in now: moveLocked re-points it when the download changes queues,
+// also when DeleteQueue moves it to the main queue, so that the old queue's limit stops
+// applying at once (a limiter level cannot change its parent). Every run's link counts
+// the bytes it lets through into Polite mode's byte meter.
 
 // chainChunk is the most a chainLink takes from one level before it moves on to the
 // next: at most the smallest bucket depth of a limited level (64 KiB), so that each level
@@ -28,6 +31,7 @@ const chainChunk = 64 << 10
 type chainLink struct {
 	own    limiter.Limiter
 	parent atomic.Pointer[parentLimiter]
+	meter  atomic.Pointer[atomic.Int64] // counts the bytes of WaitN (runs only; nil: none)
 }
 
 // parentLimiter boxes the parent of a chainLink for atomic replacement.
@@ -47,6 +51,11 @@ func newChainLink(bytesPerSecond int64, parent limiter.Limiter) *chainLink {
 // progress finishes on the previous one.
 func (c *chainLink) setParent(p limiter.Limiter) { c.parent.Store(&parentLimiter{p}) }
 
+// setMeter makes WaitN add every byte it is asked for to m (docs/POLITE-SPEC.md rule 16):
+// the receive rate Polite mode measures. Only a run's link has one, so that no byte is
+// counted twice along the chain.
+func (c *chainLink) setMeter(m *atomic.Int64) { c.meter.Store(m) }
+
 // WaitN blocks until n bytes may pass this level and every level above it, or ctx is
 // done (then it returns ctx.Err()). Once the whole chain is unlimited the rest passes at
 // once.
@@ -56,6 +65,9 @@ func (c *chainLink) WaitN(ctx context.Context, n int) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if m := c.meter.Load(); m != nil && n > 0 {
+		m.Add(int64(n)) // before the unlimited fast path: every byte counts
 	}
 	for n > 0 && c.Limit() > 0 {
 		chunk := min(n, chainChunk)

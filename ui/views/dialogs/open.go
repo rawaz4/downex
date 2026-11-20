@@ -2,6 +2,7 @@ package dialogs
 
 import (
 	"downex/ui/core/categories"
+	"downex/ui/core/display"
 	"downex/ui/core/text"
 	"downex/ui/kit"
 	"downex/ui/kit/widgets"
@@ -9,8 +10,9 @@ import (
 )
 
 // Open is OpenDialog.svelte: the question before a completed download whose file can run
-// code, or whose name hides its type with bidi control characters, is opened (App.svelte's
-// openDownload). "Run this program?" (or "Open this program with another app?" for Open
+// code, whose name hides its type with bidi control characters, or whose file check found
+// that it is not what its name says (DANGER, docs/DESKTOP-SPEC.md §9.7) is opened
+// (App.svelte's openDownload). "Run this program?" (or "Open this program with another app?" for Open
 // with…) with the danger tone and the alert, or "Open this file?" with the info tone and the
 // open icon; the name in a monospaced box (bidi controls shown as ⟨U+…⟩) and, when the name
 // hides controls, the warning in --danger. Cancel is focused first.
@@ -31,8 +33,24 @@ type Open struct {
 	submit  *widgets.Button
 }
 
-// OpenTexts are OpenDialog's title, description and action for a file.
-func OpenTexts(executable, withApp bool) (title, description, action string) {
+// DisguisedTitle is the Open dialog's title for a file that is not what its name says
+// (docs/DESKTOP-SPEC.md §9.7).
+const DisguisedTitle = "This file is not what its name says"
+
+// OpenTexts are OpenDialog's title, description and action for a file. A disguised file
+// (its file check is DANGER) is asked about with its own title, the check's summary and
+// detail as the description, and "… anyway" actions.
+func OpenTexts(executable, withApp bool, disguise string) (title, description, action string) {
+	if disguise != "" {
+		action = "Open anyway"
+		switch {
+		case withApp:
+			action = "Choose app anyway…"
+		case executable:
+			action = "Run anyway"
+		}
+		return DisguisedTitle, disguise, action
+	}
 	title = "Open this file?"
 	description = "Check the file name before opening it."
 	if executable {
@@ -56,12 +74,6 @@ func OpenTexts(executable, withApp bool) (title, description, action string) {
 // HiddenControlsWarning is OpenDialog's warning about a name with bidi control characters.
 const HiddenControlsWarning = "The name contains hidden text-direction characters, shown here as ⟨U+…⟩. They can make a file look like a different type than it is."
 
-// NeedsOpenConfirm reports a completed download that is confirmed before it opens: a program
-// or a name that hides its type (App.svelte's openDownload).
-func NeedsOpenConfirm(raw string) bool {
-	return categories.IsExecutableName(raw) || text.HasBidiControls(raw)
-}
-
 // NewOpen makes the open confirmation for req. confirm runs when the user confirms, before
 // the dialog goes ("confirm first: closing clears the caller's dialog state"); nil is
 // App.svelte's openFile, a toast when it fails. Open with… (WithApp, the progress window's
@@ -73,6 +85,7 @@ func NewOpen(app *views.App, req views.OpenRequest, confirm func()) *Open {
 		if d, ok := app.Main.Downloads.Get(req.ID); ok {
 			raw := categories.RawName(d)
 			f.Executable, f.HiddenControls = categories.IsExecutableName(raw), text.HasBidiControls(raw)
+			f.Disguise = display.DisguiseText(d)
 		}
 	}
 	return NewOpenFile(app, f, confirm)
@@ -87,6 +100,9 @@ type OpenFile struct {
 	// Executable: the file would run code when opened; HiddenControls: its real name has
 	// bidi control characters; WithApp: Open with… (the user chooses the app next).
 	Executable, HiddenControls, WithApp bool
+	// Disguise is the description of a file that is not what its name says (display.DisguiseText;
+	// "" for any other file): the dialog then asks with that title and "… anyway".
+	Disguise string
 }
 
 // NewOpenFile is NewOpen for f: the same dialog, its facts given rather than read from
@@ -97,11 +113,11 @@ func NewOpenFile(app *views.App, f OpenFile, confirm func()) *Open {
 		o.confirm = o.open
 	}
 	display, executable := f.Name, f.Executable
-	title, desc, action := OpenTexts(executable, f.WithApp)
+	title, desc, action := OpenTexts(executable, f.WithApp, f.Disguise)
 	o.Dialog = app.NewDialog(views.ModalOpen, widgets.DialogOptions{
 		Title: title, Description: desc, Alert: true, Size: widgets.DialogSm, OnSubmit: o.Submit,
 	})
-	if executable {
+	if executable || f.Disguise != "" {
 		o.SetIcon(newTone(toneDanger, "alert"))
 	} else {
 		o.SetIcon(newTone(toneInfo, "open"))

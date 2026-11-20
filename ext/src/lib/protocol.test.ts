@@ -80,6 +80,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('added.renewCheck', () => {
+  it('is kept when it is a boolean, and refuses the answer otherwise', () => {
+    expect(parseResponse({ id: 'a', ok: true, type: 'added', downloadId: 7, awaiting: false, renewCheck: true })?.outcome).toEqual({
+      ok: true,
+      value: { type: 'added', downloadId: 7, awaiting: false, renewCheck: true },
+    });
+    expect(parseResponse({ id: 'a', ok: true, type: 'added', downloadId: 7 })?.outcome).toEqual({
+      ok: true,
+      value: { type: 'added', downloadId: 7 },
+    });
+    expect(parseResponse({ id: 'a', ok: true, type: 'added', downloadId: 7, renewCheck: 'yes' })?.outcome.ok).toBe(false);
+  });
+});
+
 describe('parseResponse', () => {
   it('parses success and error responses', () => {
     expect(parseResponse({ id: 'a', ok: true, type: 'added', downloadId: 7 })).toEqual({
@@ -93,6 +107,25 @@ describe('parseResponse', () => {
     expect(parseResponse({ id: 'a', ok: true, type: 'status', running: true, active: 1, queued: 0 })?.outcome.ok).toBe(
       true,
     );
+    // Polite mode's fields (docs/POLITE-SPEC.md §8): optional, known states only, the rate only while slowed.
+    const status = (extra: Record<string, unknown>) =>
+      parseResponse({ id: 'a', ok: true, type: 'status', running: true, active: 1, queued: 0, ...extra })?.outcome;
+    expect(status({})).toEqual({ ok: true, value: { type: 'status', running: true, active: 1, queued: 0 } });
+    expect(status({ polite: 'slowed', politeRate: 2400000 })).toEqual({
+      ok: true,
+      value: { type: 'status', running: true, active: 1, queued: 0, polite: 'slowed', politeRate: 2400000 },
+    });
+    expect(status({ polite: 'watching', politeRate: 5 })).toEqual({
+      ok: true,
+      value: { type: 'status', running: true, active: 1, queued: 0, polite: 'watching' },
+    });
+    for (const junk of ['SLOWED', 'fast', 3, null, {}]) {
+      expect(status({ polite: junk, politeRate: 1 })).toEqual({ ok: true, value: { type: 'status', running: true, active: 1, queued: 0 } });
+    }
+    expect(status({ polite: 'slowed', politeRate: -1 })).toEqual({
+      ok: true,
+      value: { type: 'status', running: true, active: 1, queued: 0, polite: 'slowed' },
+    });
   });
   it('rejects uncorrelated and malformed messages', () => {
     expect(parseResponse(null)).toBeUndefined();
@@ -678,6 +711,98 @@ describe('NativeClient stream requests (VIDEO-DETECT-SPEC §3.5)', () => {
     }
   });
 
+  it('sends a part only to a relay that lists clips, and reads videoInfo chapters', async () => {
+    const part = { ...fields, clipStartMs: 80000, clipEndMs: 165000 };
+    {
+      const { client, ports } = setup();
+      client.start();
+      const p = ports[0]!;
+      const a = client.addMedia(part, { timeoutMs: 15000 });
+      welcome(p, ['video', 'streams']);
+      await expect(a).resolves.toEqual({ ok: false, error: { code: 'outdated_downex', message: 'Update Downex to save part of a video.' } });
+      expect(p.sent.map((m) => m.type)).toEqual(['hello']);
+    }
+    const { client, ports } = setup();
+    client.start();
+    const p = ports[0]!;
+    const a = client.addMedia(part, { timeoutMs: 15000 });
+    welcome(p, ['video', 'streams', 'clips']);
+    expect(p.last()).toMatchObject({ type: 'addMedia', clipStartMs: 80000, clipEndMs: 165000 });
+    p.reply({ id: p.last().id, ok: true, type: 'added', downloadId: 3, awaiting: false });
+    await expect(a).resolves.toMatchObject({ ok: true });
+    const probe = client.probeStream(fields);
+    const chapters = [{ startMs: 0, endMs: 80000, title: 'Intro' }, { startMs: 80000, endMs: 165000, title: 'Rest' }];
+    p.reply({ id: p.last().id, ok: true, ...videoInfo({ site: '', format: 'hls' }), chapters });
+    await expect(probe).resolves.toMatchObject({ ok: true, value: { chapters } });
+    // Chapters out of order are no chapters; the answer stands.
+    const probe2 = client.probeStream(fields);
+    p.reply({ id: p.last().id, ok: true, ...videoInfo({ site: '', format: 'hls' }), chapters: [chapters[1], chapters[0]] });
+    const got = await probe2;
+    expect(got.ok && got.value.chapters).toBe(undefined);
+  });
+
+  it('sends the sign-in’s domain only to a relay that lists signIn, the Cookie either way', async () => {
+    const page = {
+      pageUrl: 'https://www.instagram.com/reel/AbCdEfGh/',
+      deadlineMs: 28000,
+      headers: [['Cookie', 'sessionid=s1']] as [string, string][],
+      cookieDomain: 'instagram.com',
+    };
+    for (const [features, domain] of [
+      [['video'], undefined],
+      [['video', 'signIn'], 'instagram.com'],
+    ] as const) {
+      const { client, ports } = setup();
+      client.start();
+      const p = ports[0]!;
+      const probe = client.probeVideo({ ...page }, { timeoutMs: 28000 });
+      const add = client.addVideo({ ...page }, { timeoutMs: 28000 });
+      welcome(p, [...features]);
+      const sent = p.sent.filter((m) => m.type === 'probeVideo' || m.type === 'addVideo');
+      expect(sent).toHaveLength(2);
+      for (const m of sent) {
+        expect(m).toMatchObject({ headers: [['Cookie', 'sessionid=s1']] });
+        expect(m.cookieDomain).toBe(domain);
+      }
+      for (const m of sent) p.reply({ id: m.id, ok: true, ...(m.type === 'probeVideo' ? videoInfo() : { type: 'added', downloadId: 1 }) });
+      await probe;
+      await add;
+    }
+  });
+
+  it('sends an item of a page with several videos only to a relay that lists items', async () => {
+    const page = { pageUrl: 'https://www.example.com/p/POST/', deadlineMs: 28000, entryId: 'itemB' };
+    {
+      const { client, ports } = setup();
+      client.start();
+      const p = ports[0]!;
+      const a = client.probeVideo(page, { timeoutMs: 28000 });
+      const b = client.addVideo(page, { timeoutMs: 28000 });
+      welcome(p, ['video', 'prefetch', 'streams', 'clips']);
+      for (const r of [a, b]) {
+        await expect(r).resolves.toEqual({ ok: false, error: { code: 'outdated_downex', message: 'Update Downex to choose a video of this page.' } });
+      }
+      expect(p.sent.map((m) => m.type)).toEqual(['hello']);
+    }
+    const { client, ports } = setup();
+    client.start();
+    const p = ports[0]!;
+    const a = client.probeVideo(page, { timeoutMs: 28000 });
+    welcome(p, ['video', 'items']);
+    expect(p.last()).toMatchObject({ type: 'probeVideo', entryId: 'itemB' });
+    // Without an item, an older relay is still asked.
+    const plain = { pageUrl: page.pageUrl };
+    p.reply({ id: p.last().id, ok: true, ...videoInfo() });
+    await a;
+    const { client: c2, ports: p2 } = setup();
+    c2.start();
+    const q = c2.probeVideo(plain, { timeoutMs: 28000 });
+    welcome(p2[0]!, ['video']);
+    expect(p2[0]!.last()).toMatchObject({ type: 'probeVideo', pageUrl: page.pageUrl });
+    p2[0]!.reply({ id: p2[0]!.last().id, ok: true, ...videoInfo() });
+    await expect(q).resolves.toMatchObject({ ok: true });
+  });
+
   it('sends probeStream to a relay with streams, taking the welcome wait off its deadline', async () => {
     const { client, ports } = setup();
     client.start();
@@ -749,5 +874,57 @@ describe('NativeClient stream requests (VIDEO-DETECT-SPEC §3.5)', () => {
       ok: false,
       error: { code: 'protocol' },
     });
+  });
+});
+
+describe('NativeClient rescue requests (BROWSER-SPEC §6)', () => {
+  const welcome = (p: FakePort, features: string[]) => {
+    const hello = p.sent.find((m) => m.type === 'hello') as { id: string };
+    p.reply({ id: hello.id, ok: true, type: 'welcome', protocol: 1, daemonVersion: '3.0.0', features });
+  };
+  const fields = {
+    url: 'https://cdn.example.com/big.iso',
+    headers: [['Cookie', 'sid=1']] as [string, string][],
+    target: '/home/u/Downloads/big.iso',
+    bytesReceived: 4096,
+    totalBytes: 10_000,
+    startPaused: true,
+    deadlineMs: 30_000,
+  };
+
+  it('never sends rescue or resume to a relay without the rescue feature', async () => {
+    const { client, ports } = setup();
+    client.start();
+    const p = ports[0]!;
+    const a = client.rescue(fields);
+    const b = client.resume(7);
+    welcome(p, ['video', 'prefetch', 'streams', 'renew']);
+    const outdated = { ok: false, error: { code: 'outdated_downex', message: 'Update Downex to finish downloads that failed in the browser.' } };
+    await expect(a).resolves.toEqual(outdated);
+    await expect(b).resolves.toEqual(outdated);
+    expect(p.sent.map((m) => m.type)).toEqual(['hello']);
+  });
+
+  it('sends rescue with its deadline less the welcome wait, and reads rescued and resumed', async () => {
+    const { client, ports } = setup();
+    client.start();
+    const p = ports[0]!;
+    const a = client.rescue(fields, { timeoutMs: 32_000 });
+    vi.advanceTimersByTime(300);
+    welcome(p, ['video', 'rescue']);
+    expect(p.last()).toEqual({ ...fields, type: 'rescue', id: p.last().id, deadlineMs: 29_700 });
+    p.reply({ id: p.last().id, ok: true, type: 'rescued', downloadId: 57, keptBytes: 4096 });
+    await expect(a).resolves.toEqual({ ok: true, value: { type: 'rescued', downloadId: 57, keptBytes: 4096 } });
+    expect(client.daemonReady).toBe(true);
+    const r = client.resume(57);
+    expect(p.last()).toEqual({ type: 'resume', downloadId: 57, id: p.last().id });
+    p.reply({ id: p.last().id, ok: true, type: 'resumed', downloadId: '57' });
+    await expect(r).resolves.toEqual({ ok: true, value: { type: 'resumed', downloadId: '57' } });
+  });
+
+  it('refuses malformed rescued and resumed answers', () => {
+    expect(parseResponse({ id: 'x', ok: true, type: 'rescued', downloadId: 1, keptBytes: -1 })?.outcome).toMatchObject({ ok: false, error: { code: 'protocol' } });
+    expect(parseResponse({ id: 'x', ok: true, type: 'rescued', downloadId: '', keptBytes: 1 })?.outcome).toMatchObject({ ok: false });
+    expect(parseResponse({ id: 'x', ok: true, type: 'resumed' })?.outcome).toMatchObject({ ok: false });
   });
 });

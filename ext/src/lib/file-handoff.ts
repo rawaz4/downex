@@ -3,7 +3,7 @@
 // the file, and records it in the hand-off history. Never `cookies.getAll` (§6.3, §9 #3): a file
 // carries only the Cookie the browser itself sent with its request. Pure: the client is injected.
 
-import { baseName, defaultPolicyReferer, filterHeaders, hasHeader, headerValue } from './context';
+import { baseName, defaultPolicyReferer, filterHeaders, hasHeader, headerValue, pageAddress } from './context';
 import type { AddSender } from './handoff';
 import type { HandoffHistory, HandoffRecord } from './history';
 import { httpUrl } from './media';
@@ -34,6 +34,8 @@ export interface FileSource {
   frameUrl?: string;
   /** The tab's title. */
   pageTitle?: string;
+  /** The tab's address: the page Downex offers to open when the link expires (DESKTOP-SPEC §10). */
+  pageUrl?: string;
 }
 
 function decodeSegment(seg: string): string {
@@ -89,6 +91,16 @@ function historyUrl(url: string): string {
 export interface FileFieldsDeps {
   userAgent: string;
   timeoutMs?: number;
+  /**
+   * Whether the page's credentials may go with the file (the sign-in option, SITE-MEDIA-SPEC §6.3);
+   * false: the Cookie and Authorization the browser sent are left out. Default true.
+   */
+  credentials?: boolean;
+}
+
+/** Headers without the page's credentials (Cookie, Authorization). */
+export function withoutCredentials(headers: readonly HeaderPair[]): HeaderPair[] {
+  return headers.filter(([name]) => !/^(cookie|authorization)$/i.test(name));
 }
 
 /**
@@ -101,6 +113,7 @@ export function buildFileAddFields(src: FileSource, deps: FileFieldsDeps): Outco
   const url = httpUrl(src.requestUrl) ?? httpUrl(src.url);
   if (!url) return failure('invalid_request', 'the video address cannot be handed to Downex');
   let headers = filterHeaders(src.headers ?? []);
+  if (deps.credentials === false) headers = withoutCredentials(headers);
   if (src.headers === undefined) {
     const referer = defaultPolicyReferer(httpUrl(src.frameUrl), url);
     if (referer) headers.push(['Referer', referer]);
@@ -119,10 +132,14 @@ export function buildFileAddFields(src: FileSource, deps: FileFieldsDeps): Outco
   // Only the Referer actually sent (or derived above): the relay adds `referrer` as one.
   const referrer = headerValue(headers, 'referer');
   if (referrer) fields.referrer = referrer;
+  const page = pageAddress(src.pageUrl) ?? pageAddress(src.frameUrl);
+  if (page) fields.pageUrl = page;
   return { ok: true, value: fields };
 }
 
-export interface FileHandoffDeps extends FileFieldsDeps {
+export interface FileHandoffDeps extends Omit<FileFieldsDeps, 'credentials'> {
+  /** Read for each add: the sign-in option (FileFieldsDeps.credentials); default true. */
+  credentials?: () => Promise<boolean>;
   client: AddSender;
   history?: HandoffHistory;
   now?: () => number;
@@ -156,7 +173,8 @@ export function createFileHandOff(deps: FileHandoffDeps): FileHandOff {
     let fields: AddFields | undefined;
     let outcome: Outcome<AddedResult>;
     try {
-      const built = buildFileAddFields(src, { ...deps, timeoutMs });
+      const credentials = deps.credentials ? await deps.credentials().catch(() => false) : true;
+      const built = buildFileAddFields(src, { userAgent: deps.userAgent, timeoutMs, credentials });
       if (!built.ok) {
         outcome = built;
       } else {

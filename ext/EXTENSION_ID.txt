@@ -5,7 +5,8 @@
 # be valid (32 letters a-p): a bad line fails the build instead of being skipped.
 
 # Development and unpacked builds, pinned by keys/public-key.txt (`pnpm keygen` rewrites
-# this line only).
+# this line only). Release builds keep it: it is the ID of the unpacked chrome-mv3 copy the
+# installer ships for Chrome, Brave and Chromium (docs/BROWSER-SPEC.md section 1).
 dlgpbdafcmciojddbbjikgeeefipejcn
 
 # Chrome Web Store: add the ID its dashboard shows after the first upload on a line of

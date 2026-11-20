@@ -210,7 +210,7 @@ func TestPaletteBesideTheDialog(t *testing.T) {
 }
 
 func TestMissingAndRecord(t *testing.T) {
-	if got := views.Missing(views.Openers{}); len(got) != 10 || got[0] != "Add" {
+	if got := views.Missing(views.Openers{}); len(got) != 12 || got[0] != "Add" {
 		t.Errorf("Missing(Openers{}) = %v", got)
 	}
 	h, _ := fake(t)
@@ -723,4 +723,53 @@ func near(a, b kit.Rect, d kit.DIP) bool {
 		return x
 	}
 	return abs(a.Min.X-b.Min.X) <= d && abs(a.Min.Y-b.Min.Y) <= d && abs(a.Max.X-b.Max.X) <= d && abs(a.Max.Y-b.Max.Y) <= d
+}
+
+// TestRenewCommands: docs/DESKTOP-SPEC.md §10.1, the context menu's "New link…" and "Open
+// page", and the palette's "New link…" and "Open download page".
+func TestRenewCommands(t *testing.T) {
+	h, _ := fake(t,
+		dl(1, state.StateFailed, func(d *downexv1.Download) {
+			d.ErrorCode, d.PageUrl = "link_expired", "https://pages.example/files"
+		}),
+		dl(2, state.StatePaused, nil),
+		dl(3, state.StateCompleted, nil),
+	)
+	app := h.App
+	ds := app.Main.Downloads
+	ds.SelectOnly(1)
+	m := menuLabels(app.Commands.MenuItems())
+	if it := m["renew"]; it.Label != "New link…" || it.Icon != "link" || it.Disabled {
+		t.Errorf("renew = %+v", it)
+	}
+	if it := m["open-page"]; it.Label != "Open page" || it.Icon != "external" {
+		t.Errorf("open-page = %+v", it)
+	}
+	app.Commands.RunMenuItem("renew")
+	if c, ok := h.Calls.Last("Renew"); !ok || c.Args[0].(views.RenewRequest).ID != 1 {
+		t.Errorf("Renew call %v", h.Calls.List)
+	}
+	app.Commands.RunMenuItem("open-page")
+	if c, ok := h.Calls.Last("OpenPage"); !ok || c.Args[0].(int64) != 1 {
+		t.Errorf("OpenPage call %v", h.Calls.List)
+	}
+	if !app.Commands.Run("new-link") || !app.Commands.Run("open-page") {
+		t.Error("the palette's commands did not run")
+	}
+
+	ds.SelectOnly(2) // paused, page unknown
+	m = menuLabels(app.Commands.MenuItems())
+	if _, ok := m["renew"]; !ok {
+		t.Error("no New link… for a paused download")
+	}
+	if _, ok := m["open-page"]; ok {
+		t.Error("Open page without a page")
+	}
+	if app.Commands.Run("open-page") {
+		t.Error("the palette opened an unknown page")
+	}
+	ds.SelectOnly(3) // completed
+	if _, ok := menuLabels(app.Commands.MenuItems())["renew"]; ok {
+		t.Error("New link… for a completed download")
+	}
 }

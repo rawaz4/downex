@@ -291,6 +291,22 @@ func TestDetailsVideoPages(t *testing.T) {
 		}
 	})
 
+	t.Run("shows a part's length and its sizes, not the whole video's", func(t *testing.T) {
+		p := showPane(t, SiteDownload(13, func(d *downexv1.Download) {
+			d.State = state.StateAwaiting
+			d.Media.Clip = &downexv1.MediaClip{StartMs: 80_000, EndMs: 165_000}
+		}), nil)
+		for term, want := range map[string]string{
+			"Site":  "YouTube video · 1:25 of 10:00",
+			"Video": "1080p (Full HD) 60fps · H.264 · ~70.8 MB · 1920×1080",
+			"Audio": "English original · AAC · 129 kbit/s · ~1.6 MB",
+		} {
+			if got, _ := p.fact(term); got != want {
+				t.Errorf("%s: %q, want %q", term, got, want)
+			}
+		}
+	})
+
 	t.Run("says it is getting the video info while yt-dlp reads the page", func(t *testing.T) {
 		p := showPane(t, SiteDownload(9, func(d *downexv1.Download) { d.State = state.StateProbing }), nil)
 		if s := textOf(&p.pill().Element); s != "Getting video info" {
@@ -333,6 +349,27 @@ func TestDetailsVideoPages(t *testing.T) {
 		}
 		if p.buttonNamed("Add site login…") != nil {
 			t.Error("Add site login…")
+		}
+	})
+
+	t.Run("says why a site refused it and what helps, with no useless Retry", func(t *testing.T) {
+		p := showPane(t, SiteDownload(14, func(d *downexv1.Download) {
+			d.State, d.ErrorCode = state.StateFailed, "site_error"
+			d.Error = "the site refused this quality to your browser too: play the video on its page, then download the quality it plays"
+		}), nil)
+		for _, want := range []string{
+			"The site refused this quality, to your browser too (HTTP 403).",
+			"Play the video on its page, then click Download in your browser and pick the quality it plays.",
+		} {
+			if findText(p.root(), want) == nil {
+				t.Errorf("no %q in %q", want, p.text())
+			}
+		}
+		if strings.Contains(p.text(), "Retrying may help") {
+			t.Errorf("generic hint: %q", p.text())
+		}
+		if p.buttonNamed("Retry") != nil {
+			t.Error("Retry")
 		}
 	})
 

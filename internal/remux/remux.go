@@ -129,11 +129,20 @@ func withContext(err error, format string, args ...any) error {
 // is removed again when Assemble fails or ctx is cancelled. The written file is
 // synced to stable storage before Assemble returns.
 func Assemble(ctx context.Context, inputs []Input, outPath string) (container string, err error) {
+	res, err := AssembleWindow(ctx, inputs, outPath, Window{})
+	return res.Container, err
+}
+
+// AssembleWindow is Assemble cut to the part win of the presentation
+// (docs/MEDIA-SPEC.md §8 C6–C8); the zero Window writes what Assemble writes. A video
+// input without a sync sample at or before win.Start is ErrNoKeyframe unless win.Late;
+// a part whose samples exceed the in-memory tables is ErrUnsupported.
+func AssembleWindow(ctx context.Context, inputs []Input, outPath string, win Window) (res Result, err error) {
 	if err := validate(inputs, outPath); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	var nTS, nFMP4 int
 	for _, in := range inputs {
@@ -147,36 +156,40 @@ func Assemble(ctx context.Context, inputs []Input, outPath string) (container st
 	ts := false
 	switch {
 	case nTS > 0 && nFMP4 > 0:
-		return "", errf(ErrUnsupported, "cannot join transport stream and fragmented MP4 tracks")
+		return Result{}, errf(ErrUnsupported, "cannot join transport stream and fragmented MP4 tracks")
 	case nTS == 1 && len(inputs) == 1:
 		ts = true
 	case nTS == 2 && len(inputs) == 2:
 		if k0, k1 := inputs[0].Kind, inputs[1].Kind; !(k0 == KindVideo && k1 == KindAudio || k0 == KindAudio && k1 == KindVideo) {
-			return "", errf(ErrUnsupported, "cannot multiplex transport stream tracks of kinds %s and %s", k0, k1)
+			return Result{}, errf(ErrUnsupported, "cannot multiplex transport stream tracks of kinds %s and %s", k0, k1)
 		}
 		ts = true
 	case nTS > 1:
-		return "", errf(ErrUnsupported, "cannot multiplex %d separate transport stream tracks", nTS)
+		return Result{}, errf(ErrUnsupported, "cannot multiplex %d separate transport stream tracks", nTS)
 	case nFMP4 == len(inputs):
 	default:
 		for _, in := range inputs {
 			if in.Container != ContainerTS && in.Container != ContainerFMP4 {
-				return "", errf(ErrUnsupported, "container %q", in.Container)
+				return Result{}, errf(ErrUnsupported, "container %q", in.Container)
 			}
 		}
-		return "", errf(ErrUnsupported, "input combination")
+		return Result{}, errf(ErrUnsupported, "input combination")
 	}
 
 	err = writeOutput(outPath, func(w io.Writer) error {
 		if ts {
-			return assembleTS(ctx, inputs, w)
+			return assembleTS(ctx, inputs, w, win, &res)
 		}
-		return assembleMP4(ctx, inputs, w)
+		return assembleMP4(ctx, inputs, w, win, &res)
 	})
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
-	return ContainerMP4, nil
+	res.Container = ContainerMP4
+	if win.IsZero() {
+		res.Exact = true
+	}
+	return res, nil
 }
 
 // ConcatTS joins one TS input byte for byte into outPath: the initialization section

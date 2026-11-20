@@ -352,6 +352,10 @@ func (dl *Downloads) rowAction(id RowAction, d *downexv1.Download) {
 		}
 	case ActRestart:
 		dl.restart(d)
+	case ActRenew:
+		if f := a.Open.Renew; f != nil {
+			f(views.RenewRequest{ID: d.GetId()})
+		}
 	}
 }
 

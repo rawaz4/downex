@@ -24,6 +24,11 @@ func newResponse(hr *http.Response, cancel context.CancelFunc, now time.Time, re
 		Validators:       parseValidators(h),
 		Filename:         filenameFromDisposition(h.Get("Content-Disposition")),
 		ContentType:      mediaType(h.Get("Content-Type")),
+		ContentCoding:    contentCoding(h),
+	}
+	if v := h.Get("Content-Disposition"); v != "" {
+		_, raw := ParseContentDisposition(v)
+		r.FilenameControls = r.Filename != "" && HiddenControls(raw)
 	}
 	if r.ContentLength < 0 {
 		r.ContentLength = -1
@@ -107,6 +112,22 @@ func isStrongETag(s string) bool {
 
 // mediaType returns the lower-cased media type of a Content-Type value without
 // parameters, e.g. "application/zip"; "" when absent.
+// contentCoding parses Content-Encoding (RFC 9110 §8.4): the codings of every field line,
+// in order, lower case. "identity" codes nothing and is left out; a value that is not a
+// token is kept as it is, so that a caller refuses it rather than reading coded bytes.
+func contentCoding(h http.Header) []string {
+	var out []string
+	for _, line := range h.Values("Content-Encoding") {
+		for _, c := range strings.Split(line, ",") {
+			c = strings.ToLower(strings.TrimSpace(c))
+			if c != "" && c != "identity" {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 func mediaType(v string) string {
 	if v == "" {
 		return ""

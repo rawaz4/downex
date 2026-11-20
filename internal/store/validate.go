@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"downex/internal/model"
@@ -17,6 +18,12 @@ import (
 var (
 	minStorableTime = time.Unix(0, math.MinInt64)
 	maxStorableTime = time.Unix(0, math.MaxInt64)
+)
+
+// Limits of the expired-link fields (docs/ENGINE-SPEC.md §7.2).
+const (
+	MaxPageURLBytes    = 32 << 10
+	MaxRemoteNameBytes = 255
 )
 
 // validateDownload rejects records that cannot be stored without loss.
@@ -36,6 +43,20 @@ func validateDownload(d *model.Download) error {
 		if err := checkStorableTime(f.name, f.t); err != nil {
 			return err
 		}
+	}
+	// Expired links (migration 9): a page address and the server's name for the file.
+	switch lower := strings.ToLower(d.PageURL); {
+	case len(d.PageURL) > MaxPageURLBytes:
+		return fmt.Errorf("%w: page URL is longer than %d bytes", ErrInvalid, MaxPageURLBytes)
+	case d.PageURL != "" && !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://"):
+		return fmt.Errorf("%w: page URL is not an http or https address", ErrInvalid)
+	}
+	if len(d.RemoteName) > MaxRemoteNameBytes || strings.ContainsAny(d.RemoteName, "/\\") || strings.IndexByte(d.RemoteName, 0) >= 0 {
+		return fmt.Errorf("%w: remote name is not a sanitised file name", ErrInvalid)
+	}
+	// Rescue (migration 10): adopted bytes lie inside the file.
+	if d.RescuedBytes < 0 || (d.Size >= 0 && d.RescuedBytes > d.Size) {
+		return fmt.Errorf("%w: %d rescued bytes do not fit a file of %d bytes", ErrInvalid, d.RescuedBytes, d.Size)
 	}
 	if d.Media != nil {
 		for i, t := range d.Media.Tracks {
@@ -105,6 +126,10 @@ func cloneDownload(d model.Download) model.Download {
 	d.Request.Headers = d.Request.Headers.Clone()
 	d.Request.Body = bytes.Clone(d.Request.Body)
 	d.Media = d.Media.Clone()
+	if d.FileCheck != nil {
+		fc := *d.FileCheck
+		d.FileCheck = &fc
+	}
 	return d
 }
 

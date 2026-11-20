@@ -490,6 +490,16 @@ func TestVideoPagesPicker(t *testing.T) {
 		// Without a length or sizes: the bitrate, as the track label says it.
 		eq(t, "no length", SiteQualityLabel(with(site, func(m *downexv1.MediaInfo) { m.DurationMs = 0 }), p, tr("18")), "360p · H.264 + AAC · 600 kbit/s")
 	})
+	t.Run("says a video listed without audio has no sound", func(t *testing.T) {
+		silent := with(site, func(m *downexv1.MediaInfo) {
+			m.Tracks = slices.DeleteFunc(m.Tracks, func(t *downexv1.MediaTrack) bool { return t.GetKind() == "audio" })
+		})
+		eq(t, "397", SiteQualityLabel(silent, TrackPick{Video: "397"}, tr("397")), "480p · AV1 · No sound · ~157 MB")
+		eq(t, "18", SiteQualityLabel(silent, TrackPick{Video: "18"}, tr("18")), "360p · H.264 + AAC · about 45.0 MB")
+		if !NoSound(silent, tr("397")) || NoSound(site, tr("397")) || NoSound(silent, tr("18")) {
+			t.Error("NoSound")
+		}
+	})
 	t.Run("adds the declared sizes when every chosen track has one, else estimates", func(t *testing.T) {
 		for _, c := range []struct {
 			info *downexv1.MediaInfo

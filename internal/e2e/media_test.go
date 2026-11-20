@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -879,6 +880,101 @@ func TestMediaDASHVideoAudio(t *testing.T) {
 	h.stop(d)
 }
 
+// A part of a stream (docs/MEDIA-SPEC.md §8): "downex media --from --to" fetches only the
+// window's segments (C4: the video's that overlap the part, the audio's from the start of the
+// video window), names the file by the part (C19), cuts the MP4 from the keyframe at or before
+// From with an edit list that shows exactly From–To (C6–C8, anchored on the video, C3) and
+// records what the part became (C20).
+func TestMediaClipDASH(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := newStreamServer(t)
+	const segs = 8
+	video := newGenTrack(t, true, 640, 352, segs, 21, false)
+	audio := newGenTrack(t, false, 0, 0, segs, 22, false)
+	s.add("/dash/talk/manifest.mpd", []byte(dashManifest(segs, [3]string{"v352", "640x352", "600000"})), dashMIME)
+	video.serve(s, "/dash/talk/video/v352/")
+	audio.serve(s, "/dash/talk/audio/")
+	d := h.startDaemon()
+	h.waitReady(d)
+
+	r := h.cli("media", s.url("/dash/talk/manifest.mpd"), "-o", h.out, "--from", "2.5", "--to", "4.5", "--wait").ok(t)
+	id, err := strconv.ParseInt(strings.TrimSpace(r.stdout), 10, 64)
+	if err != nil {
+		t.Fatalf("no download id on stdout: %v", r)
+	}
+	path := filepath.Join(h.out, "talk (00m02s-00m05s).mp4")
+	if !strings.Contains(r.stderr, "Saved "+path) {
+		t.Errorf("media --wait did not report the part's file: %v", r)
+	}
+	// Video segments 3-5 hold 2-5 s; audio segments (1.0027 s each) from the one that holds
+	// 2 s, the video window's start, up to the one that holds 4.5 s.
+	for n := 1; n <= segs; n++ {
+		want := 0
+		if n >= 3 && n <= 5 {
+			want = 1
+		}
+		if got := s.requests(fmt.Sprintf("/dash/talk/video/v352/seg-%d.m4s", n)); got != want {
+			t.Errorf("video segment %d fetched %d times, want %d", n, got, want)
+		}
+		want = 0
+		if n >= 2 && n <= 5 {
+			want = 1
+		}
+		if got := s.requests(fmt.Sprintf("/dash/talk/audio/seg-%d.m4s", n)); got != want {
+			t.Errorf("audio segment %d fetched %d times, want %d", n, got, want)
+		}
+	}
+	noMediaLeftovers(t, h.out)
+
+	fd, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fd.Close()
+	f, err := mp4.DecodeFile(fd, mp4.WithDecodeMode(mp4.DecModeLazyMdat))
+	if err != nil || f.IsFragmented() || f.Moov == nil || len(f.Moov.Traks) != 2 {
+		t.Fatalf("output %s: %v", path, err)
+	}
+	vt, at := f.Moov.Traks[0], f.Moov.Traks[1]
+	// Video from the keyframe at 2 s (decode times 2.00-4.48 s: 63 frames), shown from 2.5 s
+	// for 2 s.
+	if n := vt.Mdia.Minf.Stbl.Stsz.GetNrSamples(); n != 63 {
+		t.Errorf("%d video samples, want 63", n)
+	}
+	edit := func(trak *mp4.TrakBox) (media, dur float64) {
+		if trak.Edts == nil || len(trak.Edts.Elst) == 0 {
+			t.Fatalf("track %d has no edit list", trak.Tkhd.TrackID)
+		}
+		for _, e := range trak.Edts.Elst[0].Entries {
+			if e.MediaTime >= 0 {
+				return float64(e.MediaTime) / float64(trak.Mdia.Mdhd.Timescale), float64(e.SegmentDuration) / float64(f.Moov.Mvhd.Timescale)
+			}
+		}
+		t.Fatalf("track %d has no media edit", trak.Tkhd.TrackID)
+		return 0, 0
+	}
+	if mt, dur := edit(vt); math.Abs(mt-0.5) > 1e-6 || math.Abs(dur-2) > 0.002 {
+		t.Errorf("video edit: media time %v s, duration %v s; want 0.5 and 2", mt, dur)
+	}
+	// Audio from the frame that holds 2 s; the tracks are placed on the movie's 1 ms grid.
+	frame := float64(audioSampleDur) / audioTimescale
+	first := math.Floor(2 / frame)
+	if mt, dur := edit(at); math.Abs(mt-(2.5-first*frame)) > 0.001 || math.Abs(dur-2) > 0.002 {
+		t.Errorf("audio edit: media time %v s, duration %v s; want %v and 2", mt, dur, 2.5-first*frame)
+	}
+
+	c := h.get(id).GetMedia().GetClip()
+	if c.GetStartMs() != 2500 || c.GetEndMs() != 4500 || c.GetKeyframeMs() != 2000 || c.GetFetchStartMs() != 2000 ||
+		c.GetFetchEndMs() != 5000 || c.GetFetchedWhole() {
+		t.Errorf("stored part %v", c)
+	}
+	if info := h.cli("info", strconv.FormatInt(id, 10)).ok(t); !regexp.MustCompile(`(?m)^Part: +0:02\.5 – 0:04\.5 \(keyframe 0:02\)$`).MatchString(info.stdout) {
+		t.Errorf("info has no Part line: %v", info)
+	}
+	h.stop(d)
+}
+
 // (b) An HLS master playlist of MPEG-TS variants (H.264 with B-frames and AAC, muxed,
 // with timestamps that wrap past 2^33 after 1 s; docs/VIDEO-DETECT-SPEC.md §8.3 #1):
 // the best variant's segments are fetched once each and converted into one progressive
@@ -1177,7 +1273,7 @@ v352/index.m3u8
 		t.Fatalf("handed-off stream = %v", dl)
 	}
 	call := inst.waitUICall(t)
-	if !slices.Equal(call.Args, []string{"--confirm", idArg(id)}) {
+	if !slices.Equal(call.Args, []string{"--confirm", idArg(id), "--raise"}) {
 		t.Errorf("confirmation window started with %q", call.Args)
 	}
 	for _, p := range s.requestedPaths() {

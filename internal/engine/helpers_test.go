@@ -125,6 +125,18 @@ func (m *memStore) LoadSegments(_ context.Context, id model.DownloadID) ([]model
 	return slices.Clone(m.segments[id]), nil
 }
 
+func (m *memStore) SetFileCheck(_ context.Context, id model.DownloadID, fc *model.FileCheck) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.downloads[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	d.FileCheck = fc
+	m.downloads[id] = d
+	return nil
+}
+
 func (m *memStore) Close() error { return nil }
 
 func (m *memStore) segs(id model.DownloadID) []model.Segment {
@@ -208,6 +220,7 @@ func (h *httpFetcher) Fetch(ctx context.Context, rr transport.RangeRequest) (*tr
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
 		if _, params, err := mime.ParseMediaType(cd); err == nil && params["filename"] != "" {
 			out.Filename = transport.SanitizeFilename(params["filename"])
+			out.FilenameControls = transport.HiddenControls(params["filename"])
 		}
 	}
 	if ra := resp.Header.Get("Retry-After"); ra != "" {

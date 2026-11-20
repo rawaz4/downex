@@ -2,12 +2,16 @@
 // Built with DOM calls only (no HTML strings: YouTube enforces Trusted Types) inside a closed
 // shadow root that the content script provides; site strings are set as text. The look is
 // Downex's own: its mark and the colour tokens of `assets/ui.css`, on a dark translucent pill.
+// Under the qualities, the Part row (part-row.ts, shared with the panel over any video) lets the
+// user save only part of the video when the connected Downex takes parts (`clips`).
 
+import type { ClipRange } from './clip';
 import type { OverlayStateResponse } from './messages';
 import { buttonAllowed, type VideoOptions } from './options-form';
+import { PART_CSS, type PartInfo, PartRow, PartTrimmer, type PartVideo, sizeAt } from './part-row';
 import type { AddedResult, Outcome, Timers, VideoInfoResult } from './protocol';
 import { systemTimers } from './protocol';
-import { addedTone, initialCapital, type Tone } from './ui-format';
+import { addedTone, cleanSiteText, initialCapital, type Tone } from './ui-format';
 import type { TrackPick } from './video-picker';
 import { MP4_NOTE, VideoPanel, type VideoPanelView } from './video-panel';
 
@@ -37,17 +41,15 @@ export const REVEAL_ACTIVITY_MS = 3000;
 export const REVEAL_LOAD_MS = 5000;
 /** The panel closes this long after the video was handed to Downex. */
 export const SENT_CLOSE_MS = 3000;
+/** The least room under the button for the panel; with less (a short frame) it goes over it. */
+const MIN_PANEL_PX = 160;
 
 /** The button's accessible name (every overlay). */
 export const BUTTON_LABEL = 'Download this video with Downex';
-/** Bidirectional controls (U+202A–202E, U+2066–2069) are dropped from site strings. */
-const BIDI = /[‪-‮⁦-⁩]/g;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Site text as shown: no bidi controls. */
-export function cleanSiteText(s: string): string {
-  return s.replace(BIDI, '');
-}
+/** Site text as shown, without bidi controls (ui-format.ts; the overlays and their tests use it from here). */
+export { cleanSiteText };
 
 /**
  * Whether the YouTube overlay shows its button (VIDEO-DETECT-SPEC §5.4): the background's answer
@@ -66,8 +68,9 @@ export function isolateEvents(target: EventTarget): void {
 }
 
 /**
- * The YouTube overlay's `:host` rule: the shadow host inside the player covers the player and
- * lets the pointer through except over the button and the panel.
+ * The YouTube overlay's own rules: the shadow host inside the player covers the player and lets
+ * the pointer through except over the button and the panel; a button its panel covers (a short
+ * frame) is hidden, so that its halo does not show past the panel's corner.
  */
 export const OVERLAY_HOST_CSS = `
 :host {
@@ -78,6 +81,7 @@ export const OVERLAY_HOST_CSS = `
   z-index: 2147483000 !important;
   overflow: visible !important;
 }
+.dx-button[data-covered='true'] { visibility: hidden; }
 `;
 
 /**
@@ -116,6 +120,7 @@ export const OVERLAY_SHARED_CSS = `.dx {
   --p-edge: rgb(255 255 255 / 0.12);
   --p-hi: rgb(255 255 255 / 0.05);
   --p-line: rgb(255 255 255 / 0.1);
+  --p-field-edge: #939e98;
   --p-hover: rgb(255 255 255 / 0.07);
   --p-current: rgb(147 224 186 / 0.13);
   --p-current-edge: rgb(147 224 186 / 0.45);
@@ -131,6 +136,12 @@ export const OVERLAY_SHARED_CSS = `.dx {
   --p-info: #9cc8f2;
   --p-focus: #93e0ba;
   --p-fade: rgb(17 22 20 / 0.94);
+  --p-trim: #3ccb8b;
+  --p-trim-hi: #74ddae;
+  --p-trim-grip: #0b2a1c;
+  --p-trim-dim: rgb(6 9 8 / 0.5);
+  --p-trim-tick: rgb(255 255 255 / 0.11);
+  --p-trim-halo: rgb(0 0 0 / 0.35);
   --p-shadow: 0 28px 64px -16px rgb(0 0 0 / 0.65), 0 2px 10px rgb(0 0 0 / 0.3);
   --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
   --spring: cubic-bezier(0.3, 1.25, 0.5, 1);
@@ -149,6 +160,7 @@ export const OVERLAY_SHARED_CSS = `.dx {
     --p-edge: rgb(20 40 30 / 0.14);
     --p-hi: rgb(255 255 255 / 0.9);
     --p-line: rgb(20 40 30 / 0.12);
+    --p-field-edge: #6b7670;
     --p-hover: rgb(20 40 30 / 0.06);
     --p-current: rgb(24 122 80 / 0.1);
     --p-current-edge: rgb(24 122 80 / 0.42);
@@ -164,6 +176,12 @@ export const OVERLAY_SHARED_CSS = `.dx {
     --p-info: #1d5a9c;
     --p-focus: #187a50;
     --p-fade: rgb(250 252 251 / 0.97);
+    --p-trim: #187a50;
+    --p-trim-hi: #23935f;
+    --p-trim-grip: #ffffff;
+    --p-trim-dim: rgb(249 251 250 / 0.62);
+    --p-trim-tick: rgb(20 40 30 / 0.16);
+    --p-trim-halo: rgb(255 255 255 / 0.7);
     --p-shadow: 0 28px 64px -16px rgb(0 0 0 / 0.5), 0 2px 10px rgb(0 0 0 / 0.18);
     color-scheme: light;
   }
@@ -324,6 +342,9 @@ export const OVERLAY_SHARED_CSS = `.dx {
 .dx-row:disabled:not([aria-busy='true']):not([data-sent='true']) .dx-go { opacity: 0.45; }
 .dx-q { grid-area: q; min-width: 0; font-size: 13.5px; font-weight: 650; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dx-row[aria-current='true'] .dx-q { color: var(--p-accent); }
+.dx-q:has(> .dx-rec) { display: flex; align-items: center; gap: 6px; }
+.dx-qt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dx-rec { flex: none; padding: 0 6px; border: 1px solid var(--p-current-edge); border-radius: 999px; color: var(--p-accent); font-size: 10.5px; font-weight: 650; line-height: 15px; }
 .dx-c {
   grid-area: c;
   min-width: 0;
@@ -368,7 +389,7 @@ export const OVERLAY_SHARED_CSS = `.dx {
   min-width: 0;
   min-height: 32px;
   padding: 0 28px 0 10px;
-  border: 1px solid var(--p-line);
+  border: 1px solid var(--p-field-edge);
   border-radius: 10px;
   background:
     linear-gradient(45deg, transparent 50%, var(--p-muted) 50%) calc(100% - 15px) 50% / 5px 5px no-repeat,
@@ -382,7 +403,7 @@ export const OVERLAY_SHARED_CSS = `.dx {
 }
 .dx-audio select:focus-visible { outline: 2px solid var(--p-focus); outline-offset: 1px; }
 .dx-audio select option { background: var(--p-solid); color: var(--p-fg); }
-.dx-skel { display: grid; gap: 6px; padding: 2px 8px 4px; }
+${PART_CSS}.dx-skel { display: grid; gap: 6px; padding: 2px 8px 4px; }
 .dx-skel > i { display: block; height: 36px; border-radius: 10px; background: linear-gradient(90deg, var(--p-chip), var(--p-hover), var(--p-chip)) 0 0 / 200% 100%; animation: dx-shimmer 1.4s linear infinite; }
 @keyframes dx-shimmer { to { background-position: -200% 0; } }
 .dx-status {
@@ -525,11 +546,18 @@ export const OVERLAY_CSS = OVERLAY_HOST_CSS + OVERLAY_SHARED_CSS;
 
 export interface VideoOverlayDeps {
   probe: () => Promise<Outcome<VideoInfoResult>>;
-  add: (pick: TrackPick) => Promise<Outcome<AddedResult>>;
-  /** Turns on the sign-in option after `auth_required` (undefined: never offered). */
-  allowSignIn?: () => Promise<void>;
-  /** Whether that option is on now: after `auth_required` "Try again" is offered instead. */
-  signInAllowed?: () => boolean;
+  /** Sends the pick, with the Part row's part (none: the whole video). */
+  add: (pick: TrackPick, clip?: ClipRange) => Promise<Outcome<AddedResult>>;
+  /**
+   * Whether the connected Downex takes a part of a video (its welcome lists `clips`), asked when
+   * the panel opens and when the qualities arrive. Undefined, or false: no Part row.
+   */
+  clips?: () => Promise<boolean>;
+  /**
+   * The player's own <video> (the Part row's playhead, live preview, Preview and Start/End here);
+   * undefined: the timeline without them.
+   */
+  video?: () => PartVideo | undefined;
   timers?: Timers;
   /** Whether an activation came from the user (`event.isTrusted`; tests substitute it). */
   isTrusted?: (e: Event) => boolean;
@@ -689,7 +717,10 @@ export function meter(doc: Document): { el: HTMLElement; set: (statusText: strin
   };
 }
 
-/** "Every quality is saved as one MP4 file." under the title (aria-hidden: the status says it). */
+/**
+ * "Every quality is saved as one MP4 file." under the title, with what the site's answer adds
+ * (aria-hidden: the status says it).
+ */
 export function noteLine(doc: Document): HTMLElement {
   const sub = doc.createElement('p');
   sub.className = 'dx-sub';
@@ -721,6 +752,15 @@ export class VideoOverlay {
   readonly #rowsEl: HTMLUListElement;
   readonly #audioEl: HTMLLabelElement;
   readonly #audioSelect: HTMLSelectElement;
+  /** The Part row: its elements (the timeline trimmer) and its state. */
+  readonly #trimmer: PartTrimmer;
+  readonly #part = new PartRow();
+  /** The connected Downex takes parts (VideoOverlayDeps.clips), as last answered. */
+  #clips = false;
+  /** Bumped by each question about `clips`: only the last answer counts. */
+  #clipsAsk = 0;
+  /** The qualities the last question was asked for. */
+  #clipsInfo: VideoInfoResult | undefined;
   readonly #statusEl: HTMLElement;
   /** The status text, which the live region announces … */
   readonly #statusText: HTMLElement;
@@ -797,6 +837,40 @@ export class VideoOverlay {
     this.#audioEl.hidden = true;
     this.#audioSelect = doc.createElement('select');
     this.#audioEl.append('Audio', this.#audioSelect);
+    this.#trimmer = new PartTrimmer({
+      doc,
+      id,
+      isTrusted: this.#isTrusted,
+      timers: this.#timers,
+      onLayout: () => this.#updateMore(),
+      handlers: {
+        toggle: () => {
+          this.#part.toggle();
+          this.#rerender();
+        },
+        set: (which, ms, push) => {
+          const info = this.#partInfo();
+          if (info && this.#part.setMs(which, ms, info.durationMs, push)) this.#rerender();
+        },
+        edit: (which, text) => {
+          const info = this.#partInfo();
+          if (!info) return;
+          this.#part.edit(which, text, info.durationMs);
+          this.#rerender();
+        },
+        chapter: (n) => {
+          const info = this.#partInfo();
+          if (!info) return;
+          this.#part.chooseChapter(n, info.chapters ?? [], info.durationMs);
+          this.#rerender();
+        },
+        whole: () => {
+          this.#part.whole();
+          this.#rerender();
+        },
+      },
+      ...(deps.video ? { video: deps.video } : {}),
+    });
     this.#statusEl = doc.createElement('p');
     this.#statusEl.className = 'dx-status';
     this.#statusEl.setAttribute('role', 'status');
@@ -813,18 +887,24 @@ export class VideoOverlay {
     this.#actionEl.className = 'dx-action';
     this.#actionEl.hidden = true;
     this.#actionText = labelled(doc, this.#actionEl, 'retry');
-    this.panelEl.append(head, this.#skelEl, this.#rowsEl, this.#audioEl, this.#statusEl, this.#meter.el, this.#actionEl);
+    // The Part row under the Audio select: Audio changes the rows above it (their sizes), the Part
+    // row is a choice of its own about what the next row sends; it comes last before the status,
+    // as in the panel over any video.
+    this.panelEl.append(head, this.#skelEl, this.#rowsEl, this.#audioEl, this.#trimmer.section, this.#statusEl, this.#meter.el, this.#actionEl);
     this.root.append(this.button, this.panelEl);
     this.#updateMore = overflowCue(this.panelEl);
 
     const panelDeps: ConstructorParameters<typeof VideoPanel>[0] = {
       probe: () => this.#deps.probe(),
-      add: (pick) => this.#deps.add(pick),
+      add: (pick) => {
+        const clip = this.#partClip();
+        return clip ? this.#deps.add(pick, clip) : this.#deps.add(pick);
+      },
       render: (view) => this.#render(view),
       timers: this.#timers,
+      // A part's rows show its estimate ("~", the desktop's rule).
+      clip: () => this.#partClip(),
     };
-    if (deps.allowSignIn) panelDeps.allowSignIn = deps.allowSignIn;
-    if (deps.signInAllowed) panelDeps.signInAllowed = deps.signInAllowed;
     this.#panel = new VideoPanel(panelDeps);
 
     this.button.addEventListener('click', (e) => {
@@ -839,14 +919,12 @@ export class VideoOverlay {
     this.#rowsEl.addEventListener('click', (e) => {
       if (!this.#isTrusted(e)) return;
       const row = (e.target as Element | null)?.closest?.('button.dx-row') as HTMLButtonElement | null;
-      if (row?.dataset.id) void this.#panel.download(row.dataset.id);
+      if (row?.dataset.id) this.#download(row.dataset.id);
     });
     this.#audioSelect.addEventListener('change', () => this.#panel.chooseAudio(this.#audioSelect.value));
     this.#actionEl.addEventListener('click', (e) => {
       if (!this.#isTrusted(e)) return;
-      const kind = this.#lastView?.action?.kind;
-      if (kind === 'allow-sign-in') void this.#panel.allowSignIn();
-      else if (kind === 'retry') this.#panel.retry();
+      if (this.#lastView?.action?.kind === 'retry') this.#panel.retry();
     });
     // Light dismiss (Esc, a click elsewhere) of the popover closes the panel too.
     this.panelEl.addEventListener('toggle', (e) => {
@@ -884,7 +962,10 @@ export class VideoOverlay {
   setVideo(key: string | undefined, embed = false): void {
     this.root.dataset.embed = String(embed);
     if (key !== this.#key) {
+      // The element is about to play the other video: a hold on the player is let go, not put back.
+      this.#trimmer.stop(false);
       this.close(false);
+      this.#part.reset();
       this.#panel.reset();
       this.#key = key;
     }
@@ -933,6 +1014,7 @@ export class VideoOverlay {
     this.#panel.clearSent();
     this.#panel.open();
     this.#focusInside();
+    void this.#askClips();
   }
 
   /** Closes the panel; `focusButton` returns the focus to the button (Esc, Close). */
@@ -942,6 +1024,7 @@ export class VideoOverlay {
     if (!this.#open) return;
     this.#open = false;
     this.button.setAttribute('aria-expanded', 'false');
+    delete this.button.dataset.covered;
     this.panelEl.dataset.open = 'false';
     if (this.#popoverApi) {
       try {
@@ -951,6 +1034,8 @@ export class VideoOverlay {
       }
     }
     this.#panel.close();
+    // The player goes back where it was, unless the user took it over meanwhile.
+    this.#trimmer.stop();
     if (focusButton) this.button.focus();
     this.reveal(REVEAL_ACTIVITY_MS);
   }
@@ -958,11 +1043,55 @@ export class VideoOverlay {
   /** The extension went away (context invalidated): the overlay is removed for good. */
   destroy(): void {
     this.close(false);
+    this.#trimmer.stop();
     this.#panel.reset();
     for (const undo of this.#cleanup.splice(0)) undo();
     this.#listening = false;
     if (this.#revealTimer !== undefined) this.#timers.clearTimeout(this.#revealTimer);
     this.root.remove();
+  }
+
+  /** The video the Part row works on: the qualities' info with a known duration, when Downex takes parts. */
+  #partInfo(): PartInfo | undefined {
+    if (!this.#clips) return undefined;
+    const info = this.#panel.info;
+    return info && info.durationMs > 0 ? info : undefined;
+  }
+
+  /** The part a download sends: undefined for the whole video (the row closed or not shown). */
+  #partClip(): ClipRange | undefined {
+    return this.#part.clip(this.#partInfo());
+  }
+
+  /** A quality row was activated: a part with an error is never sent, its field takes the focus. */
+  #download(id: string): void {
+    if (this.#part.check(this.#partInfo())?.error) {
+      this.#rerender();
+      this.#trimmer.focusField(this.#part.errorField());
+      return;
+    }
+    void this.#panel.download(id);
+  }
+
+  /** Asks whether the connected Downex takes parts; the row follows the answer. */
+  async #askClips(): Promise<void> {
+    const ask = this.#deps.clips;
+    if (!ask) return;
+    const asked = ++this.#clipsAsk;
+    let clips: boolean;
+    try {
+      clips = (await ask()) === true;
+    } catch {
+      clips = false;
+    }
+    if (asked !== this.#clipsAsk || clips === this.#clips) return;
+    this.#clips = clips;
+    this.#rerender();
+  }
+
+  /** Draws the panel again (the Part row changed, or whether it is shown). */
+  #rerender(): void {
+    this.#render(this.#panel.view());
   }
 
   get #popoverApi(): boolean {
@@ -975,7 +1104,12 @@ export class VideoOverlay {
     if (hidden) this.close(false);
   }
 
-  /** Places the panel under the button, right-aligned and kept inside the window. */
+  /**
+   * Places the panel under the button, right-aligned and kept inside the window: the popover cannot
+   * draw past the frame, so it is never taller than the room left. In a short frame (an embedded
+   * player) with less than MIN_PANEL_PX under the button, it goes over the button instead (hidden
+   * under it meanwhile, `data-covered`), as the panel over any video does.
+   */
   #position(): void {
     const view = this.#doc.defaultView;
     const vw = view?.innerWidth || this.#doc.documentElement.clientWidth || 0;
@@ -983,10 +1117,14 @@ export class VideoOverlay {
     const r = this.button.getBoundingClientRect();
     const width = Math.max(0, Math.min(320, vw - 16));
     const left = Math.max(8, Math.min(r.right - width, vw - width - 8));
-    const top = Math.max(8, r.bottom + 8);
+    let top = Math.max(8, r.bottom + 8);
+    const over = vh > 0 && vh - top - 8 < MIN_PANEL_PX;
+    if (over) top = 8;
+    if (over) this.button.dataset.covered = 'true';
+    else delete this.button.dataset.covered;
     this.panelEl.style.left = `${Math.round(left)}px`;
     this.panelEl.style.top = `${Math.round(top)}px`;
-    if (vh > 0) this.panelEl.style.maxHeight = `${Math.max(160, Math.round(vh - top - 8))}px`;
+    if (vh > 0) this.panelEl.style.maxHeight = `${Math.max(0, Math.round(vh - top - 8))}px`;
     this.#updateMore();
   }
 
@@ -1081,6 +1219,8 @@ export class VideoOverlay {
       return;
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    // Up and Down keep their own meaning in a field, a select or a slider (the Part row's, Audio).
+    if ((e.target as Element | null)?.closest?.('input, select, textarea, [role="slider"]')) return;
     const rows = [...this.#rowsEl.querySelectorAll<HTMLButtonElement>('button.dx-row')];
     if (rows.length === 0) return;
     const active = (this.root.getRootNode() as Document | ShadowRoot).activeElement;
@@ -1109,6 +1249,17 @@ export class VideoOverlay {
       this.#audioSelect.value = view.audio.value;
       this.#audioSelect.disabled = view.busy;
     }
+    // The qualities arrived (or changed): Downex is asked again whether it takes parts, since it
+    // may have connected only to get them.
+    const info = this.#panel.info;
+    if (info !== this.#clipsInfo) {
+      this.#clipsInfo = info;
+      if (info && this.#open) void this.#askClips();
+    }
+    const partInfo = this.#partInfo();
+    const picked = view.rows.find((r) => r.selected);
+    const part = partInfo ? this.#part.view(partInfo, sizeAt(view.size, picked?.quality ?? '')) : undefined;
+    this.#trimmer.render(part, view.busy || view.phase === 'sent');
     // The live region changes only when its text does: the seconds beside it are not announced.
     setText(this.#statusText, initialCapital(view.status?.text ?? ''));
     setText(this.#elapsedEl, view.status?.elapsed ?? '');
@@ -1122,16 +1273,20 @@ export class VideoOverlay {
     const metered = this.#meter.set(view.status?.text ?? '', working);
     this.#skelEl.hidden = !(view.phase === 'probing' && view.rows.length === 0 && !metered);
     // The MP4 note is drawn under the title while there are qualities. The status of a usable
-    // list (phase `list`, tone ok) is that note, as in OfferPanel.view() and the popup: the live
-    // region keeps announcing it, visually hidden, so it is neither drawn twice nor lost.
+    // list (phase `list`, tone ok) is that note with what the site's answer adds (siteNote: the
+    // sign-in used, the browser fetch), as in OfferPanel.view() and the popup: drawn there in
+    // full, while the live region keeps announcing it, visually hidden, so it is neither drawn
+    // twice nor lost.
     this.#subEl.hidden = view.rows.length === 0;
-    if (view.phase === 'list' && view.status?.tone === 'ok') this.#statusEl.dataset.note = 'true';
+    const note = view.phase === 'list' && view.status?.tone === 'ok' ? view.status.text : undefined;
+    setText(this.#subEl, note ?? MP4_NOTE);
+    if (note !== undefined) this.#statusEl.dataset.note = 'true';
     else delete this.#statusEl.dataset.note;
     this.#actionEl.hidden = view.action === undefined;
     setText(this.#actionText, view.action?.text ?? '');
     if (view.action) {
       this.#actionEl.dataset.kind = view.action.kind;
-      setGlyph(this.#doc, this.#actionEl, view.action.kind === 'allow-sign-in' ? 'key' : 'retry');
+      setGlyph(this.#doc, this.#actionEl, 'retry');
     }
     // The list arrived while the panel was open: the focus moves to the default quality.
     if (this.#open && !hadRows && view.rows.length > 0) this.#focusInside();
@@ -1172,4 +1327,12 @@ export function findPlayer(doc: Document): HTMLElement | null {
   if (player) return player;
   const parent = best.offsetParent;
   return parent instanceof HTMLElement ? parent : null;
+}
+
+/**
+ * The player's own `<video>` (the Part row's timeline): YouTube's main video of the player the
+ * overlay sits in, else its first video; undefined without one.
+ */
+export function playerVideo(player: HTMLElement | null): HTMLVideoElement | undefined {
+  return player?.querySelector<HTMLVideoElement>('video.html5-main-video') ?? player?.querySelector<HTMLVideoElement>('video') ?? undefined;
 }

@@ -139,6 +139,7 @@ type Host struct {
 	windows   []*Window
 	main      *Window
 	progress  map[int64]*Window
+	confirm   *Window // the standalone Confirm download window (one at a time)
 	closed    bool
 }
 

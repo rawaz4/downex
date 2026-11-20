@@ -403,18 +403,32 @@ type tsAssembler struct {
 	all    []*tsTrack // every track with samples, in creation order
 }
 
-func assembleTS(ctx context.Context, inputs []Input, w io.Writer) error {
+func assembleTS(ctx context.Context, inputs []Input, w io.Writer, win Window, res *Result) error {
 	ta := &tsAssembler{m: &muxer{inits: make([]*initInfo, len(inputs)), fileIdx: map[string]int{}, progressive: true}}
 	for i, in := range inputs {
 		ta.inputs = append(ta.inputs, newTSInput(i, in))
 	}
 	for _, ti := range ta.inputs {
 		if err := ta.scan(ctx, ti); err != nil {
+			if !win.IsZero() && !win.Late && errors.Is(err, errNoPicture) {
+				// The window's fragments lie inside a picture group: earlier media holds
+				// its keyframe (docs/MEDIA-SPEC.md §8 C5).
+				return ErrNoKeyframe
+			}
 			return err
 		}
 	}
 	if err := ta.finish(); err != nil {
 		return err
+	}
+	if !win.IsZero() {
+		// Transport streams have no media timeline of their own: times count from the
+		// earliest presentation time of the first input (OriginFirst).
+		r, err := ta.m.applyWindow(win, ta.m.firstInputOffset())
+		if err != nil {
+			return err
+		}
+		*res = r
 	}
 	afterTSPass1()
 	for _, ti := range ta.inputs {
@@ -485,7 +499,7 @@ func (ta *tsAssembler) scan(ctx context.Context, ti *tsInput) error {
 	// A video (or muxed) input must give video: without a decodable picture only
 	// its audio would be saved, which is not the video asked for.
 	if ti.in.Kind != KindAudio && (tracks[roleVideo] == nil || tracks[roleVideo].t == nil) {
-		return errf(ErrUnsupported, "input %d: no decodable video (no IDR or IRAP picture)", ti.idx)
+		return errf(errNoPicture, "input %d: no decodable video (no IDR or IRAP picture)", ti.idx)
 	}
 	for _, tr := range tracks {
 		if tr != nil && tr.t != nil {
@@ -759,9 +773,19 @@ func (s *tsChunks) writeChunk(ctx context.Context, ti int, c *chunk, w io.Writer
 		s.readers[ti] = r
 	}
 	t := s.ta.m.tracks[ti]
+	// Samples a window cut away (applyWindow) are converted and skipped.
+	for s.pos[ti] < c.first {
+		if _, err := r.next(ctx); err != nil {
+			if err == io.EOF {
+				return r.mismatch()
+			}
+			return err
+		}
+		s.pos[ti]++
+	}
 	for range c.n {
 		smp, err := r.next(ctx)
-		if err == io.EOF || (err == nil && uint32(len(smp.data)) != t.sizes[s.pos[ti]]) {
+		if err == io.EOF || (err == nil && (s.pos[ti] < t.lo || uint32(len(smp.data)) != t.sizes[s.pos[ti]-t.lo])) {
 			return r.mismatch()
 		}
 		if err != nil {
@@ -777,8 +801,8 @@ func (s *tsChunks) writeChunk(ctx context.Context, ti int, c *chunk, w io.Writer
 
 // done checks that pass 2 found no sample beyond pass 1's.
 func (s *tsChunks) done(ctx context.Context) error {
-	for _, r := range s.readers {
-		if r == nil {
+	for i, r := range s.readers {
+		if r == nil || s.ta.m.tracks[i].edit {
 			continue
 		}
 		if _, err := r.next(ctx); err != io.EOF {

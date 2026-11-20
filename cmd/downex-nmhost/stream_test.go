@@ -60,7 +60,7 @@ func TestProbeStream(t *testing.T) {
 		"prefetch": true, "videoTrack": "v720", "title": 5, "unknownField": 1})
 	m := s.recv()
 	if keys := slices.Sorted(maps.Keys(m)); fmt.Sprint(keys) !=
-		"[container durationMs format id ok selectedAudio selectedVideo site title tracks type]" {
+		"[chapters container durationMs format id ok selectedAudio selectedVideo site title tracks type]" {
 		t.Fatalf("videoInfo fields %v: %v", keys, m)
 	}
 	if m["id"] != "s" || m["ok"] != true || m["type"] != "videoInfo" || m["site"] != "" || m["title"] != "Episode 1" ||

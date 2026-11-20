@@ -127,8 +127,17 @@ describe('buildFileAddFields', () => {
         size: 6 * 1024 * 1024,
         deadlineMs: FILE_ADD_TIMEOUT_MS,
         referrer: 'https://site.example/watch/1',
+        // The playing frame's page, offered when the link expires (DESKTOP-SPEC §10).
+        pageUrl: 'https://site.example/watch/1',
       },
     });
+  });
+
+  it('sends the tab address as the page, without user name or fragment', () => {
+    const r = buildFileAddFields(source({ pageUrl: 'https://u:p@site.example/watch/1?t=2#c' }), { userAgent: 'UA' });
+    expect(r.ok && r.value.pageUrl).toBe('https://site.example/watch/1?t=2');
+    const none = buildFileAddFields(source({ pageUrl: 'about:blank', frameUrl: 'blob:https://site.example/1' }), { userAgent: 'UA' });
+    expect(none.ok && none.value).not.toHaveProperty('pageUrl');
   });
 
   it('keeps a recorded request without a Cookie as it was', () => {

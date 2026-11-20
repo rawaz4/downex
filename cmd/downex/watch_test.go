@@ -284,6 +284,10 @@ func TestAddWaitOutcomes(t *testing.T) {
 	changed.State, changed.Error, changed.ErrorCode = stFailed, "the file on the server changed", "validator_changed"
 	paused := active(7, 100, 40)
 	paused.State = stPaused
+	expired := active(7, 100, 40)
+	expired.State, expired.ErrorCode, expired.SpeedBps = stFailed, "link_expired", 0
+	expired.Error = "connection 1: bytes 40-99: HTTP 403 Forbidden: engine: link expired"
+	expired.PageUrl = "https://pages.example/files"
 
 	for _, tc := range []struct {
 		name   string
@@ -297,6 +301,11 @@ func TestAddWaitOutcomes(t *testing.T) {
 		{"changed", [][]*downexv1.Event{{updated(changed)}}, false,
 			[]string{"download 7 failed: the file on the server changed", "downex resume 7 --restart"}},
 		{"paused", [][]*downexv1.Event{{snapshot(paused)}}, false, []string{"Download 7 was paused.", "Resume with: downex resume 7"}},
+		{"link expired", [][]*downexv1.Event{{updated(expired)}}, false, []string{
+			"downex: error: download 7 failed: connection 1: bytes 40-99: HTTP 403 Forbidden: engine: link expired\n" +
+				"The link stopped working (it expired, was revoked or leads to a web page). Its progress (40 B of 100 B) is kept.\n" +
+				"Give it a new link with:\n  downex renew 7 <new-url>",
+			"The page it came from: https://pages.example/files\n"}},
 		{"removed", [][]*downexv1.Event{{snapshot(active(7, 100, 1))}, {removed(7)}}, false, []string{"download 7 was removed"}},
 		{"stream end", [][]*downexv1.Event{{snapshot(active(7, 100, 1))}}, true, []string{"downexd closed the event stream"}},
 	} {

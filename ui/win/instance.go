@@ -355,7 +355,9 @@ func (r Running) Send(kind uintptr, payload []byte, timeout time.Duration) (uint
 // the window asked to take the foreground. It reports whether Windows made it the
 // foreground window (a process that is not allowed to, because the user is using another
 // window and the starting process did not hand its right over, only flashes its taskbar
-// button). It is for the UI thread.
+// button and may stay behind that window; it does not raise it: a caller acting for a
+// download the user just started in the browser calls Raise then). It is for the UI
+// thread.
 func (w *Window) BringToFront() bool {
 	if w.closed || w.hwnd == 0 {
 		return false
@@ -365,5 +367,28 @@ func (w *Window) BringToFront() bool {
 	} else {
 		w32.ShowWindow(w.hwnd, w32.SW_SHOW)
 	}
-	return setForegroundWindow(w.hwnd)
+	return setForegroundWindow(w.hwnd) && w32.GetForegroundWindow() == w.hwnd
+}
+
+// Raise puts the window, restored and shown, above the other programs' windows without
+// activating it, when it is not the foreground window: the window that a download started
+// in the browser opens stands over the browser at once, while the keyboard focus stays
+// where the user types (docs/DESKTOP-SPEC.md §7). It is placed on top of the always-on-top
+// band and back at once (the top of the normal windows), so it never stays always on top.
+// It reports whether the window is above the others now (or is the foreground window). It
+// is for the UI thread.
+func (w *Window) Raise() bool {
+	if w.closed || w.hwnd == 0 {
+		return false
+	}
+	if w32.GetForegroundWindow() == w.hwnd {
+		return true
+	}
+	if w32.IsIconic(w.hwnd) {
+		w32.ShowWindow(w.hwnd, w32.SW_SHOWNOACTIVATE)
+	}
+	const flags = w32.SWP_NOACTIVATE | w32.SWP_SHOWWINDOW
+	top := w32.SetWindowZOrder(w.hwnd, w32.HWND_TOPMOST, flags)
+	back := w32.SetWindowZOrder(w.hwnd, w32.HWND_NOTOPMOST, flags)
+	return top && back
 }

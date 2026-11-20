@@ -65,6 +65,7 @@ func openProgress(a *osApp, b *backend, o options) (*osWindow, error) {
 func openPrompt(a *views.App, q progress.OpenQuestion) views.Modal {
 	d := dialogs.NewOpenFile(a, dialogs.OpenFile{
 		ID: q.ID, Name: q.Name, Executable: q.Executable, HiddenControls: q.HiddenControls, WithApp: q.WithApp,
+		Disguise: q.Disguise,
 	}, q.Confirm)
 	return closedModal{Modal: d, closed: q.Closed}
 }

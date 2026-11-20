@@ -111,6 +111,8 @@ func eventKinds(t *testing.T, m *downexv1.WatchResponse) []string {
 			out = append(out, "post_action:"+strconv.FormatInt(k.PostAction.GetQueueId(), 10))
 		case *downexv1.Event_Tools:
 			out = append(out, "tools")
+		case *downexv1.Event_Polite: // Polite mode's status (docs/POLITE-SPEC.md §7)
+			out = append(out, "polite")
 		default:
 			t.Errorf("unexpected event %v", e)
 		}

@@ -101,6 +101,16 @@ func NewInput(text string, o InputOptions, onChange func(string)) *Input {
 // InputOptions are the input's options.
 func (in *Input) InputOptions() InputOptions { return in.o }
 
+// SetReadOnly shows the value as read-only (aria-readonly, the --surface-2 ground); the
+// owner keeps the text as it is meanwhile (the system field has no read-only mode).
+func (in *Input) SetReadOnly(r bool) {
+	if r != in.o.ReadOnly {
+		in.o.ReadOnly = r
+		in.Invalidate()
+		in.SemanticsChanged()
+	}
+}
+
 // SetInvalid marks the value wrong (aria-invalid).
 func (in *Input) SetInvalid(v bool) {
 	if v != in.o.Invalid {

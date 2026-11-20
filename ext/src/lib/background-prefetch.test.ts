@@ -259,20 +259,23 @@ describe('background look-ahead of page videos', () => {
     await settle();
   });
 
-  it('sends none with the option or the Download button off, or with the sign-in allowed', async () => {
+  it('sends none with the option or the Download button off; with the sign-in on, one without cookies', async () => {
     for (const off of [
-      { videoButton: true, useSignInForVideos: false, videoPrefetch: false, hiddenSites: [] },
-      { videoButton: false, useSignInForVideos: false, videoPrefetch: true, hiddenSites: [] },
-      { videoButton: true, useSignInForVideos: true, videoPrefetch: true, hiddenSites: [] },
+      { videoButton: true, useSignInForVideos: true, videoPrefetch: false, hiddenSites: [] },
+      { videoButton: false, useSignInForVideos: true, videoPrefetch: true, hiddenSites: [] },
     ]) {
       await fake.local.set({ videoOptions: off });
       await report(topFrame(9, watch('jjjjjjjjjjj')));
       await settle();
       expect(probes('jjjjjjjjjjj')).toHaveLength(0);
     }
-    await fake.local.set({ videoOptions: { videoButton: true, useSignInForVideos: false, videoPrefetch: true, hiddenSites: [] } });
+    // The sign-in switch does not stop look-aheads (SITE-MEDIA-SPEC §6.3): they never carry cookies.
+    await fake.local.set({ videoOptions: { videoButton: true, useSignInForVideos: true, videoPrefetch: true, hiddenSites: [] } });
     await report(topFrame(9, watch('jjjjjjjjjjj')));
     await vi.waitFor(() => expect(probes('jjjjjjjjjjj')).toHaveLength(1));
+    expect(probes('jjjjjjjjjjj')[0]).toEqual(expect.objectContaining({ prefetch: true }));
+    expect(probes('jjjjjjjjjjj')[0]).not.toHaveProperty('headers');
+    expect(probes('jjjjjjjjjjj')[0]).not.toHaveProperty('cookieDomain');
     await settle();
   });
 
@@ -312,8 +315,10 @@ describe('background look-ahead of page videos', () => {
 
     it('needs a meaningful video reported in some frame of the tab, and never a protected or live one', async () => {
       quietHour();
-      const url = 'https://vimeo.com/76979871';
-      const tab = topFrame(20, url, { title: 'A film on Vimeo' });
+      const page = 'https://vimeo.com/76979871';
+      // Vimeo's pages go to Downex as the player's address (VIDEO-DETECT-SPEC §3.8).
+      const url = 'https://player.vimeo.com/video/76979871';
+      const tab = topFrame(20, page, { title: 'A film on Vimeo' });
       await report(tab);
       await settle();
       expect(pages(url)).toHaveLength(0);
@@ -333,7 +338,7 @@ describe('background look-ahead of page videos', () => {
       const next = topFrame(20, 'https://vimeo.com/1234');
       await report(next);
       await settle();
-      expect(pages('https://vimeo.com/1234')).toHaveLength(0);
+      expect(pages('https://player.vimeo.com/video/1234')).toHaveLength(0);
     });
 
     it('runs a look-ahead held back for a while when the video is reported after the dwell', async () => {
@@ -357,15 +362,20 @@ describe('background look-ahead of page videos', () => {
       expect(pages(late)).toHaveLength(0);
     });
 
-    it('never looks ahead on Facebook or Instagram, or on a hidden site', async () => {
+    it('never looks ahead on Facebook, Instagram, Reddit or Threads, or on a hidden site', async () => {
       quietHour();
-      for (const url of ['https://www.instagram.com/reel/C1a2B3c4D5e/', 'https://www.facebook.com/watch/?v=1234567890']) {
+      for (const url of [
+        'https://www.instagram.com/reel/C1a2B3c4D5e/',
+        'https://www.facebook.com/watch/?v=1234567890',
+        'https://www.reddit.com/r/videos/comments/abc111/x/',
+        'https://www.threads.com/@someone/post/AbC12dEfGh',
+      ]) {
         const tab = topFrame(21, url);
         await reportVideos(tab, 0, [meaningful]);
         await report(tab);
       }
       await settle();
-      expect(fake.posted.filter((m) => m.type === 'probeVideo' && /instagram|facebook/.test(String(m.pageUrl)))).toHaveLength(0);
+      expect(fake.posted.filter((m) => m.type === 'probeVideo' && /instagram|facebook|reddit|threads/.test(String(m.pageUrl)))).toHaveLength(0);
       await fake.local.set({ videoOptions: { videoButton: true, useSignInForVideos: false, videoPrefetch: true, hiddenSites: ['*.dailymotion.com', 'www.youtube.com'] } });
       const dm = topFrame(22, 'https://www.dailymotion.com/video/x8abc12');
       await reportVideos(dm, 0, [meaningful]);
@@ -383,19 +393,19 @@ describe('background look-ahead of page videos', () => {
     it('pauses a site that asks for a sign-in, never another', async () => {
       quietHour();
       fake.flow.answer = { ok: false, error: { code: 'rejected', message: 'auth_required: log in to watch', reason: 'auth_required' } };
-      const first = topFrame(24, 'https://www.reddit.com/r/videos/comments/abc111/x/');
+      const first = topFrame(24, 'https://x.com/someone/status/111');
       await reportVideos(first, 0, [meaningful]);
       await report(first);
-      await vi.waitFor(() => expect(pages('https://www.reddit.com/r/videos/comments/abc111/')).toHaveLength(1));
+      await vi.waitFor(() => expect(pages('https://x.com/i/status/111')).toHaveLength(1));
       await settle();
       fake.flow.answer = undefined;
-      const second = topFrame(25, 'https://www.reddit.com/r/videos/comments/abc222/y/');
+      const second = topFrame(25, 'https://x.com/someone/status/222');
       await reportVideos(second, 0, [meaningful]);
       await report(second);
       await report(topFrame(26, watch('ppppppppppp')));
       await vi.waitFor(() => expect(probes('ppppppppppp')).toHaveLength(1));
       await settle();
-      expect(pages('https://www.reddit.com/r/videos/comments/abc222/')).toHaveLength(0);
+      expect(pages('https://x.com/i/status/222')).toHaveLength(0);
     });
   });
 

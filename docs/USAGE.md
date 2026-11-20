@@ -57,8 +57,8 @@ Remove the extension in the browser yourself.
 **Silent use** (NSIS conventions; `/D` must come last and is not quoted, even with spaces):
 
 ```powershell
-Downex-Setup-1.0.0.exe /S                                   # install or upgrade, default folder
-Downex-Setup-1.0.0.exe /S /D=C:\Users\me\Apps\Downex        # install into a folder
+Downex-Setup-1.1.0.exe /S                                   # install or upgrade, default folder
+Downex-Setup-1.1.0.exe /S /D=C:\Users\me\Apps\Downex        # install into a folder
 & "$env:LOCALAPPDATA\Programs\Downex\uninstall.exe" /S       # uninstall, keeping your data
 ```
 
@@ -70,7 +70,7 @@ with 0 on success and 2 when it was cancelled, for example because a file stayed
 `PATH` or in its default folder) into `bin\Downex-Setup-<version>.exe` (or `-Out`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.0.0 -Installer
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.0 -Installer
 ```
 
 `-Installer` cannot be combined with `-SkipExtension` or `-SkipUI`. The version is passed to
@@ -228,7 +228,8 @@ downex settings [--max-concurrent n] [--global-limit rate] [--dir path] [--conne
                 [--progress-window on|off] [--complete-dialog on|off] [--clipboard on|off]
                 [--mark-files on|off] [--av-scan on|off] [--av-command path] [--av-args args]
                 [--update-feed url] [--auto-update on|off] [--site-media on|off]
-                [--tools-auto-update on|off] [--tools-channel stable|nightly] [--json]
+                [--tools-auto-update on|off] [--tools-channel stable|nightly] [--check-files on|off]
+                [--renew-links auto|ask|off] [--polite on|off] [--polite-target ms] [--json]
 downex daemon start|stop|status [--json]
 
 # In this process, without the daemon (for scripting)
@@ -257,8 +258,8 @@ downex --version
 | `cancel-post <queue>` | Cancels the countdown of a queue's [post-queue action](#post-queue-actions) (sleep, hibernate, shut down, quit). |
 | `proxy`, `login` | Show or change the [proxy](#network-proxies-logins-and-host-rules) and the site logins; passwords are asked for without echo and kept in the system's credential store. |
 | `update check\|install` | Checks the signed [update feed](#updates), or downloads, verifies and installs the newer version. |
-| `settings` | Shows the daemon's settings and the download categories with their folders, or changes those given (every other setting is kept): `--max-concurrent` (1–16, default 3), `--global-limit` (all downloads together; `0` = unlimited), `--dir` (default directory of `add` without `-o`; default: your Downloads folder), `--connections` (default per download, 1–32, default 8), and the on/off switches `--categories-folders`, `--confirm-browser`, `--notify-complete`, `--notify-failure`, `--launch-at-login`, `--tray`, `--progress-window` (open a download's progress window when it starts from the window or the browser) and `--complete-dialog` (the download complete dialog for downloads whose progress window was opened; off: the progress window just closes and nothing pops up) (also `true`/`false`, `yes`/`no`, `1`/`0`). [Desktop integration](#clipboard-file-marks-and-virus-scans): `--clipboard`, `--mark-files`, `--av-scan`, `--av-command`, `--av-args`; [updates](#updates): `--update-feed`, `--auto-update`; [videos of web pages](#videos-of-web-pages-yt-dlp): `--site-media`, `--tools-auto-update`, `--tools-channel stable\|nightly`. |
-| `daemon start\|stop\|status` | Starts `downexd` unless it runs; stops it (running downloads are paused and their progress is saved); or shows its pid, version, endpoint, uptime and active/queued counts. `status` exits with 1 when the daemon is not running. |
+| `settings` | Shows the daemon's settings and the download categories with their folders, or changes those given (every other setting is kept): `--max-concurrent` (1–16, default 3), `--global-limit` (all downloads together; `0` = unlimited), `--dir` (default directory of `add` without `-o`; default: your Downloads folder), `--connections` (default per download, 1–32, default 8), and the on/off switches `--categories-folders`, `--confirm-browser`, `--notify-complete`, `--notify-failure`, `--launch-at-login`, `--tray`, `--progress-window` (open a download's progress window when it starts from the window or the browser) and `--complete-dialog` (the download complete dialog for downloads whose progress window was opened; off: the progress window just closes and nothing pops up) (also `true`/`false`, `yes`/`no`, `1`/`0`). [Desktop integration](#clipboard-file-marks-and-virus-scans): `--clipboard`, `--mark-files`, `--av-scan`, `--av-command`, `--av-args`; [updates](#updates): `--update-feed`, `--auto-update`; [videos of web pages](#videos-of-web-pages-yt-dlp): `--site-media`, `--tools-auto-update`, `--tools-channel stable\|nightly`. Polite mode (off by default; [docs/POLITE-SPEC.md](POLITE-SPEC.md)): `--polite on\|off` slows every download together while they make calls, games or streaming lag, and speeds them up again when the line is quiet; `--polite-target ms` is the extra line delay it keeps under (10–200, `0` = the default 30). |
+| `daemon start\|stop\|status` | Starts `downexd` unless it runs; stops it (running downloads are paused and their progress is saved); or shows its pid, version, endpoint, uptime and active/queued counts, and Polite mode's state (e.g. "slowed to 2.4 MB/s to keep the line smooth (line delay +42 ms)"; `--json`: `polite {state, rateLimit, delayMs, baseMs}`). `status` exits with 1 when the daemon is not running. |
 | `get <url>` | Adds a download and runs it in this process until it completes. Shows one progress line (percent, size, speed, connections, ETA) refreshed at most 4 times per second. |
 | `resume <id> --local` | Continues a download in this process, in the foreground, like `get`. |
 | `rm <id> --local` | Removes a download by changing the database directly. |
@@ -702,6 +703,56 @@ downex login ls; downex login rm <id>
   "Scanner reported a problem with <name>". Example (Windows Defender):
   `--av-command "C:\Program Files\Windows Defender\MpCmdRun.exe" --av-args "-Scan -ScanType 3 -File [File]"`.
 
+## Files that are not what their names say
+
+[DESKTOP-SPEC.md](DESKTOP-SPEC.md) §9; window: Settings → *Integration* → *Safety*; CLI:
+`--check-files on|off` (on by default).
+
+Downex compares the start of each downloaded file, and the list of files inside ZIP, RAR5 and CAB
+archives, with its name and with what the server said it was. It warns in three strengths:
+
+- **"This file is not what its name says"** (red): a program named like a video, a document or an
+  image ("movie.mp4" that is a Windows program, "invoice.pdf.exe", a name padded with spaces or one
+  that used hidden characters to reverse its text), an archive with a program behind a media name,
+  a disc image named like a document. The list shows "Check file", a notification says so, and
+  **Open** and **Open with…** ask first ("Open anyway", "Run anyway", "Choose app anyway…").
+  The details pane offers **Remove and delete file…**, which opens the usual Remove dialog.
+- **"This may not be the file you wanted"** (orange): a web page or a short text saved instead of the
+  file, usually an error or sign-in page. Check the address or sign in on the site, then download it
+  again. Opening is not held.
+- **A note** in the details only ("Contents: PNG image · named as JPEG image"): a harmless difference.
+
+While a file downloads, the first 64 KB are checked as soon as they arrive (the progress window says
+so); the completed file is checked again before it is marked and scanned. The browser's Confirm
+dialog warns about a dangerous name before anything is downloaded. Downex never changes, renames or
+deletes a file because of a check, and a check never says a file is safe: Mark of the Web and the
+virus scan still apply. Streams and web pages' videos, which Downex assembles itself, are checked by
+name only.
+
+`downex check <file|id> [--json]` checks any file, or a completed download's file with what its
+server said, without starting downexd (useful for downloads completed while the check was off);
+`downex info <id>` shows the rows *Contents* and *File check*, `downex ls` the status "check file".
+A local `downex get` prints "Warning: …" after the download.
+
+## Expired links
+
+Many sites hand out download links that work only for a while (signed links). When such a link
+stops working in the middle of a download (the server answers 403, 410, a 401 without asking for a
+login, or sends a web page instead of the file), Downex stops asking for more, lets the connections
+that are still receiving finish, keeps everything received and marks the download **Link expired**.
+
+- **New link…** (list, details pane, context menu, progress window, palette) asks for a new link;
+  Downex first compares the bytes the new link serves with those it already has (and the size and
+  version), then continues from where it stopped. When they differ nothing changes.
+- **Open page** opens the page the download came from (when the browser told Downex); download the
+  file there again: with **Settings → Downloads → Expired links** on "Continue with a matching new
+  link" (the default), Downex recognises the same file, checks it the same way and continues the
+  stopped download instead of starting a second one ("Ask before continuing" asks first in the
+  confirmation dialog; "Don't look for new links" turns it off).
+- From the command line: `downex renew <id> <new-url>` (`--name-ok` when the new link names the file
+  differently, `--restart-if-needed` when too little can be compared, `--later`, `--wait`, `--local`),
+  and `downex settings --renew-links auto|ask|off`. `downex add` is never matched automatically.
+
 ## Updates
 
 [M6-SPEC.md](M6-SPEC.md) §4. Release builds have Downex's update feed built in
@@ -745,6 +796,7 @@ with a clear message. See [MEDIA-SPEC.md](MEDIA-SPEC.md).
 downex media https://example.com/show/master.m3u8 --list     # the tracks; * = default pick
 downex media https://example.com/show/master.m3u8 --wait     # best video + its best audio
 downex media https://example.com/clip.mpd --video v360 --audio a128 -o ./videos --name clip
+downex media https://example.com/show/master.m3u8 --from 1:20 --to 2:45   # only that part
 ```
 
 - **Adding.** `downexd` fetches and parses the manifest first (for an HLS master playlist also the
@@ -773,6 +825,12 @@ downex media https://example.com/clip.mpd --video v360 --audio a128 -o ./videos 
   never started becomes an `.mp4` download. Not supported (`media_unsupported`): AC-3, E-AC-3 or MP3
   audio and MPEG-2 video inside TS, packed-audio renditions, single-file DASH (`SegmentBase`), WebM,
   and fMP4 streams whose initialization segment changes midway.
+- **Part of a video.** `--from` and `--to` (times like `80`, `1:20`, `1:02:03` or `1m20s`; without
+  `--to`, to the end) save only that part: Downex fetches only the segments it needs and cuts the
+  `.mp4` without re-encoding. Playback starts at `--from`; a few players start up to a few seconds
+  earlier, at the keyframe before it. The name gets the times, `Talk (01m20s-02m45s).mp4`. A web page's
+  video can be cut by chapter (`--chapter N`, numbers from `--list`). `downex confirm <id>` takes the
+  same flags and `--whole`; `downex info` prints the part ("Part: 1:20 – 2:45 (keyframe 1:17.4)").
 - **From the browser.** The extension lists the streams a tab plays (toolbar badge count, popup card
   *Videos on this page*, and the [Download button](#videos-on-every-website) over the player) with
   their MP4 qualities, and hands one to Downex with the page's cookies and Referer; with
@@ -787,13 +845,35 @@ own engine downloads the chosen formats (several connections, resumable, shown i
 window) and joins them in pure Go. Every distinct MP4 quality the page offers (each resolution,
 frame rate, HDR and codec: H.264, AV1, HEVC) is listed best first and **you choose**; the default is
 the highest resolution, H.264 preferred at equal height. WebM (VP9/Opus) formats are never offered,
-and there is no audio-only download. DRM-protected and live videos, playlists and channels are
+and a video page has no audio-only download. A video that has no sound on its site (some Instagram reels) is
+saved without one, and the lists say "No sound" (`--list`: "H.264 (no sound)"). DRM-protected and live videos, playlists and channels are
 refused. See [SITE-MEDIA-SPEC.md](SITE-MEDIA-SPEC.md).
 
+A page with **several videos** (an Instagram carousel, a news page with several players) lists them
+(at most 20, each once): the browser panel shows a row of the page's videos ("Video 2 of 3", the
+page's thumbnails), the popup and the desktop dialogs a "Video" select, and `--list` a "Videos on
+this page" block; choose one and download it (`--item ID`). Photos are never downloaded; the lists
+say how many other items the page has. A download keeps its video by the site's id: when the page no
+longer has it, the download fails ("this item is no longer on the page") instead of taking another.
+
+A page that has **no video at all** (a SoundCloud, Bandcamp or Mixcloud track, a podcast page) is
+saved as its **audio**: AAC as one `.m4a` file (joined in pure Go, never re-encoded), a direct MP3 as
+the `.mp3` it is. Opus and Vorbis audio is refused ("the audio is Opus or Vorbis, which Downex cannot
+save without converting it"): Downex has no FFmpeg. So is a raw AAC (`.aac`) file, and a track of
+which only a short preview is public ("only a preview of this track is public, not the whole
+track"). A stream link that expires (SoundCloud's last a few minutes) is fetched again from the page
+when a download starts later. The lists show "Audio · AAC · 96 kbit/s" rows,
+`--list` says "Audio only: this page has no video; saved as .m4a.", `--audio ID` picks one, and the
+file is filed under Audio. Parts of audio are not offered. In the browser, use the popup (the page's
+row, or "Find the video on this page") or the context menu; audio players have no in-page button.
+
 ```bash
+downex media --site "https://soundcloud.com/<user>/<track>" --list  # an audio page: its AAC tracks
 downex media --site "https://www.youtube.com/watch?v=..." --list    # every MP4 quality; * = default
 downex media --site "https://www.youtube.com/watch?v=..." --wait    # the default pick
 downex media --site "https://www.youtube.com/watch?v=..." --video 136 -o ./videos
+downex media --site "https://www.instagram.com/p/..." --list         # a carousel: its videos too
+downex media --site "https://www.instagram.com/p/..." --item ID      # one of them
 downex tools                                                        # yt-dlp and Deno
 ```
 
@@ -822,17 +902,61 @@ downex tools                                                        # yt-dlp and
 - **Resume and expiry.** Each chosen format is one file in `<name>.dxparts`, with a bit per chunk
   set only after it is on disk; a pause, restart or crash keeps the chunks done. Format addresses
   are never stored: every run reads the page again (or uses a recent result) and finds the chosen
-  quality by a stable key; expired addresses (403) are renewed during the download. A quality the
-  page no longer offers fails with `media_invalid`; Downex never switches to another one.
-- **Cookies.** yt-dlp runs without your cookies unless you pass them (`-H "Cookie: ..."`, or the
-  extension option "Send my sign-in cookies when a video needs it"); they go only into a private
-  file deleted after the run.
+  quality by a stable key; expired addresses (403) are renewed during the download, and a video
+  server that still answers 403 fails the download as `site_error` ("the site refused the request
+  (HTTP 403, often bot protection)"). A quality the page no longer offers fails with
+  `media_invalid`; Downex never switches to another one.
+- **Videos your browser fetches** ([SITE-MEDIA-SPEC.md](SITE-MEDIA-SPEC.md) §2.8). Some sites'
+  video servers answer only a web browser (TikTok's do). A video of such a site that you send
+  from the browser's *Download* button (or its menu) is fetched by your browser instead, in the
+  video's tab: the same request its player makes, at the address the player used, with the
+  browser's own connection. Downex saves the bytes as any other download (progress, pause,
+  resume, parts, file check, the Video category). Any other site's video whose server refuses
+  Downex again after a renewal goes on the same way, keeping what it already has. Keep a tab of
+  the site open until the video is saved: a resume after the tab or the browser closed fails with
+  "your browser is no longer fetching this video for Downex"; open the video again and click
+  *Download*. Several such downloads at once take turns: the browser fetches two requests at a
+  time, and the others wait for them. On TikTok only the quality the tab's player loaded is
+  answered: play the video on its page and download from there (the panel picks that quality).
+  Another quality, or a video the tab never played (a grid tile, a feed post or a link added from
+  another tab, the context menu's *Download video* on a link), fails with "the site refused this
+  quality to your browser too: play the video on its page, then download the quality it plays". The
+  page's cookies go with these requests only for a video that needed your sign-in. From the desktop window or `downex media --site`, such a site fails with "the site's
+  video server answers only a web browser: download it with Downex's button in your browser".
+  Downex never pretends to be a browser and never solves a site's checks; YouTube's downloads are
+  unchanged.
+- **Your sign-in.** yt-dlp first reads every video without your cookies. Only when you click
+  *Download* (in the page, the toolbar menu or the context menu) and the site answers that the
+  video needs a sign-in (age-checked or members-only videos, posts only signed-in people can see;
+  never a bot check such as "confirm you're not a bot") does the extension ask once
+  more, at once, with your browser's cookies for that one site, and the panel then says "Used your
+  sign-in for instagram.com.". There is no prompt. The extension option "Use my sign-in for videos
+  that need it" turns this off (it is on unless you turned the earlier sign-in option off).
+  *Since 2026-11-18 (the owner's "never rely on login"):* the option is off for new installs (a
+  stored choice is kept), and it is used for YouTube videos only: other sites are always read
+  without your cookies, and their panels never mention a sign-in.
+  - Only that site's cookies: a known site's own domain (`instagram.com`, `youtube.com`, ...) and
+    its subdomains, never another site's; on any other page only that page's exact host. Never from
+    private windows, never from another container than the tab's own, at most 16 KiB.
+  - Never stored, never logged, never sent anywhere but Downex on this computer, which keeps them in
+    memory for that download's own runs (a resume, a renewed address) until it completes or is
+    removed, or Downex exits, and writes them into a private file for each yt-dlp run that it
+    deletes afterwards (also when the run is cancelled; a file left by a crash is deleted when
+    Downex starts). Background lookups ("Prepare video qualities while you watch") never carry them.
+  - When the site still refuses, the panel says that Downex asked again with this browser's cookies
+    and offers *Try again* (sign in to the site in this browser first; a browser that only visited
+    the site has its cookies too, which are no sign-in). Signing in this way can get an account
+    restricted by the site.
+  - From the command line pass them yourself: `downex media --site URL -H "Cookie: ..."`, and
+    `--cookie-domain instagram.com` to give them to the site's other hosts too.
 - **From the browser.** A *Download* button over YouTube players and video entries in the popup
   open a quality picker; with confirmation on, the download waits in the window's dialog, where
   another quality can still be chosen. On other sites the same button lists yt-dlp's qualities
   next to what the browser loaded (see [Videos on every website](#videos-on-every-website)).
 - **Errors.** `site_unsupported` (no video found), `site_unavailable` (private, removed, blocked or
-  rate-limited), `auth_required` (sign-in, age or bot check), `site_error` (yt-dlp failed),
+  rate-limited, or your address blocked by the site), `auth_required` (sign-in, age or bot check),
+  `site_error` (yt-dlp failed; "the site refused the request (HTTP 403, often bot protection)" when a
+  site's bot protection turns Downex away, which Downex never tries to get past),
   `tools_unavailable` (yt-dlp/Deno could not be set up; see `downex tools`), `site_media_off`
   (Settings → Video sites, or `downex settings --site-media on`); `tools_installing` and
   `site_resolving` mean "try again", which every client does by itself.
@@ -843,9 +967,32 @@ The extension puts a *Download* button over every visible video of any page, in 
 lists what Downex can save there; every video saved this way is **one `.mp4`**. See
 [VIDEO-DETECT-SPEC.md](VIDEO-DETECT-SPEC.md) (its §10 lists what is not yet verified).
 
-- **Which videos.** A video at least 200 × 112 pixels and at least half visible, but not a muted,
-  looping, short background clip without controls. Never on DRM-protected playback (the element has
-  media keys), live streams, or camera and call streams; private windows are never touched.
+- **Which videos.** A video at least 200 × 112 pixels and at least half visible. Never on
+  DRM-protected playback (the element has media keys), live streams, or camera and call streams;
+  private windows are never touched.
+  - On the video sites listed below (TikTok, Instagram, X, Pinterest and the rest), every such video
+    gets the button, also the short, muted, looping clips these sites play without controls.
+  - Elsewhere, such a clip (a background loop on a landing page, also one played by a video
+    site's embedded player) gets only the small Downex mark, and only while the pointer is over it.
+    The mark moves to the video's other top corner when the page has its own button there (a
+    pause button), and is left out when both corners have one.
+- **Save what's playing.** On TikTok, Instagram, Facebook, Threads, VK and any other site whose
+  player streams the video (everything but YouTube, in Chrome, Edge and other Chromium browsers),
+  click the Downex icon on the video you see, in a feed, the For You page, a reels or post viewer, a
+  profile or the video's own page, with or without the comments open: the panel lists *This video*
+  (tagged *Playing*) at the quality your browser played, and *Download* saves exactly that video, with
+  its sound, as one MP4. Downex uses the files the page's own player already loaded for that video,
+  found by its length; it needs no address of the post and no sign-in. Downex downloads them itself
+  and, when the site's server answers only your browser, through the video's tab (keep it open until
+  the video is saved). A video that has not loaded yet shows *Getting this video…* and fills in as it
+  plays. Grid tiles that play nothing (a profile grid) use the post's link as before. The option
+  *Watch videos as they play* turns this off; then the extension records nothing of what tabs play.
+- **Feeds.** On a site's feed, profile or home page (Instagram, Facebook, TikTok, X, ...), the
+  button also looks for the clicked video's own post link next to it and lists that post's qualities
+  under the site's name, after *This video*, when the site gives them without a login. Downex never
+  asks you to open another page and never asks for a sign-in on these sites.
+- **Part of the video** works there too. Where the site gives no length (Instagram), the timeline
+  uses the length of the video playing in the page.
 - **What the panel lists**, at once, from the browser's own traffic of that tab and frame (no page
   scripts or response bodies are read, and the browser itself downloads nothing):
   - **Files**: direct MP4/M4V videos the page loaded (*This video* for the one playing), with the
@@ -855,11 +1002,21 @@ lists what Downex can save there; every video saved this way is **one `.mp4`**. 
   - **Streams**: HLS and DASH manifests, probed for their MP4 qualities when the panel opens; MPEG-TS
     streams are converted.
   - **Site qualities** from yt-dlp: at once on popular video sites (Vimeo, X, Facebook, Instagram,
-    TikTok, Dailymotion, Reddit, Twitch, Streamable, and YouTube as before); elsewhere after *Look for
-    more qualities*, or when the panel has nothing else.
-- **Look-ahead.** While you watch a video on Vimeo, X, TikTok, Dailymotion, Reddit, Twitch or
-  Streamable for 1.5 seconds, Downex gets its qualities in the background, as on YouTube (never on
-  Facebook or Instagram, never with cookies). Nowhere else does yt-dlp run without your click.
+    TikTok, Dailymotion, Reddit, Twitch, Streamable, Bluesky, Pinterest, LinkedIn, Kick clips,
+    Bilibili, VK, Odysee, BitChute, 9GAG, Imgur, Telegram, Tumblr, and YouTube as before); elsewhere
+    after *Look for more qualities*, or when the panel has nothing else. Threads, Snapchat, Rumble
+    and Kick VODs are named but yt-dlp cannot read them today: there the panel lists only what the
+    browser itself loaded. A post or pin (Facebook, Pinterest, Telegram, ...) is listed in the
+    toolbar menu only once a video plays on it.
+- **Look-ahead.** While you watch a video on Vimeo, X, TikTok, Dailymotion, Twitch or Streamable for
+  1.5 seconds, Downex gets its qualities in the background, as on YouTube (never on Facebook,
+  Instagram, Reddit or the other sites, never with cookies). Nowhere else does yt-dlp run without
+  your click.
+- **Right-click.** *Download video from this link with Downex* saves the video of the page a link
+  opens (any site yt-dlp reads; no cookies are sent for sites outside the list above). *Show Downex
+  download panel* on a video opens the panel for it, also where no button shows (a small or
+  looping video, a site where you hid the button). With more than one item, the browser groups them
+  under *Downex*.
 - **Turning it off.** Extension options "Show a Download button over videos" (every site) and "Don't
   show the button on these sites" (a host or `*.domain` per line); the panel's *Don't show on <host>*
   and the popup's switch for the tab's site do the same. The popup and the badge still list the
@@ -937,7 +1094,7 @@ downex-nmhost unregister [--browsers list] [--system]
 | Flag | Meaning |
 |---|---|
 | `--chrome-extension-id ID` | Chromium extension allowed to connect (repeatable). Default: the built-in ID; without one, `register` refuses and asks for the flag. |
-| `--firefox-extension-id ID[,ID]` | Firefox add-ons allowed to connect (repeatable or comma-separated; replaces the default). Default `extension@downex.app,browser@downex.local`. |
+| `--firefox-extension-id ID[,ID]` | Firefox add-ons allowed to connect (repeatable or comma-separated; replaces the default). Default `extension@downex.app`. |
 | `--browsers list` | Any of `chrome,edge,chromium,brave,firefox`. Default: all on Windows; on Linux and macOS the browsers that have a profile directory for this user. |
 | `--system` | Register for all users instead of the current user. |
 | `--keep` | Keep what this relay's existing manifests allow: add the missing extension IDs, rewrite only manifests that are missing, name another path or lack an ID, and never replace a `.bak`. The Mac window runs `register --keep` at each start. |

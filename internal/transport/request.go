@@ -12,11 +12,18 @@ import (
 )
 
 // newHTTPRequest builds the wire request for rr: caller headers minus the ones the
-// transport owns, then User-Agent, Range, If-Range and Accept-Encoding: identity.
+// transport owns, then User-Agent, Range (none for a Whole request), If-Range and
+// Accept-Encoding: identity.
 func newHTTPRequest(ctx context.Context, rr RangeRequest, userAgent string) (*http.Request, error) {
 	rangeValue, err := rangeHeaderValue(rr.Start, rr.End)
 	if err != nil {
 		return nil, err
+	}
+	if rr.Whole {
+		if rr.Start != 0 || rr.End != -1 || rr.IfRange != "" {
+			return nil, fmt.Errorf("transport: %w: a whole request has no range or If-Range", ErrInvalidRequest)
+		}
+		rangeValue = ""
 	}
 	if rr.IfRange != "" && !validIfRange(rr.IfRange) {
 		return nil, fmt.Errorf("transport: %w: If-Range needs a strong entity tag or an HTTP-date", ErrInvalidRequest)
@@ -49,7 +56,9 @@ func newHTTPRequest(ctx context.Context, rr RangeRequest, userAgent string) (*ht
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", userAgent)
 	}
-	req.Header.Set("Range", rangeValue)
+	if rangeValue != "" {
+		req.Header.Set("Range", rangeValue)
+	}
 	req.Header.Set("Accept-Encoding", "identity")
 	if rr.IfRange != "" {
 		req.Header.Set("If-Range", rr.IfRange)

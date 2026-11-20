@@ -1,0 +1,2 @@
+WARNING: [example] 6961: Failed to download web detail JSON: HTTP Error 403: Forbidden
+ERROR: [example] 6961: Fresh cookies (not necessarily logged in) are needed

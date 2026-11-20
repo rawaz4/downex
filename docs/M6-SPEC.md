@@ -13,7 +13,8 @@ All features work on Windows and macOS (Linux: compile + logic, platform hooks m
   `max_concurrent` (0 → global `max_concurrent_downloads`) running, and the global cap allows it. Order =
   the queue's `download_ids` order. Global cap applies across all queues.
 - **Limits:** queue `speed_limit` is a limiter child of the global limiter; downloads are children of their
-  queue's limiter (global → queue → download). A download's limit as the engine sees it (slice size,
+  queue's limiter (global → queue → download). *Polite mode (POLITE-SPEC §5):* queue levels hang below
+  the polite level, itself below the global limiter (global → polite → queue → download). A download's limit as the engine sees it (slice size,
   ramp-up) is the tightest one of that chain; moving a running download to another queue (also by
   deleting its queue) puts it under the new queue's limiter at once.
 - **Schedule** (local time, DST-safe: compute with `time.Date` in `time.Local` each tick): start at
@@ -104,7 +105,8 @@ All features work on Windows and macOS (Linux: compile + logic, platform hooks m
   message-only window in downexd's tray thread; macOS `NSPasteboard` `changeCount` check every 1 s in the
   agent (cgo; no-op without cgo); Linux stub. On a new clipboard text that is exactly one http(s) URL (or a
   few lines of URLs) whose path ends with an extension of any category: `Add` with `source = CLIPBOARD`
-  (confirmation applies like browser hand-offs). A text with any URL that carries user information
+  (confirmation applies like browser hand-offs, and so does the expired-link matching of
+  `DAEMON-SPEC.md` §3 "New links"). A text with any URL that carries user information
   (`https://user:pass@host/…`, also `user@` or an empty `@`) offers nothing at all. Ignore clipboard
   content marked as excluded/sensitive
   (Windows `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory=0`; macOS
@@ -115,10 +117,16 @@ All features work on Windows and macOS (Linux: compile + logic, platform hooks m
   `com.apple.quarantine` = `0081;<hex unix time>;Downex;<UUID>` and `com.apple.metadata:kMDItemWhereFroms`
   (binary plist array [url, referrer]); Linux `user.xdg.origin.url` / `user.xdg.referrer.url`. Failures are
   logged, never fail the download (e.g. FAT32 has no ADS).
+- **File check** (`check_downloaded_files`, default on; DESKTOP-SPEC §9): before the mark, a completed
+  file download's bytes, name and served type are compared (and archive members listed, names only);
+  the result is stored and shown, never acted on. The order in `finish` is check → mark → scan; the
+  mark and the scan run whatever the check says.
 - **Antivirus scan** (`av_scan_enabled` + `av_scan_command` absolute path + `av_scan_args`, `[File]`
   replaced by the quoted path; no shell): run after marking, timeout 10 min, the download is completed
   either way; exit code ≠ 0 → notification "Scanner reported a problem with <name>" and `Download.error`
-  note (state stays completed). Never auto-open files after a failed scan.
+  note (state stays completed). Downex never opens a downloaded file by itself (DESKTOP-SPEC §9.1 F2):
+  any future "open when done" skips files after a failed scan and files whose check is DANGER or
+  CAUTION.
 
 ## 4. Updates
 - `update_feed_url` (https only) points to a JSON manifest `{"version","published_at","notes",
@@ -139,7 +147,12 @@ All features work on Windows and macOS (Linux: compile + logic, platform hooks m
   saved as `<version>@<checked_at ms>` under the prefs key `downex.updateLater`, so the offer comes
   back after the next automatic check (daily, or when downexd starts again).
 - `InstallUpdate`: download the asset with the engine into the data dir, verify size + sha256 (and on
-  Windows the Authenticode signature status when the build is signed), then Windows: run
+  Windows, when the running downexd is Authenticode signed, that the Setup carries a valid signature
+  by the same publisher: the signing certificate's subject distinguished name, compared byte for
+  byte as encoded, must equal the running downexd's; a renewed certificate keeps it, so it is
+  compared rather than the thumbprint. A signer whose subject cannot be read is refused. An unsigned
+  downexd, today's releases and development builds, leaves the Setup to the signed manifest, as
+  before; amendment 2026-11-20), then Windows: run
   `Downex-Setup-<v>.exe /S` detached and shut down gracefully; macOS: mount the DMG, verify the new
   app's code signature (`codesign --verify --deep --strict`) and identifier, and then for a running
   build signed with a Developer ID its team; for an ad-hoc signed running build (the releases) the

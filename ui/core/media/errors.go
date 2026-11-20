@@ -12,6 +12,8 @@ import (
 	"unicode/utf16"
 
 	"connectrpc.com/connect"
+
+	downexv1 "downex/internal/rpc/downex/v1"
 )
 
 // Refusals and errors (MEDIA-SPEC §6.3, SITE-MEDIA-SPEC §3.2, §5.5).
@@ -112,6 +114,11 @@ var SiteTexts = map[string]string{
 	"encrypted":         "This video is DRM-protected. Downex does not download protected content.",
 	"media_unsupported": "No MP4 video on this page.",
 	"playlist":          "Open a single video of this playlist.",
+	"playlist_tracks":   "Open a single track of this playlist.",
+	"audio_opus":        "This page's audio is Opus or Vorbis, which Downex cannot save without converting it.",
+	"audio_raw":         "This page's audio is a raw AAC stream, which Downex cannot save without converting it.",
+	"audio_preview":     "Only a preview of this track is public, not the whole track.",
+	"audio_none":        "No AAC or MP3 audio on this page.",
 	"media_invalid":     "The chosen quality is no longer offered. Add the video again.",
 	"site_error":        "yt-dlp could not read this page",
 	"tools_unavailable": "Downex could not set up yt-dlp/Deno",
@@ -338,6 +345,16 @@ func SiteErrorCode(err error) string {
 
 var playlistWord = regexp.MustCompile(`(?i)playlist|multi[_-]?video`)
 
+// Audio pages' refusals (SITE-MEDIA-SPEC §3.13), by downexd's reason.
+var (
+	opusWord      = regexp.MustCompile(`(?i)\b(opus|vorbis)\b`)
+	rawAACReason  = regexp.MustCompile(`(?i)raw AAC`)
+	previewWord   = regexp.MustCompile(`(?i)\bpreview\b`)
+	noAudioReason = regexp.MustCompile(`(?i)no AAC or MP3 audio`)
+	// singleTrack is a playlist refused on an audio site ("open a single track of it").
+	singleTrack = regexp.MustCompile(`(?i)single track`)
+)
+
 // SiteErrorText is what to tell the user about a failed probe or add of a web page's video
 // (SITE-MEDIA-SPEC §5.5): the text of downexd's code, with its reason where it helps.
 func SiteErrorText(err error) string {
@@ -357,8 +374,19 @@ func SiteErrorText(err error) string {
 	case "live", "encrypted", "media_invalid", "site_media_off":
 		return SiteTexts[code]
 	case "media_unsupported":
-		if playlistWord.MatchString(rest) {
+		switch {
+		case playlistWord.MatchString(rest) && singleTrack.MatchString(rest):
+			return SiteTexts["playlist_tracks"]
+		case playlistWord.MatchString(rest):
 			return SiteTexts["playlist"]
+		case opusWord.MatchString(rest):
+			return SiteTexts["audio_opus"]
+		case rawAACReason.MatchString(rest):
+			return SiteTexts["audio_raw"]
+		case previewWord.MatchString(rest):
+			return SiteTexts["audio_preview"]
+		case noAudioReason.MatchString(rest):
+			return SiteTexts["audio_none"]
 		}
 		return SiteTexts["media_unsupported"]
 	case "site_error", "tools_unavailable":
@@ -410,6 +438,78 @@ func SiteErrorHint(code string) string {
 		return "Downex could not set up yt-dlp/Deno. Settings → Video sites shows why."
 	}
 	return ""
+}
+
+// SiteRefusal is a web page's download the site refused for good (SITE-MEDIA-SPEC §5.5,
+// amendment 2026-11-19): its server answers only a web browser, or refused the browser too,
+// or refused Downex with HTTP 403 (most often bot protection, which Downex never tries to get
+// past). Retrying from the desktop cannot help; the browser's Download button can.
+type SiteRefusal struct {
+	// Reason is the short reason shown as the failure's message ("The site refused …").
+	Reason string
+	// Action is what helps, shown as the hint under it.
+	Action string
+}
+
+// The texts of the site refusals (SITE-MEDIA-SPEC §5.5).
+const (
+	refusedQualityReason = "The site refused this quality, to your browser too (HTTP 403)."
+	refusedQualityAction = "Play the video on its page, then click Download in your browser and pick the quality it plays."
+	browserOnlyReason    = "This site sends its videos only to a web browser."
+	browserForbidReason  = "The site refused the download (HTTP 403, often bot protection)."
+	inBrowserAction      = "Open the video in your browser and click Download there."
+)
+
+// browserOnlyMark, browserRefusedMark and forbiddenMark are downexd's stable reasons of a site
+// refusal (internal/sitemedia ReasonBrowserOnly, ReasonBrowserRefused, ReasonForbidden,
+// LinkRefusedReason(403); internal/played ReasonBrowserOnly), matched without case.
+var (
+	browserOnlyMarks   = []string{"video server answers only a web browser", "answers this video only to your browser"}
+	browserRefusedMark = "refused this quality to your browser too"
+	forbiddenMarks     = []string{"the site refused the request (http 403", "refused the link to the stream (http 403"}
+	status403          = regexp.MustCompile(`\b403\b`)
+)
+
+// SiteRefusalOf is the site refusal of a failed web page download by its error code and
+// message (ok false for any other failure, which keeps the code's hint and Retry).
+func SiteRefusalOf(code, message string) (r SiteRefusal, ok bool) {
+	m := jsLower(message)
+	has := func(marks ...string) bool {
+		for _, k := range marks {
+			if strings.Contains(m, k) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case code != "site_error" && code != "http_status":
+		return SiteRefusal{}, false
+	case has(browserRefusedMark):
+		return SiteRefusal{Reason: refusedQualityReason, Action: refusedQualityAction}, true
+	case has(browserOnlyMarks...):
+		return SiteRefusal{Reason: browserOnlyReason, Action: inBrowserAction}, true
+	case has(forbiddenMarks...), code == "http_status" && status403.MatchString(m):
+		return SiteRefusal{Reason: browserForbidReason, Action: inBrowserAction}, true
+	}
+	return SiteRefusal{}, false
+}
+
+// SiteRefusalOfDownload is SiteRefusalOf a failed web page download (ok false for any other).
+func SiteRefusalOfDownload(d *downexv1.Download) (SiteRefusal, bool) {
+	if d.GetState() != downexv1.DownloadState_DOWNLOAD_STATE_FAILED || !IsSiteDownload(d) {
+		return SiteRefusal{}, false
+	}
+	return SiteRefusalOf(d.GetErrorCode(), d.GetError())
+}
+
+// CannotRetryDownload is CannotRetry of a failed download, a site refusal included.
+func CannotRetryDownload(d *downexv1.Download) bool {
+	if CannotRetry(d.GetErrorCode()) {
+		return true
+	}
+	_, refused := SiteRefusalOfDownload(d)
+	return refused
 }
 
 // CannotRetry reports a failure that trying again cannot help with: Downex never downloads

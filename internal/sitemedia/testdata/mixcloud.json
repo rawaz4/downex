@@ -1,0 +1,13 @@
+{
+  "id": "host_example-mix",
+  "title": "Example mix",
+  "duration": 3614,
+  "extractor_key": "Mixcloud",
+  "formats": [
+    {"format_id": "http", "url": "https://dl.media.example/secure/c/m4a/64/0003.m4a?sig=e", "vcodec": "none", "downloader_options": {"http_chunk_size": 5242880}, "protocol": "https", "ext": "m4a", "audio_ext": "m4a", "video_ext": "none", "abr": null, "tbr": null, "cookies": "mx_t=example; Domain=.media.example; Path=/; Secure; Expires=1829532852"},
+    {"format_id": "hls-64", "manifest_url": "https://aod.media.example/secure/hls/,0003,0003-192K,.m4a.urlset/index.m3u8", "url": "https://aod.media.example/secure/hls/0003.m4a/index-a1.m3u8", "tbr": 64.002, "ext": "mp4", "protocol": "m3u8_native", "has_drm": false, "vcodec": "none", "acodec": "mp4a.40.2", "abr": 64.002, "cookies": "mx_t=example; Domain=.media.example; Path=/; Secure; Expires=1829532852"},
+    {"format_id": "hls-192", "manifest_url": "https://aod.media.example/secure/hls/,0003,0003-192K,.m4a.urlset/index.m3u8", "url": "https://aod.media.example/secure/hls/0003-192K.m4a/index-a1.m3u8", "tbr": 192.001, "ext": "mp4", "protocol": "m3u8_native", "has_drm": false, "vcodec": "none", "acodec": "mp4a.40.2", "abr": 192.001, "cookies": "mx_t=example; Domain=.media.example; Path=/; Secure; Expires=1829532852"},
+    {"format_id": "dash-f1-a1-x3", "ext": "webm", "tbr": 62.653, "asr": 48000, "format_note": "DASH audio", "container": "webm_dash", "vcodec": "none", "acodec": "opus", "url": "https://aod.media.example/secure/dash/0003/manifest.mpd", "protocol": "http_dash_segments", "abr": 62.653},
+    {"format_id": "dash-f2-a1-x3", "ext": "webm", "tbr": 192.071, "asr": 48000, "format_note": "DASH audio", "container": "webm_dash", "vcodec": "none", "acodec": "opus", "url": "https://aod.media.example/secure/dash/0003/manifest.mpd", "protocol": "http_dash_segments", "abr": 192.071}
+  ]
+}

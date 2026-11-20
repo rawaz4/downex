@@ -41,6 +41,7 @@ type Main struct {
 	Queues    *QueuesStore
 	Tools     *ToolsStore
 	Update    *UpdateStore
+	Polite    *PoliteStore
 	Toasts    *Toasts
 	Notices   *Notices
 	// Changes tells that the settings changed (the stores have their own).
@@ -71,6 +72,7 @@ func NewMain(o MainOptions) *Main {
 	m.Queues = NewQueues(QueuesOptions{Daemon: o.Daemon, Events: o.Events, Clock: o.Clock, Call: o.Call, Go: o.Go})
 	m.Tools = NewTools(ToolsOptions{Daemon: o.Daemon, Events: o.Events, Call: o.Call, Go: o.Go})
 	m.Update = NewUpdate(UpdateOptions{Daemon: o.Daemon, Events: o.Events, Storage: o.Storage, Installed: o.UpdateInstalled})
+	m.Polite = NewPolite(PoliteOptions{Events: o.Events})
 	m.Toasts = NewToasts(o.Clock, o.MotionOK)
 	m.Notices = NewNotices(o.Clock, o.MotionOK)
 	return m
@@ -93,6 +95,7 @@ func (m *Main) Start() {
 	m.Queues.Start()
 	m.Tools.Start()
 	m.Update.Start()
+	m.Polite.Start()
 	m.goFn(func() {
 		ctx, cancel := m.call()
 		defer cancel()
@@ -113,6 +116,7 @@ func (m *Main) Dispose() {
 	m.Queues.Dispose()
 	m.Tools.Dispose()
 	m.Update.Dispose()
+	m.Polite.Dispose()
 	m.Downloads.Dispose()
 	m.Notices.Clear()
 }

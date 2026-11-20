@@ -29,7 +29,13 @@ import (
 //   - tools:ready: yt-dlp and Deno are installed; tools:slow: their download goes on for ten
 //     minutes;
 //   - resolve:slow: yt-dlp reads each page for ten minutes ("Getting video info…");
-//   - add:slow: adding a page's video waits for yt-dlp for ten minutes.
+//   - add:slow: adding a page's video waits for yt-dlp for ten minutes;
+//   - check: file checks on some of the scene's downloads and one more hand-off
+//     (filecheck.go, docs/DESKTOP-SPEC.md §9);
+//   - renew: a download whose link expired, a hand-off whose link is being checked and one
+//     that offers to continue the first (renew.go, docs/DESKTOP-SPEC.md §10);
+//   - polite:<on|slowed>: Polite mode is on, watching a smooth line or slowing every
+//     download to 2.4 MB/s (docs/POLITE-SPEC.md §8).
 func (m *Mock) applyFixture(spec string) error {
 	var tokens []string
 	for _, t := range strings.Split(spec, ",") {
@@ -37,7 +43,7 @@ func (m *Mock) applyFixture(spec string) error {
 			tokens = append(tokens, t)
 		}
 	}
-	known := []string{"confirm", "q", "audio", "title", "url", "waiting", "fail", "queues", "main", "night", "gone", "settings", "tools", "resolve", "add"}
+	known := []string{"confirm", "q", "audio", "title", "url", "waiting", "fail", "queues", "main", "night", "gone", "settings", "tools", "resolve", "add", "check", "renew", "polite"}
 	for _, t := range tokens {
 		name, _, _ := strings.Cut(t, ":")
 		if !slices.Contains(known, name) {
@@ -99,6 +105,17 @@ func (m *Mock) applyFixture(spec string) error {
 	}
 	if v, _ := value("add"); v == "slow" {
 		m.addSlowUntil = m.now() + 600_000
+	}
+	switch v, ok := value("polite"); {
+	case !ok:
+	case v == "on":
+		m.settings.PoliteMode = true
+	case v == "slowed":
+		m.settings.PoliteMode = true
+		m.politeFixed = &downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_SLOWED, RateLimit: 2_400_000,
+			DelayMs: 42, BaseMs: 18, Since: stamp(m.startedAt)}
+	default:
+		return fixtureError("polite needs on or slowed")
 	}
 
 	queueCount, err := count("queues", 2)
@@ -260,6 +277,16 @@ func (m *Mock) applyFixture(spec string) error {
 	}
 	for i := waiting; i < want; i++ {
 		if _, err := m.addNow(m.handoffRequest()); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(tokens, "check") {
+		if err := m.applyCheckFixture(); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(tokens, "renew") {
+		if err := m.applyRenewFixture(); err != nil {
 			return err
 		}
 	}

@@ -20,6 +20,7 @@ import (
 	"downex/internal/engine"
 	"downex/internal/ipc"
 	"downex/internal/model"
+	"downex/internal/polite"
 	downexv1 "downex/internal/rpc/downex/v1"
 )
 
@@ -338,6 +339,10 @@ func (a *app) settings(ctx context.Context, args []string) error {
 		siteMedia  bool
 		toolsAuto  bool
 		channel    string
+		checkFiles bool
+		renewLinks string
+		politeOn   bool
+		politeMs   int
 	)
 	fs.IntVar(&concurrent, "max-concurrent", 0, fmt.Sprintf("run at most `n` downloads at once (%d-%d)", minConcurrent, maxConcurrent))
 	fs.StringVar(&limitArg, "global-limit", "", "limit all downloads together to `rate` bytes per second, e.g. 10M = 10 MB/s (0 = unlimited)")
@@ -361,6 +366,11 @@ func (a *app) settings(ctx context.Context, args []string) error {
 	fs.Var(onOff{&siteMedia}, "site-media", "`on|off`: download videos from web pages with yt-dlp (downloaded on first use)")
 	fs.Var(onOff{&toolsAuto}, "tools-auto-update", "`on|off`: update Downex's own yt-dlp and Deno daily")
 	fs.StringVar(&channel, "tools-channel", "", "yt-dlp release `channel`: stable or nightly (recommended by yt-dlp)")
+	fs.Var(onOff{&checkFiles}, "check-files", "`on|off`: warn when a downloaded file is not what its name says (a program\nnamed like a video, an error page instead of the file)")
+	fs.StringVar(&renewLinks, "renew-links", "", "`auto|ask|off`: what a new link to a file whose link expired does: continue that\ndownload (auto), ask first (ask) or nothing (off); the bytes are compared first")
+	fs.Var(onOff{&politeOn}, "polite", "`on|off`: Polite mode: slow down when downloads make calls, games or streaming\nlag; speed back up when the line is quiet")
+	fs.IntVar(&politeMs, "polite-target", 0, fmt.Sprintf("Polite mode keeps the line's extra delay under `ms` milliseconds (%d-%d;\n0 = the default %d)",
+		polite.MinTarget/time.Millisecond, polite.MaxTarget/time.Millisecond, polite.DefaultTarget/time.Millisecond))
 	fs.BoolVar(&asJSON, "json", false, "print JSON")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
@@ -369,6 +379,7 @@ func (a *app) settings(ctx context.Context, args []string) error {
 	if len(pos) != 0 {
 		return usageError{"settings", "takes no arguments"}
 	}
+	renewMode, renewOK := renewLinksValues[renewLinks]
 	set := visited(fs)
 	var limit int64
 	switch {
@@ -384,6 +395,11 @@ func (a *app) settings(ctx context.Context, args []string) error {
 		return usageError{"settings", "--av-args must not contain control characters"}
 	case set["tools-channel"] && channel != "stable" && channel != "nightly":
 		return usageError{"settings", fmt.Sprintf("--tools-channel must be stable or nightly, got %q", channel)}
+	case set["renew-links"] && !renewOK:
+		return usageError{"settings", fmt.Sprintf("--renew-links must be auto, ask or off, got %q", renewLinks)}
+	case set["polite-target"] && !polite.ValidTargetMs(politeMs):
+		return usageError{"settings", fmt.Sprintf("--polite-target must be between %d and %d (or 0 for the default), got %d",
+			polite.MinTarget/time.Millisecond, polite.MaxTarget/time.Millisecond, politeMs)}
 	}
 	if set["update-feed"] {
 		if feedURL, err = checkFeedURL(feedURL); err != nil {
@@ -443,6 +459,10 @@ func (a *app) settings(ctx context.Context, args []string) error {
 		{"site-media", func() { s.SiteMedia = siteMedia }},
 		{"tools-auto-update", func() { s.ToolsAutoUpdate = toolsAuto }},
 		{"tools-channel", func() { s.ToolsChannel = channel }},
+		{"check-files", func() { s.CheckDownloadedFiles = checkFiles }},
+		{"renew-links", func() { s.RenewLinks = renewMode }},
+		{"polite", func() { s.PoliteMode = politeOn }},
+		{"polite-target", func() { s.PoliteTargetMs = int32(politeMs) }},
 	}
 	changed := false
 	for _, ch := range changes {
@@ -481,6 +501,8 @@ func (a *app) settings(ctx context.Context, args []string) error {
 	fmt.Fprintf(tw, "Progress window:\t%s\n", onOffText(v.ShowProgressWindow))
 	fmt.Fprintf(tw, "Completion view:\t%s\n", onOffText(v.ShowCompleteDialog))
 	fmt.Fprintf(tw, "Clipboard monitor:\t%s\n", onOffText(v.ClipboardMonitor))
+	fmt.Fprintf(tw, "Check downloaded files:\t%s\n", onOffText(v.CheckDownloadedFiles))
+	fmt.Fprintf(tw, "Expired links:\t%s\n", renewLinksText[v.RenewLinks])
 	fmt.Fprintf(tw, "Mark downloaded files:\t%s\n", onOffText(v.MarkDownloadedFiles))
 	scan := onOffText(v.AVScanEnabled)
 	if v.AVScanCommand != "" {
@@ -499,6 +521,7 @@ func (a *app) settings(ctx context.Context, args []string) error {
 	fmt.Fprintf(tw, "Automatic update checks:\t%s\n", onOffText(v.AutoCheckUpdates))
 	fmt.Fprintf(tw, "Video sites (yt-dlp):\t%s\n", onOffText(v.SiteMedia))
 	fmt.Fprintf(tw, "Update yt-dlp and Deno:\t%s (%s channel)\n", onOffText(v.ToolsAutoUpdate), printable(v.ToolsChannel))
+	fmt.Fprintf(tw, "Polite mode:\t%s\n", politeSettingText(v.PoliteMode, v.PoliteTargetMs))
 	fmt.Fprintf(tw, "Site logins:\t%d (see \"downex login ls\")\n", len(v.SiteLogins))
 	if err := tw.Flush(); err != nil {
 		return err
@@ -525,20 +548,50 @@ type settingsView struct {
 	ShowProgressWindow      bool           `json:"showProgressWindow"`
 	ShowCompleteDialog      bool           `json:"showCompleteDialog"`
 	// M6 (docs/M6-SPEC.md). Passwords are never part of the settings.
-	Proxy               proxyView       `json:"proxy"`
-	HostRules           []hostRuleView  `json:"hostRules"`
-	SiteLogins          []siteLoginView `json:"siteLogins"`
-	ClipboardMonitor    bool            `json:"clipboardMonitor"`
-	MarkDownloadedFiles bool            `json:"markDownloadedFiles"`
-	AVScanEnabled       bool            `json:"avScanEnabled"`
-	AVScanCommand       string          `json:"avScanCommand,omitempty"`
-	AVScanArgs          string          `json:"avScanArgs,omitempty"`
-	UpdateFeedURL       string          `json:"updateFeedUrl,omitempty"`
-	AutoCheckUpdates    bool            `json:"autoCheckUpdates"`
+	Proxy                proxyView       `json:"proxy"`
+	HostRules            []hostRuleView  `json:"hostRules"`
+	SiteLogins           []siteLoginView `json:"siteLogins"`
+	ClipboardMonitor     bool            `json:"clipboardMonitor"`
+	MarkDownloadedFiles  bool            `json:"markDownloadedFiles"`
+	CheckDownloadedFiles bool            `json:"checkDownloadedFiles"` // the file check (docs/DESKTOP-SPEC.md §9)
+	RenewLinks           string          `json:"renewLinks"`           // expired links: auto, ask or off (docs/DESKTOP-SPEC.md §10)
+	AVScanEnabled        bool            `json:"avScanEnabled"`
+	AVScanCommand        string          `json:"avScanCommand,omitempty"`
+	AVScanArgs           string          `json:"avScanArgs,omitempty"`
+	UpdateFeedURL        string          `json:"updateFeedUrl,omitempty"`
+	AutoCheckUpdates     bool            `json:"autoCheckUpdates"`
 	// Site media (docs/SITE-MEDIA-SPEC.md §3.8).
 	SiteMedia       bool   `json:"siteMedia"`
 	ToolsAutoUpdate bool   `json:"toolsAutoUpdate"`
 	ToolsChannel    string `json:"toolsChannel"`
+	// Polite mode (docs/POLITE-SPEC.md §7); the target in milliseconds, 0 = the default.
+	PoliteMode     bool `json:"politeMode"`
+	PoliteTargetMs int  `json:"politeTargetMs"`
+}
+
+// renewLinksValues maps --renew-links to the setting.
+var renewLinksValues = map[string]downexv1.RenewLinks{
+	"auto": downexv1.RenewLinks_RENEW_LINKS_AUTO,
+	"ask":  downexv1.RenewLinks_RENEW_LINKS_ASK,
+	"off":  downexv1.RenewLinks_RENEW_LINKS_OFF,
+}
+
+// renewLinksText words the setting for "settings".
+var renewLinksText = map[string]string{
+	"auto": "continue with a matching new link",
+	"ask":  "ask before continuing",
+	"off":  "don't look for new links",
+}
+
+// renewLinksName is the setting's name; UNSPECIFIED is auto.
+func renewLinksName(v downexv1.RenewLinks) string {
+	switch v {
+	case downexv1.RenewLinks_RENEW_LINKS_ASK:
+		return "ask"
+	case downexv1.RenewLinks_RENEW_LINKS_OFF:
+		return "off"
+	}
+	return "auto"
 }
 
 // hostRuleView is one per-host limit: at most MaxConnections per download (0 = the
@@ -574,7 +627,11 @@ func newSettingsView(s *downexv1.Settings) settingsView {
 		MarkDownloadedFiles: s.GetMarkDownloadedFiles(), AVScanEnabled: s.GetAvScanEnabled(),
 		AVScanCommand: s.GetAvScanCommand(), AVScanArgs: s.GetAvScanArgs(), UpdateFeedURL: s.GetUpdateFeedUrl(),
 		AutoCheckUpdates: s.GetAutoCheckUpdates(), SiteMedia: s.GetSiteMedia(), ToolsAutoUpdate: s.GetToolsAutoUpdate(),
-		ToolsChannel: s.GetToolsChannel(),
+		ToolsChannel:         s.GetToolsChannel(),
+		CheckDownloadedFiles: s.GetCheckDownloadedFiles(),
+		RenewLinks:           renewLinksName(s.GetRenewLinks()),
+		PoliteMode:           s.GetPoliteMode(),
+		PoliteTargetMs:       int(s.GetPoliteTargetMs()),
 	}
 	if v.ToolsChannel == "" {
 		v.ToolsChannel = "nightly" // the daemon's default
@@ -763,19 +820,95 @@ func (a *app) stopDaemon(ctx context.Context, c *client.Client) error {
 
 // statusView is the JSON form of "daemon status".
 type statusView struct {
-	Running   bool       `json:"running"`
-	Version   string     `json:"version,omitempty"`
-	PID       int        `json:"pid,omitempty"`
-	Endpoint  string     `json:"endpoint"`
-	StartedAt *time.Time `json:"startedAt,omitempty"`
-	Active    int        `json:"active"`
-	Queued    int        `json:"queued"`
+	Running   bool        `json:"running"`
+	Version   string      `json:"version,omitempty"`
+	PID       int         `json:"pid,omitempty"`
+	Endpoint  string      `json:"endpoint"`
+	StartedAt *time.Time  `json:"startedAt,omitempty"`
+	Active    int         `json:"active"`
+	Queued    int         `json:"queued"`
+	Polite    *politeView `json:"polite,omitempty"` // absent from an older daemon
+}
+
+// politeView is Polite mode's status (docs/POLITE-SPEC.md §7): the state's name as the
+// relay spells it, the cap in bytes per second (0 = none) and the line delay over the
+// base and the base, in milliseconds (-1 = unknown).
+type politeView struct {
+	State     string `json:"state"`
+	RateLimit int64  `json:"rateLimit"`
+	DelayMs   int32  `json:"delayMs"`
+	BaseMs    int32  `json:"baseMs"`
+}
+
+// newPoliteView returns the view of a daemon's Polite mode status, nil for a daemon
+// without Polite mode.
+func newPoliteView(p *downexv1.PoliteStatus) *politeView {
+	name := politeStateName(p.GetState())
+	if name == "" {
+		return nil
+	}
+	return &politeView{State: name, RateLimit: p.GetRateLimit(), DelayMs: p.GetDelayMs(), BaseMs: p.GetBaseMs()}
+}
+
+// politeStateName is the name of a Polite mode state ("" for an older daemon's).
+func politeStateName(s downexv1.PoliteState) string {
+	switch s {
+	case downexv1.PoliteState_POLITE_STATE_OFF:
+		return "off"
+	case downexv1.PoliteState_POLITE_STATE_IDLE:
+		return "idle"
+	case downexv1.PoliteState_POLITE_STATE_WATCHING:
+		return "watching"
+	case downexv1.PoliteState_POLITE_STATE_SLOWED:
+		return "slowed"
+	case downexv1.PoliteState_POLITE_STATE_MEASURING:
+		return "measuring"
+	case downexv1.PoliteState_POLITE_STATE_NO_SIGNAL:
+		return "no_signal"
+	case downexv1.PoliteState_POLITE_STATE_UNAVAILABLE:
+		return "unavailable"
+	}
+	return ""
+}
+
+// politeStatusText is the "Polite mode:" line of "daemon status" (docs/POLITE-SPEC.md
+// §8).
+func politeStatusText(v *politeView) string {
+	delay := ""
+	if v.DelayMs >= 0 {
+		delay = fmt.Sprintf(" (line delay +%d ms)", v.DelayMs)
+	}
+	switch v.State {
+	case "off":
+		return "off"
+	case "idle":
+		return "on (nothing downloading)"
+	case "watching":
+		return "on, full speed" + delay
+	case "slowed":
+		return "slowed to " + formatRate(v.RateLimit) + " to keep the line smooth" + delay
+	case "measuring":
+		return "measuring the line"
+	case "no_signal":
+		return "on, but this connection can't be measured: full speed"
+	case "unavailable":
+		return "not available in this downexd"
+	}
+	return v.State
+}
+
+// politeSettingText is the "Polite mode:" line of "settings".
+func politeSettingText(on bool, targetMs int) string {
+	if !on {
+		return "off"
+	}
+	return fmt.Sprintf("on (target +%d ms)", polite.TargetOf(targetMs)/time.Millisecond)
 }
 
 func (a *app) printStatus(st *downexv1.StatusResponse, ep string, asJSON bool) error {
 	v := statusView{
 		Running: true, Version: st.GetVersion(), PID: int(st.GetPid()), Endpoint: endpointOrDefault(st.GetEndpoint(), ep),
-		Active: int(st.GetActive()), Queued: int(st.GetQueued()),
+		Active: int(st.GetActive()), Queued: int(st.GetQueued()), Polite: newPoliteView(st.GetPolite()),
 	}
 	if ts := st.GetStartedAt(); ts != nil {
 		t := ts.AsTime()
@@ -795,6 +928,9 @@ func (a *app) printStatus(st *downexv1.StatusResponse, ep string, asJSON bool) e
 		fmt.Fprintf(tw, "Started:\t%s (up %s)\n", formatTime(*v.StartedAt), formatDuration(time.Since(*v.StartedAt)))
 	}
 	fmt.Fprintf(tw, "Downloads:\t%d active, %d queued\n", v.Active, v.Queued)
+	if v.Polite != nil {
+		fmt.Fprintf(tw, "Polite mode:\t%s\n", politeStatusText(v.Polite))
+	}
 	return tw.Flush()
 }
 
@@ -840,7 +976,7 @@ func rpcView(d *downexv1.Download) downloadView {
 		State: rpcStateName(d.GetState()), Mode: rpcMode(d.GetMode()).String(),
 		Size: d.GetSize(), SizeApprox: d.GetSizeApprox(), Downloaded: d.GetReceived(),
 		MaxConnections: int(d.GetMaxConnections()), SpeedLimit: d.GetSpeedLimit(),
-		Error: d.GetError(), ErrorCode: d.GetErrorCode(),
+		Error: d.GetError(), ErrorCode: d.GetErrorCode(), PageURL: d.GetPageUrl(),
 		SpeedBps: d.GetSpeedBps(), Connections: int(d.GetConnections()), QueuePosition: int(d.GetQueuePosition()),
 		Category: d.GetCategory(), ExpectedSize: d.GetExpectedSize(), MIME: d.GetMime(), Kind: model.KindFile.String(),
 	}
@@ -858,6 +994,7 @@ func rpcView(d *downexv1.Download) downloadView {
 		v.Source = "clipboard"
 	}
 	v.QueueID = d.GetQueueId()
+	v.FileCheck = rpcFileCheckView(d.GetFileCheck())
 	if ts := d.GetCreatedAt(); ts != nil {
 		v.CreatedAt = ts.AsTime()
 	}

@@ -42,15 +42,18 @@ func TestClassifyFixtures(t *testing.T) {
 			"Too Many Requests>)",
 		"site_unavailable-terminated.txt": "Video unavailable. This video is no longer available because the YouTube account " +
 			"associated with this video has been terminated.",
-		"site_unavailable-tryagain.txt": "Video unavailable. This content isn't available, try again later.",
-		"encrypted-drm.txt":             "This video is DRM protected",
-		"live-upcoming.txt":             "This live event will begin in 3 hours.",
-		"live-premiere.txt":             "Premieres in 2 days",
-		"site_unsupported-generic.txt":  "Unsupported URL",
-		"site_error-proxy.txt":          "the proxy needs a sign-in yt-dlp cannot do",
-		"site_error-extract.txt":        "Failed to extract any player response; please report this issue on, filling out the appropriate issue template.",
-		"site_error-crash.txt":          "MemoryError",
-		"site_error-controls.txt":       "Bad name here",
+		"site_unavailable-tryagain.txt":  "Video unavailable. This content isn't available, try again later.",
+		"site_unavailable-ipblocked.txt": "Your IP address is blocked from accessing this post",
+		"auth_required-freshcookies.txt": "Fresh cookies (not necessarily logged in) are needed",
+		"site_error-forbidden.txt":       "the site refused the request (HTTP 403, often bot protection)",
+		"encrypted-drm.txt":              "This video is DRM protected",
+		"live-upcoming.txt":              "This live event will begin in 3 hours.",
+		"live-premiere.txt":              "Premieres in 2 days",
+		"site_unsupported-generic.txt":   "Unsupported URL",
+		"site_error-proxy.txt":           "the proxy needs a sign-in yt-dlp cannot do",
+		"site_error-extract.txt":         "Failed to extract any player response; please report this issue on, filling out the appropriate issue template.",
+		"site_error-crash.txt":           "MemoryError",
+		"site_error-controls.txt":        "Bad name here",
 	}
 	files, err := filepath.Glob(filepath.Join("testdata", "stderr", "*.txt"))
 	if err != nil || len(files) != len(reasons) {

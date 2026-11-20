@@ -48,6 +48,7 @@ type router struct {
 	userAgent   string
 	maxHeader   int64
 	now         func() time.Time
+	peers       *PeerTable // records the live connections (nil: none)
 
 	mu  sync.Mutex
 	bad map[badRoute]time.Time // routes that could not be reached, until when
@@ -59,7 +60,7 @@ type badRoute struct {
 	route  string // Proxy.String
 }
 
-func newRouter(resolver ProxyResolver, dialer *net.Dialer, opts HTTPOptions, proxyTLS *tls.Config) *router {
+func newRouter(resolver ProxyResolver, dialer *net.Dialer, opts HTTPOptions, proxyTLS *tls.Config, peers *PeerTable) *router {
 	return &router{
 		resolver:    resolver,
 		dialer:      dialer,
@@ -71,6 +72,7 @@ func newRouter(resolver ProxyResolver, dialer *net.Dialer, opts HTTPOptions, pro
 		maxHeader:   int64(opts.MaxHeaderBytes),
 		now:         time.Now,
 		bad:         map[badRoute]time.Time{},
+		peers:       peers,
 	}
 }
 
@@ -310,6 +312,8 @@ func (r *router) dialContext(ctx context.Context, network, addr string) (net.Con
 	switch {
 	case hop.forwarded:
 		conn, err = r.dialProxy(ctx, p)
+	case p.Kind == ProxyDirect && publicOnly(ctx):
+		conn, err = publicDialer(r.dialer).DialContext(ctx, network, addr)
 	case p.Kind == ProxyDirect:
 		conn, err = r.dialer.DialContext(ctx, network, addr)
 	case p.Kind.isSOCKS():
@@ -323,7 +327,8 @@ func (r *router) dialContext(ctx context.Context, network, addr string) (net.Con
 		return nil, unreachable(p, err)
 	}
 	r.clearBad(hop.target, p)
-	return conn, nil
+	// The peer is the address this connection reached: the origin, or the proxy.
+	return r.peers.track(conn, hop.target), nil
 }
 
 // dialProxy connects to the HTTP or HTTPS proxy p. An HTTPS proxy is verified like any

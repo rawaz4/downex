@@ -9,6 +9,7 @@ import {
   PROTECTED_FRAME_PROBE,
   resolveOfferKey,
   streamEntry,
+  streamGroup,
   tabFileEntries,
   tabGroupCount,
   tabStreamEntries,
@@ -192,7 +193,12 @@ describe('buildFrameOffers', () => {
     expect(fromTop).toMatchObject({ title: 'A page', topHost: 'site.example' });
     const fromSub = buildFrameOffers(input({ sender: { frameId: 4 }, items: all, mse: true }));
     expect(fromSub.files.map((f) => f.key)).toEqual([itemKey(sub)]);
-    expect(fromSub.streams).toEqual([{ key: itemKey(subStream), format: 'hls', display: 'cdn.example/master.m3u8', frame: 'this', matched: true }]);
+    expect(fromSub.streams).toEqual([{ key: itemKey(subStream), format: 'hls', display: 'cdn.example/master.m3u8', group: streamGroup(subStream.url), frame: 'this', matched: true }]);
+    // A stream's group never carries its address.
+    expect(fromSub.streams[0]?.group).not.toContain('cdn.example');
+    expect(streamGroup('https://cdn.example/v/abc_720w.m3u8')).toBe(streamGroup('https://cdn.example/v/abc.m3u8'));
+    expect(streamGroup('https://cdn.example/v/abc_720w.m3u8')).not.toBe(streamGroup('https://cdn.example/v/abd_720w.m3u8'));
+    expect(streamGroup('https://cdn.example/a/master.m3u8')).not.toBe(streamGroup('https://cdn.example/b/master.m3u8'));
     // A sub-frame (an ad network's, a third-party player's) learns neither the tab's title nor
     // its host, and its files are not named after the tab.
     expect(fromSub).toMatchObject({ title: '', topHost: '' });
@@ -388,5 +394,47 @@ describe('tabGroupCount', () => {
     ];
     expect(tabGroupCount({ items, pageVideos: new Map([[2, 'vimeo:1']]), reports, refused: none })).toBe(0);
     expect(tabGroupCount({ items, pageVideos: new Map(), reports: [], refused: none })).toBe(3);
+  });
+});
+
+describe('the stream of the video playing now (VIDEO-DETECT-SPEC §2.6)', () => {
+  it('marks only the streams whose segments the frame fetched last, among a grid\'s many', () => {
+    const tile = (n: number, lastSeen: number) => [
+      stream({ url: `https://media.example/hls/a${n}/b${n}/clip${n}_720w.m3u8`, lastSeen }),
+      stream({ url: `https://media.example/hls/a${n}/b${n}/clip${n}_audio.m3u8`, lastSeen }),
+    ];
+    const seg = (n: number, i: number, lastSeen: number) =>
+      item({ url: `https://media.example/hls/a${n}/b${n}/clip${n}_720w0000${i}.ts`, segment: true, size: 300_000, lastSeen });
+    const items = [...tile(1, 100), ...tile(2, 200), ...tile(3, 300), seg(1, 1, 1_000), seg(1, 2, 2_000), seg(3, 1, -20_000)];
+    const o = buildFrameOffers(input({ mse: true, items }));
+    const matched = o.streams.filter((s) => s.matched).map((s) => s.display);
+    expect(matched.sort()).toEqual(['media.example/clip1_720w.m3u8', 'media.example/clip1_audio.m3u8']);
+    // No segment names a stream (another host's segments, or none): every stream, as before.
+    const none = buildFrameOffers(input({ mse: true, items: [...tile(1, 100), ...tile(2, 200)] }));
+    expect(none.streams.every((s) => s.matched)).toBe(true);
+    const elsewhere = buildFrameOffers(input({ mse: true, items: [...tile(1, 100), ...tile(2, 200), item({ url: 'https://other.example/x/y/1.ts', segment: true })] }));
+    expect(elsewhere.streams.every((s) => s.matched)).toBe(true);
+  });
+
+  it('takes the page\'s own word for where the segments fetched last are (TS segments are no recorded files)', () => {
+    const items = [
+      stream({ url: 'https://video.example/watch/a/CIDA/playlist.m3u8', lastSeen: 10 }),
+      stream({ url: 'https://video.example/watch/a/CIDA/720p/video.m3u8', lastSeen: 11 }),
+      stream({ url: 'https://video.example/watch/b/CIDB/playlist.m3u8', lastSeen: 20 }),
+      stream({ url: 'https://video.example/watch/b/CIDB/720p/video.m3u8', lastSeen: 21 }),
+    ];
+    const o = buildFrameOffers(input({ mse: true, items, playingDirs: ['https://video.example/watch/a/CIDA/720p/'] }));
+    expect(o.streams.filter((s) => s.matched).map((s) => s.key).sort()).toEqual([itemKey(items[0] as MediaItem), itemKey(items[1] as MediaItem)].sort());
+  });
+
+  it('takes a master playlist above its variants\' folders', () => {
+    const items = [
+      stream({ url: 'https://media.example/v/123/master.m3u8', lastSeen: 10 }),
+      stream({ url: 'https://media.example/v/456/master.m3u8', lastSeen: 20 }),
+      item({ url: 'https://media.example/v/123/720p/seg1.ts', segment: true, size: 300_000, lastSeen: 50 }),
+    ];
+    const o = buildFrameOffers(input({ mse: true, items }));
+    expect(o.streams.filter((s) => s.matched).map((s) => s.display)).toEqual(['media.example/master.m3u8']);
+    expect(o.streams.find((s) => s.matched)?.key).toBe(itemKey(items[0] as MediaItem));
   });
 });

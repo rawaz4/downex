@@ -119,13 +119,15 @@ func TestFirstUseInstall(t *testing.T) {
 	}
 }
 
-// TestInstallLeftoversCleaned: partial downloads, work folders, unfinished and unknown
-// version folders of an earlier run are removed at start.
+// TestInstallLeftoversCleaned: partial downloads, work folders (with a sign-in's cookie
+// file a crash left, docs/SITE-MEDIA-SPEC.md §6.3), unfinished and unknown version
+// folders of an earlier run are removed at start.
 func TestInstallLeftoversCleaned(t *testing.T) {
 	dir := t.TempDir()
 	leftovers := []string{
 		filepath.Join(dir, "tmp", "x.part"),
 		filepath.Join(dir, "run", "0123456789abcdef", "tmp", "_MEI1", "python.dll"),
+		filepath.Join(dir, "run", "fedcba9876543210", "cookies.txt"),
 		filepath.Join(dir, "yt-dlp", "2026.10.20.new-00ff00ff00ff00ff", "yt-dlp.exe"),
 		filepath.Join(dir, "yt-dlp", "2025.01.01", "yt-dlp.exe"),
 		filepath.Join(dir, "deno", "2.1.0", "deno.exe"),

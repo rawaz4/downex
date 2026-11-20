@@ -28,12 +28,14 @@
   import VideoCard, { shortClassName } from './VideoCard.svelte';
   import { RATE_UNITS, formatBytes, formatSpeed, parseRate, type RateUnit } from '../format';
   import {
+    audioPage,
     codecName,
     defaultPick,
     languageName,
     looksLikeManifest,
     mediaErrorText,
     needsToolsSettings,
+    noSound,
     pickSize,
     pickedAudio,
     qualityName,
@@ -392,7 +394,8 @@
       if (busy === 'probe') return 'Finding qualities…';
       if (busy === 'add') return 'Adding…';
       if (!info) return 'Find qualities';
-      return origin === 'site' ? 'Add video' : 'Add stream';
+      if (origin === 'site') return audioPage(info) ? 'Add audio' : 'Add video';
+      return 'Add stream';
     }
     if (busy !== null) return 'Adding…';
     return urlCount > 1 ? `Add ${urlCount} downloads` : 'Add download';
@@ -458,9 +461,11 @@
         : ''
       : video.kind === 'muxed'
         ? 'with its sound'
-        : audio
-          ? `+ ${lang ? `${lang} audio` : 'audio'}`
-          : '';
+        : noSound(info, video)
+          ? '· no sound'
+          : audio
+            ? `+ ${lang ? `${lang} audio` : 'audio'}`
+            : '';
     const size = pickSize(info, pick);
     const prefix = size.kind === 'estimate' ? 'about ' : size.kind === 'approx' ? '~' : '';
     return { head, sound, prefix, size: size.bytes > 0 ? formatBytes(size.bytes) : '' };

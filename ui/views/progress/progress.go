@@ -60,6 +60,10 @@ type Options struct {
 	// Close closes the window (nil: the kit window's Close, which the host turns into the
 	// end of the process).
 	Close func()
+	// Renew shows the main window's New link dialog of the download (a link that expired,
+	// docs/DESKTOP-SPEC.md §10; nil: host.StartMainRenew, which starts the main window with
+	// "--renew <id>").
+	Renew func(id int64) error
 	// Now, Scheduler and NoMotion are the kit window's (tests; nil: real time and timers).
 	Now       func() time.Time
 	Scheduler kit.Scheduler
@@ -81,6 +85,9 @@ type OpenQuestion struct {
 	// Executable: the file would run code when opened; HiddenControls: its real name has
 	// bidi control characters; WithApp: Open with… (the user chooses the app next).
 	Executable, HiddenControls, WithApp bool
+	// Disguise is the description of a file that is not what its name says
+	// (display.DisguiseText; "" for any other file, docs/DESKTOP-SPEC.md §9.7).
+	Disguise string
 	// Confirm is the user's yes: the window opens the file (or asks for the app). Closed is
 	// called when the prompt has gone, after Confirm too.
 	Confirm func()

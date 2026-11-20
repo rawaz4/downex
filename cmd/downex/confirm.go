@@ -12,14 +12,16 @@ import (
 )
 
 func (a *app) confirm(ctx context.Context, args []string) error {
-	fs := a.flagSet("confirm", "confirm <id> [-o dir] [--name file] [--video ID] [--audio ID] [--queue q] [--later] [--wait]",
+	fs := a.flagSet("confirm", "confirm <id> [-o dir] [--name file] [--video ID] [--audio ID] [--from t] [--to t | --chapter N | --whole]\n"+
+		"       [--queue q] [--later] [--wait]",
 		"Confirm a download handed off by the browser that awaits confirmation (its state is\n"+
 			"\"awaiting\" in \"downex ls\"): queue it now, or with --later keep it paused until\n"+
 			"\"downex resume <id>\". -o and --name replace the proposed folder and file name; a\n"+
 			"name that is taken gets a \" (n)\" suffix. For a stream or a video page, --video and --audio\n"+
 			"choose other tracks, e.g. any MP4 quality of the page (see \"downex info <id>\"); a page's\n"+
 			"video stays an .mp4. --queue puts it into another queue: it starts when that\n"+
-			"queue runs. To cancel the download, use \"downex rm <id>\".\n"+
+			"queue runs. --from, --to and --chapter save only part of a video (see \"downex media\"),\n"+
+			"--whole all of it. To cancel the download, use \"downex rm <id>\".\n"+
 			"With --wait, follow the progress until the download completes.")
 	t := a.daemonFlags(fs)
 	var (
@@ -30,6 +32,7 @@ func (a *app) confirm(ctx context.Context, args []string) error {
 		video string
 		audio string
 		queue string
+		clipF clipFlags
 	)
 	fs.StringVar(&dir, "o", "", "save into `dir` instead of the proposed folder")
 	fs.StringVar(&name, "name", "", "save as `file` instead of the proposed name")
@@ -38,6 +41,10 @@ func (a *app) confirm(ctx context.Context, args []string) error {
 	fs.BoolVar(&later, "later", false, "keep the download paused (\"download later\") instead of queueing it")
 	fs.StringVar(&queue, "queue", "", "put the download into `queue` (an id or a name, see \"downex queue ls\"; default: keep its queue)")
 	fs.BoolVar(&wait, "wait", false, "follow the download's progress until it completes")
+	fs.StringVar(&clipF.from, "from", "", "streams and video pages: save only part of the video, from `time` (e.g. 1:20)")
+	fs.StringVar(&clipF.to, "to", "", "streams and video pages: save the part up to `time` (default: to the end)")
+	fs.IntVar(&clipF.chapter, "chapter", 0, "video pages: save only chapter `N` (1-based, see \"downex info <id>\")")
+	fs.BoolVar(&clipF.whole, "whole", false, "streams and video pages: save the whole video instead of a part")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return silentError{err}
@@ -49,7 +56,12 @@ func (a *app) confirm(ctx context.Context, args []string) error {
 	if later && wait {
 		return usageError{"confirm", "--later and --wait cannot be combined"}
 	}
-	if visited(fs)["name"] && name == "" {
+	set := visited(fs)
+	clip, err := clipF.parse("confirm", set)
+	if err != nil {
+		return err
+	}
+	if set["name"] && name == "" {
 		return usageError{"confirm", "--name must not be empty"}
 	}
 	if dir != "" {
@@ -64,15 +76,24 @@ func (a *app) confirm(ctx context.Context, args []string) error {
 		return err
 	}
 	var q *downexv1.Queue
-	if visited(fs)["queue"] {
+	if set["queue"] {
 		if q, err = a.resolveQueueFlag(ctx, c, queue); err != nil {
 			return err
 		}
 	}
 	cctx, cancel := rpcContext(ctx)
 	defer cancel()
+	if set["chapter"] {
+		g, err := c.Downloads.Get(cctx, connect.NewRequest(&downexv1.GetRequest{Id: id}))
+		if err != nil {
+			return downloadRPCError("confirm", id, err)
+		}
+		if clip, err = chapterClip("confirm", clipF.chapter, protoChapterViews(g.Msg.GetDownload().GetMedia().GetChapters())); err != nil {
+			return err
+		}
+	}
 	resp, err := c.Downloads.Confirm(cctx, connect.NewRequest(&downexv1.ConfirmRequest{
-		Id: id, Dir: dir, Filename: name, Start: !later, VideoTrack: video, AudioTrack: audio, QueueId: q.GetId(),
+		Id: id, Dir: dir, Filename: name, Start: !later, VideoTrack: video, AudioTrack: audio, QueueId: q.GetId(), Clip: clip,
 	}))
 	if err != nil {
 		return downloadRPCError("confirm", id, err)

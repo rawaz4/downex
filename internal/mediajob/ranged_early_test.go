@@ -122,18 +122,18 @@ func earlyOthersBefore(s *siteServer, t time.Time) []string {
 }
 
 // earlyConcat is an Options.Assemble that writes the tracks' files one after the other.
-func earlyConcat(ctx context.Context, inputs []remux.Input, out string) (string, error) {
+func earlyConcat(ctx context.Context, inputs []remux.Input, out string, _ remux.Window) (remux.Result, error) {
 	var b []byte
 	for _, in := range inputs {
 		for _, p := range in.Fragments {
 			d, err := os.ReadFile(p)
 			if err != nil {
-				return "", err
+				return remux.Result{}, err
 			}
 			b = append(b, d...)
 		}
 	}
-	return "mp4", os.WriteFile(out, b, 0o600)
+	return remux.Result{Container: "mp4"}, os.WriteFile(out, b, 0o600)
 }
 
 // earlyCopySelection selects the muxed MP4 at path of s, in 1 MiB chunks.

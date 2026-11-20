@@ -115,7 +115,7 @@ func TestFinishAssembledReplace(t *testing.T) {
 		if err := os.WriteFile(part, []byte("the new copy"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := recordOutput(ctx, o, part, "mp4"); err != nil {
+		if err := recordOutput(ctx, o, part, "mp4", nil); err != nil {
 			t.Fatal(err)
 		}
 		container, done, err := finishAssembled(ctx, o)

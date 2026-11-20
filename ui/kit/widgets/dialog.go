@@ -63,6 +63,11 @@ type DialogOptions struct {
 	// OnSubmit runs on Enter in a single-line field of the dialog (a form's implicit
 	// submission) and when Submit is called.
 	OnSubmit func()
+	// Fill makes the dialog a window of its own (docs/DESKTOP-SPEC.md §1, the standalone
+	// Confirm download window): it fills the window, with no scrim, shadow, border, corners
+	// or motion, and without its close button (the window's title bar closes it). Escape
+	// still closes it. NaturalHeight is the height its content asks for.
+	Fill bool
 }
 
 // Dialog is Dialog.svelte (DESIGN-SYSTEM.md §3.9): a modal over the scrim (--scrim, from
@@ -93,6 +98,7 @@ type Dialog struct {
 
 	trap    *kit.FocusTrap
 	win     *kit.Window
+	natural kit.DIP // Fill: the card's height for the window's width (NaturalHeight)
 	busy    bool
 	leaving bool
 	shown   float32 // 0 hidden, 1 shown: the open and close motion
@@ -133,6 +139,10 @@ func NewDialog(o DialogOptions) *Dialog {
 	d.close = NewIconButton("close", 16, "Close", false, d.Close)
 	d.close.Tooltip = "Close (Esc)"
 	d.close.Style.Margin = kit.Edges{Start: kit.Auto}
+	if o.Fill {
+		d.close.Style.Hidden = true
+		c.Style.Border, c.Style.Radius = kit.Edges{}, kit.Corners{}
+	}
 	d.titleRow = box(kit.Style{Display: kit.DisplayFlex, AlignItems: kit.AlignCenter, ColumnGap: tokens.Sp6, MinWidth: kit.Px(0)})
 	d.layoutHead()
 
@@ -307,7 +317,7 @@ func (d *Dialog) animate(from, to float32, dur time.Duration, ease kit.Easing) {
 		d.tween = nil
 	}
 	d.shown = from
-	if !w.MotionOK() {
+	if !w.MotionOK() || d.o.Fill {
 		d.shown = to
 		d.Invalidate()
 		return
@@ -330,7 +340,7 @@ func (d *Dialog) Close() {
 		return
 	}
 	w := d.win
-	if !w.MotionOK() {
+	if !w.MotionOK() || d.o.Fill {
 		d.Remove()
 		d.closed()
 		return
@@ -420,6 +430,11 @@ func (d *Dialog) ContentHeight(*kit.LayoutContext, kit.DIP) kit.DIP { return 0 }
 // height) with its top where a dialog of its least height has it.
 func (d *Dialog) LayoutContent(ctx *kit.LayoutContext, box kit.Rect) {
 	s := box.Size()
+	if d.o.Fill {
+		d.natural = ctx.HeightFor(d.card, s.W, s.W)
+		ctx.Place(d.card, box, s.W)
+		return
+	}
 	top, gap, room := d.metrics(s)
 	wl := d.o.Width
 	if !wl.IsSet() {
@@ -442,6 +457,24 @@ func (d *Dialog) LayoutContent(ctx *kit.LayoutContext, box kit.Rect) {
 	ctx.Place(d.card, kit.R(x, y, x+cw, y+ch), s.W)
 }
 
+// Filled reports a dialog that is a window of its own (DialogOptions.Fill).
+func (d *Dialog) Filled() bool { return d.o.Fill }
+
+// NaturalHeight is the height a Fill dialog's content asks for at the window's width, as the
+// last layout measured it (0 before one): the window fits it.
+func (d *Dialog) NaturalHeight() kit.DIP { return d.natural }
+
+// PreferredWidth is the width the dialog has in a window wider than it (DialogOptions.Width,
+// else its Size's), at scale s: a Fill dialog's window opens that wide.
+func (d *Dialog) PreferredWidth(s kit.Scale) kit.DIP {
+	wl := d.o.Width
+	if !wl.IsSet() {
+		wl = d.o.Size.width()
+	}
+	w, _ := wl.Resolve(s, -1)
+	return w
+}
+
 // backdropBlur is Dialog.svelte's .backdrop { backdrop-filter: blur(1.5px) }.
 const backdropBlur kit.DIP = 1.5
 
@@ -449,6 +482,9 @@ const backdropBlur kit.DIP = 1.5
 // .backdrop's backdrop-filter blurs it (not with reduced transparency or forced colours;
 // the whole backdrop fades in, so the blur is blended at the same opacity).
 func (d *Dialog) Paint(p *kit.PaintContext) {
+	if d.o.Fill {
+		return // the window is the dialog: no scrim over anything
+	}
 	t := tokensOf(&d.Element)
 	sz := p.Size()
 	r := kit.R(0, d.o.ModalTop, sz.W, sz.H)
@@ -462,6 +498,9 @@ func (d *Dialog) Paint(p *kit.PaintContext) {
 
 // HandlePointer is kit.PointerHandler's: the scrim takes the presses that miss the dialog.
 func (d *Dialog) HandlePointer(in *kit.PointerInput) bool {
+	if d.o.Fill {
+		return false
+	}
 	return in.Target == &d.Element && in.Local.Y >= d.o.ModalTop
 }
 
@@ -484,6 +523,15 @@ func (c *dialogCard) Paint(p *kit.PaintContext) {
 		k := 0.98 + 0.02*s
 		p.Canvas.PushOpacity(s)
 		p.Canvas.PushTransform(kit.Translation(-ox, -oy).Then(kit.Scaling(k, k)).Then(kit.Translation(ox, oy)))
+	}
+	if c.d.o.Fill {
+		sz := p.Size()
+		p.FillRect(kit.R(0, 0, sz.W, sz.H), t.Raised)
+		if c.d.desc != nil {
+			c.d.desc.SetColor(t.Muted)
+		}
+		c.d.title.SetColor(t.Ink)
+		return
 	}
 	r := snapBox(p, 14)
 	drawShadows(p.Canvas, r, t.ShadowLg)

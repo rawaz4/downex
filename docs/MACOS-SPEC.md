@@ -66,6 +66,20 @@ Downex.app/
   which goes away; disabling still works.
 - `Elevated`: euid == 0 (as built also set-uid/set-gid, as on Linux).
 - Store default path: `~/Library/Application Support/Downex/downex.db` (os.UserConfigDir).
+- Rescue of a partial file (ENGINE-SPEC §7.4, DESKTOP-SPEC §11): downexd (Downex Agent, or
+  `Helpers/downexd`) reads and renames the browser's partial file itself. Privacy protection checks the
+  responsible process: in `~/Downloads`, `~/Desktop` or `~/Documents` it needs that folder's "Files and
+  Folders" permission (downloads already go to `~/Downloads`, so the agent normally has it). EPERM or
+  EACCES there is `rescue_no_access`, whose text adds " Allow Downex Agent in System Settings > Privacy
+  & Security > Files and Folders.". The window's open panel grants the agent nothing (Downex is not
+  sandboxed and passes only a path). `rename(2)` of a file another process holds open succeeds: a
+  browser still writing could only write the same server bytes at the same offsets, the extension
+  cancels a running entry before it erases it, and a partial that changed during the proof is
+  refused (`rescue_locked`). `F_PREALLOCATE` keeps the data already in the file.
+- *Polite mode (POLITE-SPEC §2):* probes use unprivileged datagram ICMP sockets
+  (`golang.org/x/net/icmp`, `udp4`/`udp6`, pure Go, no entitlement; a leading IPv4 header is
+  stripped), else TCP connect probes. Only global addresses are probed, so the Local Network prompt
+  never appears.
 
 ## 3. IPC (`internal/ipc`, darwin)
 - Socket: `$TMPDIR/downex-<uid>/rpc.sock` (per-user TMPDIR from `confstr`/env; directory 0700, owner

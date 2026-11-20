@@ -12,6 +12,7 @@ import {
   OUTDATED_DOWNEX_TEXT,
   type Outcome,
   type ProtocolError,
+  type SignInNote,
   type StatusResult,
 } from './protocol';
 import {
@@ -26,6 +27,14 @@ import {
 import { qualityClass, standardName } from './quality';
 import { type CaptureRules, siteExclusion, siteHost } from './rules';
 import { formatBytes } from './video-picker';
+
+/** Bidirectional controls (U+202A–202E, U+2066–2069) are dropped from site strings. */
+const BIDI = /[‪-‮⁦-⁩]/g;
+
+/** Site text as shown: no bidi controls. */
+export function cleanSiteText(s: string): string {
+  return s.replace(BIDI, '');
+}
 
 export type Tone = 'ok' | 'warn' | 'error';
 
@@ -100,7 +109,11 @@ const SOURCES: Readonly<Record<HandoffSource, string>> = {
   media: 'Media',
   video: 'Video',
   'video-file': 'Video file',
+  rescue: 'Finished from the browser',
 };
+
+/** The result of a download that failed in the browser and Downex finishes (BROWSER-SPEC §6). */
+export const FINISHED_IN_DOWNEX = 'Finished in Downex';
 
 export function sourceLabel(source: string): string {
   return Object.hasOwn(SOURCES, source) ? SOURCES[source as HandoffSource] : source;
@@ -136,6 +149,7 @@ export const WAITING_FOR_CONFIRMATION = 'Waiting for confirmation in Downex';
 
 export function recordResult(rec: HandoffRecord): string {
   if (rec.ok) {
+    if (rec.source === 'rescue') return FINISHED_IN_DOWNEX;
     // `added.awaiting` false: Downex saves it at once (every source since VIDEO-DETECT-SPEC §3.5).
     if (rec.awaiting === false) return DOWNLOADING_IN_DOWNEX;
     return rec.duplicate ? `${WAITING_FOR_CONFIRMATION}; the browser kept its own copy too` : WAITING_FOR_CONFIRMATION;
@@ -184,6 +198,7 @@ export function fileKindOfName(name: string): FileKind {
 /** Tooltip of a result line. */
 export function recordResultDetail(rec: HandoffRecord): string | undefined {
   if (!rec.ok) return undefined;
+  if (rec.source === 'rescue') return 'Downex continues it from the bytes the browser saved.';
   if ((rec.source === 'video' || rec.source === 'video-file') && rec.awaiting === false) return 'Downex saves it as one MP4 file.';
   if (rec.awaiting === false) return undefined;
   return 'Downex asks where to save downloads from the browser unless that is turned off in its settings.';
@@ -316,7 +331,8 @@ export const CONFIRM_IN_DOWNEX = 'Confirm in Downex';
  * (info: "Confirm in Downex", and "Sent to Downex" of a relay that does not say).
  */
 export function addedTone(text: string): 'ok' | 'info' {
-  return text === DOWNLOADING_IN_DOWNEX ? 'ok' : 'info';
+  // "Downloading in Downex. Used your sign-in for …" (SITE-MEDIA-SPEC §6.3) is that answer too.
+  return text === DOWNLOADING_IN_DOWNEX || text.startsWith(`${DOWNLOADING_IN_DOWNEX}. `) ? 'ok' : 'info';
 }
 
 /** Lowercase names that start a sentence as they are ("yt-dlp could not read this page"). */
@@ -341,6 +357,13 @@ export const VIDEO_TEXTS = {
   encrypted: 'This video is DRM-protected. Downex does not download protected content.',
   media_unsupported: 'No MP4 video on this page.',
   playlist: 'Open a single video of this playlist.',
+  /** A playlist on an audio site (SITE-MEDIA-SPEC §3.13): its items are tracks. */
+  playlist_tracks: 'Open a single track of this playlist.',
+  /** An audio page (SITE-MEDIA-SPEC §3.13) whose audio Downex cannot save. */
+  audio_opus: 'This page’s audio is Opus or Vorbis, which Downex cannot save without converting it.',
+  audio_raw: 'This page’s audio is a raw AAC stream, which Downex cannot save without converting it.',
+  audio_preview: 'Only a preview of this track is public, not the whole track.',
+  audio_none: 'No AAC or MP3 audio on this page.',
   media_invalid: 'The chosen quality is no longer offered. Add the video again.',
   site_media_off: 'Video downloads from web pages are turned off (Settings → Video sites).',
   unsupported_page: 'Open a video page to download its video.',
@@ -348,11 +371,15 @@ export const VIDEO_TEXTS = {
   too_slow: 'Downex took too long to answer. Try again.',
   timeout: 'Downex did not answer in time. Try again.',
   still_installing: 'Downex is still setting up yt-dlp and Deno. Try again in a few minutes.',
+  /** A browser-only site (TikTok) whose player in this tab fetched none of the video's qualities (SITE-MEDIA-SPEC §2.8). */
+  play_first: 'Play this video on its page, then download it: this site lets only your browser fetch the quality it plays.',
 } as const;
 
 /** The phrase the daemon puts before a reason (internal/sitemedia sentinels, §3.2). */
 const SITE_ERROR_LEAD = 'yt-dlp could not read this page';
 const TOOLS_UNAVAILABLE_LEAD = 'yt-dlp and Deno are not set up';
+/** The reason of `site_unavailable` for an item the page no longer has (sitemedia.ErrItemGone). */
+const ITEM_GONE_REASON = 'this item is no longer on the page';
 
 function sentence(s: string): string {
   const t = s.trim();
@@ -366,7 +393,10 @@ function reasonAfter(detail: string, lead: string): string {
   return detail.startsWith(`${lead}: `) ? detail.slice(lead.length + 2) : detail;
 }
 
-/** Refusals that are final for the page: no "Try again" (auth_required has its own action). */
+/**
+ * Refusals that are final for the page: no "Try again" (auth_required offers it when the user can
+ * sign in on the site, SITE-MEDIA-SPEC §6.3).
+ */
 const FINAL_CODES: ReadonlySet<string> = new Set([
   'encrypted',
   'live',
@@ -417,18 +447,29 @@ export function videoFailureText(e: ProtocolError): string {
   const code = daemonCode(e);
   const detail = daemonDetail(e);
   switch (code) {
-    case 'site_unsupported':
     case 'site_unavailable':
+      // An item of a page with several videos that left the page (SITE-MEDIA-SPEC §3.12, §5.5):
+      // Downex's own reason follows; yt-dlp's reasons are not repeated.
+      return detail.endsWith(ITEM_GONE_REASON) ? `${VIDEO_TEXTS.site_unavailable} ${sentence(initialCapital(ITEM_GONE_REASON))}` : VIDEO_TEXTS[code];
     case 'auth_required':
+      return e.signIn ? signInText(e.signIn) : VIDEO_TEXTS[code];
+    case 'site_unsupported':
     case 'live':
     case 'encrypted':
     case 'media_invalid':
     case 'site_media_off':
     case 'unsupported_page':
     case 'outdated_downex':
+    case 'play_first':
       return VIDEO_TEXTS[code];
     case 'media_unsupported':
-      return /\bplaylist\b/i.test(detail) ? VIDEO_TEXTS.playlist : VIDEO_TEXTS.media_unsupported;
+      if (/\bplaylist\b/i.test(detail)) return /\bsingle track\b/i.test(detail) ? VIDEO_TEXTS.playlist_tracks : VIDEO_TEXTS.playlist;
+      // An audio page (SITE-MEDIA-SPEC §3.13): downexd's reason says why its audio is not saved.
+      if (/\b(opus|vorbis)\b/i.test(detail)) return VIDEO_TEXTS.audio_opus;
+      if (/\braw AAC\b/i.test(detail)) return VIDEO_TEXTS.audio_raw;
+      if (/\bpreview\b/i.test(detail)) return VIDEO_TEXTS.audio_preview;
+      if (/no AAC or MP3 audio/i.test(detail)) return VIDEO_TEXTS.audio_none;
+      return VIDEO_TEXTS.media_unsupported;
     case 'site_error': {
       const reason = reasonAfter(detail, SITE_ERROR_LEAD);
       return sentence(reason ? `${SITE_ERROR_LEAD}: ${reason}` : SITE_ERROR_LEAD);
@@ -460,6 +501,49 @@ export function videoAddedText(added: AddedResult): string {
   return added.awaiting ? CONFIRM_IN_DOWNEX : DOWNLOADING_IN_DOWNEX;
 }
 
+/** The option that lets Downex use the browser's sign-in (SITE-MEDIA-SPEC §6.3). */
+export const SIGN_IN_OPTION = 'Use my sign-in for videos that need it';
+
+/** "Used your sign-in for instagram.com.": a panel whose answer needed the sign-in says so (§6.3). */
+export function signInUsedText(domain: string): string {
+  return `Used your sign-in for ${domain}.`;
+}
+
+/** What a panel adds for a page whose video servers answer only browsers (SITE-MEDIA-SPEC §2.8). */
+export const BROWSER_FETCH_NOTE = 'Your browser fetches this video for Downex: keep a tab of this site open until it is saved.';
+
+/**
+ * The note under a site's qualities: "Used your sign-in for …" when its answer needed it (§6.3),
+ * the MP4 note, and BROWSER_FETCH_NOTE when the browser fetches the video (§2.8).
+ */
+export function siteNote(info: { signedIn?: string; browserFetch?: boolean } | undefined, mp4Note: string): string {
+  const parts = [mp4Note];
+  if (info?.signedIn) parts.unshift(signInUsedText(info.signedIn));
+  if (info?.browserFetch) parts.push(BROWSER_FETCH_NOTE);
+  return parts.join(' ');
+}
+
+/** What an `auth_required` says once the extension knows what became of the sign-in (§5.5, §6.3). */
+export function signInText(note: SignInNote): string {
+  const d = note.domain;
+  switch (note.state) {
+    case 'used':
+      // Claims no sign-in: a browser that only visited the site holds its cookies too (§5.5).
+      return `Downex asked again with this browser’s cookies for ${d}, but the site still refused. Sign in to ${d} in this browser, then try again.`;
+    case 'none':
+      return `This video needs a sign-in. Sign in to ${d} in this browser, then try again.`;
+    case 'off':
+      return `This video needs a sign-in. To let Downex use yours, turn on “${SIGN_IN_OPTION}” in Downex’s browser options.`;
+    case 'too-large':
+      return `This video needs a sign-in, but your sign-in for ${d} is too large for Downex to use.`;
+  }
+}
+
+/** Whether "Try again" helps after this sign-in note: the user can sign in on the site first. */
+export function signInRetries(note: SignInNote | undefined): boolean {
+  return note?.state === 'used' || note?.state === 'none';
+}
+
 // ---------------------------------------------------------------------------------------
 // Videos on every site (VIDEO-DETECT-SPEC §5.2-§5.6)
 
@@ -481,7 +565,23 @@ export const OFFER_TEXTS = {
   file: 'File',
   stream: 'Stream',
   mp4File: 'MP4 file',
+  /** Save what's playing (SITE-MEDIA-SPEC §2.9, §5.5): the source tag, the waiting texts, the site's own failure. */
+  played: 'Playing',
+  playedGetting: 'Getting this video…',
+  playedNotSeen: 'Downex hasn’t seen this video load yet. It appears here as soon as it plays.',
+  playedNote: 'Saved from what your browser played.',
+  noSound: 'This video has no sound.',
+  siteFailed: 'Downex couldn’t get this video from the site.',
 } as const;
+
+/** How long a panel says "Getting this video…" before it says Downex has not seen it load (§5.5). */
+export const PLAYED_WAIT_MS = 20_000;
+
+/**
+ * How long a panel with a Played source names no default row while that source has not answered
+ * (§2.6): the default never switches under the pointer once shown.
+ */
+export const PLAYED_SETTLE_MS = 8_000;
 
 export function moreSourcesText(n: number): string {
   return `More sources (${n})`;

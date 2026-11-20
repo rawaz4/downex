@@ -44,6 +44,12 @@ func (m *Main) laneScreens() Screens {
 		Restart: func(a *views.App, r views.RestartRequest) views.Modal {
 			return dialogs.NewRestart(a, r, nil)
 		},
+		Renew: func(a *views.App, r views.RenewRequest) views.Modal {
+			return dialogs.NewRenew(a, r, nil)
+		},
+		Rescue: func(a *views.App, r views.RescueRequest) views.Modal {
+			return dialogs.NewRescue(a, r, dialogs.RescueOptions{})
+		},
 		Open: func(a *views.App, r views.OpenRequest) views.Modal {
 			return dialogs.NewOpen(a, r, nil)
 		},
@@ -79,6 +85,12 @@ func (m *Main) withLanes(s Screens) Screens {
 	}
 	if s.Open == nil {
 		s.Open = l.Open
+	}
+	if s.Renew == nil {
+		s.Renew = l.Renew
+	}
+	if s.Rescue == nil {
+		s.Rescue = l.Rescue
 	}
 	if s.Move == nil {
 		s.Move = l.Move

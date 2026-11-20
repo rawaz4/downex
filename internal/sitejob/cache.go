@@ -12,8 +12,8 @@ import (
 
 // cacheKey identifies the extractions of one page as one user sees it
 // (docs/SITE-MEDIA-SPEC.md §2.6): the page URL without its fragment, the SHA-256 of
-// the Cookie header, the Referer and the proxy route, hashed together so that the key
-// holds none of them.
+// the Cookie header, its domain (§6.3), the Referer and the proxy route, hashed
+// together so that the key holds none of them.
 func cacheKey(r Request) string {
 	page := r.PageURL
 	if u, err := url.Parse(page); err == nil {
@@ -22,7 +22,7 @@ func cacheKey(r Request) string {
 	}
 	cookie := sha256.Sum256([]byte(r.Cookie))
 	h := sha256.New()
-	for _, part := range []string{page, hex.EncodeToString(cookie[:]), r.Referer, r.Proxy.URL} {
+	for _, part := range []string{page, hex.EncodeToString(cookie[:]), r.CookieDomain, r.Referer, r.Proxy.URL} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}

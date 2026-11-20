@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 
+	"downex/internal/daemon"
 	"downex/internal/ipc"
 	"downex/internal/platform"
 )
@@ -23,6 +24,10 @@ type desktop struct {
 	// openProgress starts "downex-ui --progress <id>" (daemon.Config.OpenProgress; in the
 	// macOS bundle the progress app); nil when there is no window.
 	openProgress func(id int64) error
+	// showBrowserAdd starts the window of a download just started in the browser with
+	// "--raise", so it comes above the browser (daemon.Config.ShowBrowserAdd); nil
+	// without the window.
+	showBrowserAdd func(id int64, w daemon.AddWindow) error
 }
 
 // setLaunchAtLogin writes or removes the sign-in entry (platform.SetLaunchAtLogin);
@@ -78,6 +83,30 @@ func desktopHooks(o options, log *slog.Logger) desktop {
 		if regularFile(l.Progress) {
 			d.openProgress = func(id int64) error { return openProgressApp("--progress", strconv.FormatInt(id, 10)) }
 		}
+		if regularFile(l.Window) {
+			progress := d.openProgress
+			d.showBrowserAdd = func(id int64, w daemon.AddWindow) error {
+				return browserAddWindow(id, w, progress != nil)
+			}
+		}
 	}
 	return d
+}
+
+// raiseFlag asks the window that a browser add opens to come above the browser
+// (ui/host.RaiseFlag).
+const raiseFlag = "--raise"
+
+// browserAddWindow starts window w of browser add id with raiseFlag: its progress window
+// when it is installed (withProgress), its standalone Confirm download window
+// ("--confirm <id> --raise", docs/DESKTOP-SPEC.md §1). Nothing else: never the main window.
+func browserAddWindow(id int64, w daemon.AddWindow, withProgress bool) error {
+	n := strconv.FormatInt(id, 10)
+	switch {
+	case w == daemon.AddProgress && withProgress:
+		return openProgressApp("--progress", n, raiseFlag)
+	case w == daemon.AddConfirm:
+		return openUI("--confirm", n, raiseFlag)
+	}
+	return nil
 }

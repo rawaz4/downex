@@ -61,6 +61,9 @@ type Settings struct {
 	// Site media (docs/SITE-MEDIA-SPEC.md §3.8): yt-dlp and its tools. Files of older
 	// daemons lack it and get DefaultMediaSettings.
 	Media MediaSettings `json:"media"`
+	// Polite mode (docs/POLITE-SPEC.md §7). Files of older daemons lack it and get
+	// DefaultPoliteSettings.
+	Polite PoliteSettings `json:"polite"`
 }
 
 // DefaultSettings returns the settings of a new installation (and the values of fields
@@ -81,6 +84,7 @@ func DefaultSettings() Settings {
 		Desktop:                 DefaultDesktopSettings(),
 		Update:                  DefaultUpdateSettings(),
 		Media:                   DefaultMediaSettings(),
+		Polite:                  DefaultPoliteSettings(),
 	}
 }
 
@@ -135,6 +139,9 @@ func (s Settings) normalize(downloadsDir func() (string, error)) (Settings, erro
 		return s, err
 	}
 	if s.Media, err = s.Media.normalize(); err != nil {
+		return s, err
+	}
+	if s.Polite, err = s.Polite.normalize(); err != nil {
 		return s, err
 	}
 	return s, nil
@@ -230,6 +237,8 @@ func (s Settings) repair(downloadsDir func() (string, error)) (Settings, []strin
 	problems = append(problems, more...)
 	n.Media, more = n.Media.repair()
 	problems = append(problems, more...)
+	n.Polite, more = n.Polite.repair()
+	problems = append(problems, more...)
 	return n, problems
 }
 
@@ -293,6 +302,7 @@ type settingsFile struct {
 	Desktop *DesktopSettings `json:"desktop"`
 	Update  *UpdateSettings  `json:"update"`
 	Media   *MediaSettings   `json:"media"`
+	Polite  *PoliteSettings  `json:"polite"` // Polite mode (docs/POLITE-SPEC.md §7)
 }
 
 // loadSettings reads the settings file at path. A missing file (or an empty path)
@@ -344,6 +354,9 @@ func loadSettings(path string) (Settings, error) {
 	}
 	if f.Media != nil {
 		s.Media = *f.Media
+	}
+	if f.Polite != nil {
+		s.Polite = *f.Polite
 	}
 	return s, nil
 }

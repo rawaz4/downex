@@ -83,6 +83,9 @@ func TestTooltipAndFormatBytes(t *testing.T) {
 	if got, want := Tooltip(Summary{}), "Downex — 0 active, 0 B/s"; got != want {
 		t.Errorf("idle tooltip = %q, want %q", got, want)
 	}
+	if got, want := Tooltip(Summary{Active: 2, Speed: 2_400_000, PoliteSlowed: true}), "Downex — 2 active, 2.4 MB/s · Polite: slowed"; got != want {
+		t.Errorf("Tooltip while Polite mode slows = %q, want %q", got, want)
+	}
 	if got, want := Tooltip(Summary{Active: 2, Speed: 1_500_000}), "Downex — 2 active, 1.5 MB/s"; got != want {
 		t.Errorf("tooltip = %q, want %q", got, want)
 	}

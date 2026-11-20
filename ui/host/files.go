@@ -50,9 +50,10 @@ const (
 	RiskProgram
 )
 
-// Downloads carry no Mark-of-the-Web yet (U6), so neither the system (SmartScreen) nor
-// Office (its block of macros and add-ins from the internet) warns before such files
-// run: the confirmation in Files.OpenFile is the only gate. The lists hold extensions in
+// downexd marks downloaded files with their origin (Mark-of-the-Web, docs/M6-SPEC.md §3)
+// unless the user turned that off, and a file whose file check is DANGER is asked about by
+// the window first (docs/DESKTOP-SPEC.md §9.7); this confirmation in Files.OpenFile is
+// the gate that does not depend on either. The lists hold extensions in
 // lower case, without the dot; the platforms add their own (shell_<os>.go: PATHEXT and
 // the types Windows considers dangerous to open, the execute bit on Linux; macos.go: the
 // bundles, scripts, installers and locations that macOS opens, and the execute bit).

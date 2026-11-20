@@ -11,10 +11,15 @@ func isSiteDownload(d *downexv1.Download) bool       { return media.IsSiteDownlo
 func siteVideoLabel(info *downexv1.MediaInfo) string { return media.SiteVideoLabel(info) }
 func formatLabel(format string) string               { return media.FormatLabel(format) }
 func containerLabel(container string) string         { return media.ContainerLabel(container) }
-func cannotRetry(code string) bool                   { return media.CannotRetry(code) }
+func cannotRetry(d *downexv1.Download) bool          { return media.CannotRetryDownload(d) }
 
 // codecSummary is the chosen tracks' quality in short (media.ts codecSummary without a pick).
 func codecSummary(info *downexv1.MediaInfo) string { return media.CodecSummary(info, nil) }
 
 // chosenTracks is the chosen video and audio tracks in words (media.ts chosenTracks).
 func chosenTracks(info *downexv1.MediaInfo) (video, audio string) { return media.ChosenTracks(info) }
+
+// siteRefusal is a site's refusal of a failed web page download (media.SiteRefusalOfDownload).
+func siteRefusal(d *downexv1.Download) (media.SiteRefusal, bool) {
+	return media.SiteRefusalOfDownload(d)
+}

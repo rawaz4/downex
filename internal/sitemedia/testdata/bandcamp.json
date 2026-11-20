@@ -1,0 +1,9 @@
+{
+  "id": "200000002",
+  "title": "Artist - Example song",
+  "duration": 348.357,
+  "extractor_key": "Bandcamp",
+  "formats": [
+    {"format_id": "mp3-128", "url": "https://stream.media.example/stream/0002/mp3-128/200000002?p=0&ts=1795058905&token=tok", "ext": "mp3", "vcodec": "none", "acodec": "mp3", "abr": 128, "tbr": 128, "protocol": "https", "audio_ext": "mp3", "video_ext": "none", "resolution": "audio only", "filesize_approx": 5573712}
+  ]
+}

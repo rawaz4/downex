@@ -175,7 +175,7 @@ describe('background media detection', () => {
     expect((await ask<{ items: unknown[] }>({ type: 'downex:tab-media', tabId: 5 })).items).toEqual([]);
   });
 
-  it('sends addMedia with the recorded headers and records it in the history', async () => {
+  it('sends addMedia with the recorded headers (the cookie only with the sign-in option) and records it in the history', async () => {
     const r = await ask({ type: 'downex:add-media', tabId: 4, url: MANIFEST });
     expect(r).toEqual({ ok: true, value: { type: 'added', downloadId: 77 } });
     const sent = fake.posted.find((m) => m.type === 'addMedia');
@@ -184,7 +184,6 @@ describe('background media detection', () => {
       pageUrl: 'https://site.example/watch?v=1',
       title: 'A video',
       headers: [
-        ['Cookie', 'sid=1'],
         ['Referer', 'https://site.example/watch?v=1'],
         ['User-Agent', navigator.userAgent],
         ['Accept', '*/*'],

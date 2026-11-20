@@ -2,6 +2,7 @@
 // popup or an overlay panel lists, with the tracks the user chose (VIDEO-DETECT-SPEC §3.5), and
 // records it in the hand-off history. Pure: browser APIs are injected.
 
+import type { ClipRange } from './clip';
 import { type CookieLike, cookieHeader, defaultPolicyReferer, filterHeaders, hasHeader } from './context';
 import type { HandoffHistory, HandoffRecord } from './history';
 import { MAX_MEDIA_URL_BYTES, type MediaItem } from './media';
@@ -54,6 +55,11 @@ export interface MediaFieldsDeps {
   /** `cookies.getAll({url, storeId})` for the manifest URL only; used when no headers were recorded. */
   getCookies: (url: string, storeId: string | undefined) => Promise<readonly CookieLike[]>;
   userAgent: string;
+  /**
+   * Whether the page's credentials may go with the stream (the sign-in option, SITE-MEDIA-SPEC
+   * §6.3); false: no Cookie or Authorization, recorded or read. Default true.
+   */
+  credentials?: () => Promise<boolean>;
 }
 
 function sendableUrl(v: string | undefined): string | undefined {
@@ -75,10 +81,12 @@ function sendableUrl(v: string | undefined): string | undefined {
 export async function buildAddMediaFields(item: MediaItem, deps: MediaFieldsDeps): Promise<Outcome<AddMediaFields>> {
   const manifestUrl = sendableUrl(item.url);
   if (!manifestUrl) return failure('invalid_request', 'the stream URL cannot be handed to Downex');
+  const credentials = deps.credentials ? await deps.credentials().catch(() => false) : true;
   let headers = filterHeaders(item.headers ?? []);
+  if (!credentials) headers = headers.filter(([name]) => !/^(cookie|authorization)$/i.test(name));
   if (item.headers === undefined) {
     try {
-      const cookies = await deps.getCookies(manifestUrl, item.storeId);
+      const cookies = credentials ? await deps.getCookies(manifestUrl, item.storeId) : [];
       if (cookies.length > 0) headers.push(['Cookie', cookieHeader(cookies)]);
     } catch {
       // no cookie access for this URL: hand off without cookies
@@ -123,6 +131,8 @@ export function prepareAddMediaFields(item: MediaItem, deps: MediaFieldsDeps, ti
 export interface MediaTracks {
   videoTrack?: string;
   audioTrack?: string;
+  /** A part of the video (MEDIA-SPEC §8); NativeClient refuses it to a relay without `clips`. */
+  clip?: ClipRange;
 }
 
 export interface AddMediaSender {
@@ -173,6 +183,10 @@ export function createMediaHandOff(deps: MediaHandoffDeps): MediaHandOff {
         const fields: AddMediaFields = { ...built.value, deadlineMs: timeoutMs };
         if (tracks.videoTrack) fields.videoTrack = tracks.videoTrack;
         if (tracks.audioTrack) fields.audioTrack = tracks.audioTrack;
+        if (tracks.clip) {
+          fields.clipStartMs = tracks.clip.startMs;
+          if (tracks.clip.endMs > 0) fields.clipEndMs = tracks.clip.endMs;
+        }
         outcome = await deps.client.addMedia(fields, {
           timeoutMs,
           // Unlikely (the relay drops what misses the deadline), but an added download is shown.

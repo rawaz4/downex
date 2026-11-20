@@ -71,14 +71,16 @@ const PERMISSIONS = [
 
 export const HOST_PERMISSIONS = ['http://*/*', 'https://*/*'];
 
+/** Permissions the extension asks for at the moment a feature needs them. */
+export const OPTIONAL_PERMISSIONS = ['notifications'];
+
 /**
  * The Firefox add-on ID (gecko id), permanent from the first upload to addons.mozilla.org: AMO
- * ties the listing and every installed copy's updates to it. downex-nmhost allows it first in
- * the host manifest's allowed_extensions, and FIREFOX_OLD_ID after it, for copies loaded by hand
- * before the listing.
+ * ties the listing and every installed copy's updates to it. downex-nmhost allows it, and only it,
+ * in the host manifest's allowed_extensions (the earlier browser@downex.local is no longer
+ * allowed: Downex does not own that domain, BROWSER-SPEC §1).
  */
 export const FIREFOX_ID = 'extension@downex.app';
-export const FIREFOX_OLD_ID = 'browser@downex.local';
 
 /**
  * Firefox's built-in data consent (Firefox 140 and later; extensionworkshop.com, "Firefox
@@ -124,6 +126,9 @@ export default defineConfig({
       description: 'Hands downloads to the Downex download manager.',
       ...releaseVersion(process.env.DOWNEX_VERSION, { store, firefox }),
       permissions: firefox ? [...PERMISSIONS, 'webRequestBlocking'] : PERMISSIONS,
+      // Asked for only when the user turns on "Offer to finish failed downloads with a
+      // notification" (BROWSER-SPEC §6): an update adds no new warning.
+      optional_permissions: OPTIONAL_PERMISSIONS,
       // Everything the extension touches is http(s): webRequest observation and blocking,
       // cookies.getAll for one URL, scripting on http(s) pages, the active tab's URL.
       host_permissions: HOST_PERMISSIONS,

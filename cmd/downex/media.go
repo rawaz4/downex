@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"downex/internal/media"
 	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/internal/validate"
 )
 
 // errorCodeMeta is the Connect error metadata that carries the stable code of a refused
@@ -44,9 +46,18 @@ func (a *app) media(ctx context.Context, args []string) error {
 			"understands): downexd resolves it with yt-dlp, which it downloads with Deno on first use,\n"+
 			"and saves the video as one .mp4 file. --list shows one MP4 video per quality the page\n"+
 			"offers (4K, 1440p, 1080p, ...), best first, and its audio tracks; --video picks any of\n"+
-			"them, or another MP4 format of the page by its ID. -H takes only Cookie and Referer.\n"+
+			"them, or another MP4 format of the page by its ID. -H takes only Cookie and Referer;\n"+
+			"--cookie-domain D gives that Cookie to D and its subdomains (the page must be on D),\n"+
+			"as the browser extension does for a site's sign-in; without it, to the page's host only.\n"+
+			"A page with several videos (a carousel, a news page) lists them too; --item ID picks\n"+
+			"one (with --list, its qualities), else the page's own or first video is used.\n"+
 			"While yt-dlp is being downloaded or the page is being read, downex retries every 2\n"+
-			"seconds for up to 5 minutes.")
+			"seconds for up to 5 minutes.\n\n"+
+			"--from and --to save only part of the video (times like 80, 1:20, 1:02:03 or 1m20s;\n"+
+			"without --to, to the end), --chapter N one chapter of a web page's video (see --list).\n"+
+			"Only the needed parts are downloaded, and the file is cut without re-encoding:\n"+
+			"playback starts at --from; a few players start up to a few seconds earlier, at the\n"+
+			"keyframe before it. The file name gets the times, e.g. \"Talk (01m20s-02m45s).mp4\".")
 	t := a.daemonFlags(fs)
 	var (
 		headers headerFlag
@@ -60,6 +71,9 @@ func (a *app) media(ctx context.Context, args []string) error {
 		wait    bool
 		asJSON  bool
 		queue   string
+		item    string
+		domain  string
+		clipF   clipFlags
 	)
 	fs.BoolVar(&site, "site", false, "the address is a web page with a video, resolved with yt-dlp (saved as .mp4)")
 	fs.BoolVar(&list, "list", false, "list the stream's tracks (one MP4 video per quality) instead of downloading it")
@@ -72,6 +86,11 @@ func (a *app) media(ctx context.Context, args []string) error {
 	fs.BoolVar(&wait, "wait", false, "follow the download's progress until it completes")
 	fs.BoolVar(&asJSON, "json", false, "--list: print JSON")
 	fs.StringVar(&queue, "queue", "", queueFlagUsage)
+	fs.StringVar(&clipF.from, "from", "", "save only part of the video, from `time` (e.g. 1:20; see above)")
+	fs.StringVar(&clipF.to, "to", "", "save only part of the video, up to `time` (default: to the end)")
+	fs.IntVar(&clipF.chapter, "chapter", 0, "save only chapter `N` of the video (1-based, see --list)")
+	fs.StringVar(&item, "item", "", "--site: the video `ID` of a page with several (see --list)")
+	fs.StringVar(&domain, "cookie-domain", "", "--site: give the -H Cookie to `domain` and its subdomains (e.g. example.com)")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return silentError{err}
@@ -83,8 +102,12 @@ func (a *app) media(ctx context.Context, args []string) error {
 		return usageError{"media", "expects exactly one manifest URL"}
 	}
 	set := visited(fs)
+	clip, err := clipF.parse("media", set)
+	if err != nil {
+		return err
+	}
 	if list {
-		for _, f := range []string{"video", "audio", "o", "name", "paused", "wait", "queue"} {
+		for _, f := range []string{"video", "audio", "o", "name", "paused", "wait", "queue", "from", "to", "chapter"} {
 			if set[f] {
 				return usageError{"media", "--list cannot be combined with --" + f}
 			}
@@ -97,6 +120,29 @@ func (a *app) media(ctx context.Context, args []string) error {
 	}
 	if set["name"] && name == "" {
 		return usageError{"media", "--name must not be empty"}
+	}
+	if set["item"] {
+		switch err := validate.EntryID(item); {
+		case !site:
+			return usageError{"media", "--item applies only with --site"}
+		case item == "":
+			return usageError{"media", "--item must not be empty"}
+		case err != nil:
+			return usageError{"media", "--item: " + err.Error()}
+		}
+	}
+	if set["cookie-domain"] {
+		switch {
+		case !site:
+			return usageError{"media", "--cookie-domain applies only with --site"}
+		case len(headers.h.Values("Cookie")) == 0:
+			return usageError{"media", "--cookie-domain needs a -H \"Cookie: ...\" header"}
+		case domain == "" || validate.CookieDomainName(domain) != nil:
+			return usageError{"media", "--cookie-domain: give a lowercase domain name such as example.com"}
+		}
+		if err := validate.SiteCookie(pos[0], "", domain); err != nil {
+			return usageError{"media", "--cookie-domain: " + err.Error()}
+		}
 	}
 	if site {
 		for _, k := range sortedKeys(headers.h) {
@@ -128,8 +174,10 @@ func (a *app) media(ctx context.Context, args []string) error {
 	probe := &downexv1.ProbeMediaRequest{ManifestUrl: pos[0], Headers: rpcHeaders(headers.h)}
 	if site {
 		probe.ManifestUrl, probe.PageUrl, probe.Origin = "", pos[0], downexv1.MediaOrigin_MEDIA_ORIGIN_SITE
+		probe.EntryId = item
+		probe.CookieDomain = domain
 	}
-	if list {
+	if list || set["chapter"] {
 		var info *downexv1.MediaInfo
 		err := call(func(ctx context.Context) error {
 			resp, err := c.Downloads.ProbeMedia(ctx, connect.NewRequest(probe))
@@ -142,10 +190,20 @@ func (a *app) media(ctx context.Context, args []string) error {
 			return mediaRPCError(err, site)
 		}
 		v := newMediaView(info)
-		if asJSON {
+		switch {
+		case set["chapter"]:
+			var cs []chapterView
+			if v != nil {
+				cs = v.Chapters
+			}
+			if clip, err = chapterClip("media", clipF.chapter, cs); err != nil {
+				return err
+			}
+		case asJSON:
 			return writeJSON(a.stdout, v)
+		default:
+			return writeTracks(a.stdout, v)
 		}
-		return writeTracks(a.stdout, v)
 	}
 	var q *downexv1.Queue
 	if set["queue"] {
@@ -156,7 +214,7 @@ func (a *app) media(ctx context.Context, args []string) error {
 	add := &downexv1.AddMediaRequest{
 		ManifestUrl: probe.GetManifestUrl(), PageUrl: probe.GetPageUrl(), Origin: probe.GetOrigin(), Headers: probe.GetHeaders(),
 		Dir: dir, Filename: name, Source: downexv1.AddSource_ADD_SOURCE_CLI, VideoTrack: video, AudioTrack: audio,
-		StartPaused: paused, QueueId: q.GetId(),
+		StartPaused: paused, QueueId: q.GetId(), Clip: clip, EntryId: probe.GetEntryId(), CookieDomain: probe.GetCookieDomain(),
 	}
 	var d *downexv1.Download
 	err = call(func(ctx context.Context) error {
@@ -262,7 +320,7 @@ var siteErrorTexts = map[string]struct {
 }{
 	"site_unsupported":  {"Downex found no video on this page", false},
 	"site_unavailable":  {"this video is not available (private, removed, blocked in your country, or the site asks to try again later)", true},
-	"auth_required":     {"the site wants you to sign in (age check, members-only or bot check); pass your sign-in cookie with -H \"Cookie: ...\"", true},
+	"auth_required":     {"the site wants you to sign in (age check, members-only or bot check); pass your sign-in cookie with -H \"Cookie: ...\" and the site's domain with --cookie-domain", true},
 	"media_unsupported": {"no MP4 video on this page (or a playlist: open a single video of it)", false},
 	"media_invalid":     {"the chosen quality is not offered (see --list), or the page's answer was unusable", true},
 	"site_error":        {"yt-dlp could not read this page", true},
@@ -288,6 +346,11 @@ func mediaRPCError(err error, site bool) error {
 			return &daemonError{msg: "media: no MP4 video in this stream (Downex saves streams as MP4 only: H.264 or HEVC " +
 				"video with AAC audio; audio-only and WebM streams cannot be saved)", err: err}
 		}
+		if code == "media_unsupported" && site {
+			if reason := unsupportedReason(ce.Message()); reason != "" {
+				return &daemonError{msg: "media: " + reason, err: err}
+			}
+		}
 		if s, ok := siteErrorTexts[code]; ok && site {
 			msg := "media: " + s.text
 			if reason := siteReason(ce.Message(), code); s.withReason && reason != "" {
@@ -297,6 +360,24 @@ func mediaRPCError(err error, site bool) error {
 		}
 	}
 	return rpcError("media", err)
+}
+
+// unsupportedReasons find the reasons of a page's media_unsupported refusal that say more than
+// "no MP4 video": a playlist (open a single video or track of it) and an audio page's audio
+// that cannot be saved (docs/SITE-MEDIA-SPEC.md §3.12, §3.13).
+var unsupportedReasons = regexp.MustCompile(`(?i)\bplaylist\b|\b(opus|vorbis)\b|raw AAC|\bpreview\b|no AAC or MP3 audio`)
+
+// unsupportedReason is the daemon's reason of a media_unsupported refusal of a page (after its
+// last ": ") when unsupportedReasons finds it, else "".
+func unsupportedReason(msg string) string {
+	reason := msg
+	if i := strings.LastIndex(msg, ": "); i >= 0 {
+		reason = msg[i+2:]
+	}
+	if !unsupportedReasons.MatchString(reason) {
+		return ""
+	}
+	return printable(reason)
 }
 
 // siteReason is the cause in a refusal's message "<code>: <sentinel text>: <reason>", or
@@ -326,12 +407,29 @@ type mediaView struct {
 	FragmentsTotal int         `json:"fragmentsTotal,omitempty"`
 	FragmentsDone  int         `json:"fragmentsDone,omitempty"`
 	Tracks         []trackView `json:"tracks"`
+	// Clip is the part of the video a download saves (docs/MEDIA-SPEC.md §8), Chapters
+	// a web page's video's chapters.
+	Clip     *clipView     `json:"clip,omitempty"`
+	Chapters []chapterView `json:"chapters,omitempty"`
+	// A web page with several videos (docs/SITE-MEDIA-SPEC.md §3.12): the item described,
+	// the page's videos, and how many other items it has.
+	EntryID      string     `json:"entryId,omitempty"`
+	Items        []itemView `json:"items,omitempty"`
+	ItemsLeftOut int        `json:"itemsLeftOut,omitempty"`
+}
+
+// itemView is one video of a page with several.
+type itemView struct {
+	ID       string  `json:"id"`
+	Title    string  `json:"title,omitempty"`
+	Duration float64 `json:"durationSeconds,omitempty"`
 }
 
 // Values of mediaView.Origin.
 const (
 	originManifest = "manifest"
 	originSite     = "site"
+	originPlayed   = "played" // docs/SITE-MEDIA-SPEC.md §2.9
 )
 
 type trackView struct {
@@ -360,9 +458,17 @@ func newMediaView(m *downexv1.MediaInfo) *mediaView {
 		SelectedVideo: m.GetSelectedVideo(), SelectedAudio: m.GetSelectedAudio(),
 		FragmentsTotal: int(m.GetFragmentsTotal()), FragmentsDone: int(m.GetFragmentsDone()),
 		Tracks: make([]trackView, 0, len(m.GetTracks())),
+		Clip:   protoClipView(m.GetClip()), Chapters: protoChapterViews(m.GetChapters()),
+		EntryID: m.GetEntryId(), ItemsLeftOut: max(int(m.GetItemsLeftOut()), 0),
 	}
-	if m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE {
+	switch m.GetOrigin() {
+	case downexv1.MediaOrigin_MEDIA_ORIGIN_SITE:
 		v.Origin = originSite
+	case downexv1.MediaOrigin_MEDIA_ORIGIN_PLAYED:
+		v.Origin = originPlayed
+	}
+	for _, it := range m.GetItems() {
+		v.Items = append(v.Items, itemView{ID: it.GetId(), Title: it.GetTitle(), Duration: float64(max(it.GetDurationMs(), 0)) / 1000})
 	}
 	for _, t := range m.GetTracks() {
 		v.Tracks = append(v.Tracks, trackView{
@@ -387,9 +493,14 @@ func storedMediaView(d *model.Download) *mediaView {
 		Container: m.Container, SelectedVideo: m.SelectedVideo, SelectedAudio: m.SelectedAudio,
 		FragmentsTotal: m.FragmentsTotal, FragmentsDone: m.FragmentsDone,
 		Tracks: make([]trackView, 0, len(m.Tracks)),
+		Clip:   storedClipView(m.Clip), Chapters: storedChapterViews(m.Chapters),
+		EntryID: m.EntryID, ItemsLeftOut: max(m.ItemsLeftOut, 0),
 	}
-	if m.Origin == originSite {
-		v.Origin, v.ManifestURL = originSite, ""
+	for _, it := range m.Items {
+		v.Items = append(v.Items, itemView{ID: it.ID, Title: it.Title, Duration: max(it.Duration, 0).Seconds()})
+	}
+	if m.Origin == originSite || m.Origin == originPlayed {
+		v.Origin, v.ManifestURL = m.Origin, ""
 		if v.PageURL == "" {
 			v.PageURL = d.Request.URL
 		}
@@ -486,7 +597,7 @@ func writeTracks(w io.Writer, v *mediaView) error {
 		return err
 	}
 	fmt.Fprintln(w, "* = downloaded by default; choose others with --video ID and --audio ID.")
-	return nil
+	return writeChapters(w, v.Chapters)
 }
 
 // writeSiteTracks prints the MP4 qualities a web page offers (docs/SITE-MEDIA-SPEC.md
@@ -494,16 +605,27 @@ func writeTracks(w io.Writer, v *mediaView) error {
 // track with ID, KIND, QUALITY (siteQuality), PICTURE, CODECS, SIZE ("~" for the site's
 // estimates and for bandwidth × duration, trackSize), EXT and LANG, in the daemon's
 // order (best first), the default marked.
+//
+// An audio page (docs/SITE-MEDIA-SPEC.md §3.13: container m4a or mp3) lists its audio
+// tracks, says it is audio only, and offers --audio.
 func writeSiteTracks(w io.Writer, v *mediaView) error {
-	title := "Video"
+	audioPage := v.audioPage()
+	title, kind := "Video", " video"
+	if audioPage {
+		title, kind = "Audio", " audio"
+	}
 	if v.Site != "" {
-		title = v.Site + " video"
+		title = v.Site + kind
 	}
 	if v.Title != "" {
 		title += ": " + v.Title
 	}
 	fmt.Fprintln(w, printable(title))
-	head := []string{"Saved as: .mp4"}
+	saved := ".mp4"
+	if audioPage {
+		saved = "." + v.Container
+	}
+	head := []string{"Saved as: " + saved}
 	if v.Duration > 0 {
 		head = append([]string{"Duration: " + formatDuration(time.Duration(v.Duration*float64(time.Second)))}, head...)
 	}
@@ -512,17 +634,85 @@ func writeSiteTracks(w io.Writer, v *mediaView) error {
 		fmt.Fprintln(w, "No tracks.")
 		return nil
 	}
+	silent := !audioPage && !slices.ContainsFunc(v.Tracks, func(t trackView) bool { return t.Kind == "audio" })
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "  ID\tKIND\tQUALITY\tPICTURE\tCODECS\tSIZE\tEXT\tLANG")
 	for _, t := range v.Tracks {
+		codecs := codecNames(t.Codecs)
+		if silent && t.Kind == "video" {
+			// A video listed without audio has no sound (docs/SITE-MEDIA-SPEC.md §5.3,
+			// amendment 2026-11-18).
+			codecs = strings.TrimSpace(codecs + " (no sound)")
+		}
 		fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.mark(t), printable(t.ID), printable(t.Kind), siteQuality(t),
-			trackPicture(t), printable(dash(codecNames(t.Codecs))), v.trackSize(t), printable(dash(t.Ext)),
+			trackPicture(t), printable(dash(codecs)), v.trackSize(t), printable(dash(t.Ext)),
 			printable(dash(t.Language)))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "* = downloaded by default; choose another quality with --video ID (and its audio with --audio ID).")
+	switch {
+	case audioPage:
+		fmt.Fprintf(w, "Audio only: this page has no video; saved as .%s.\n", v.Container)
+		fmt.Fprintln(w, "* = downloaded by default; choose another with --audio ID.")
+	case silent:
+		// No audio row: there is no audio to choose.
+		fmt.Fprintln(w, "* = downloaded by default; choose another quality with --video ID.")
+	default:
+		fmt.Fprintln(w, "* = downloaded by default; choose another quality with --video ID (and its audio with --audio ID).")
+	}
+	if err := writeChapters(w, v.Chapters); err != nil {
+		return err
+	}
+	return writeItems(w, v)
+}
+
+// audioPage reports a web page without video whose audio is saved (docs/SITE-MEDIA-SPEC.md
+// §3.13): its container is m4a or mp3.
+func (v *mediaView) audioPage() bool {
+	return v.Origin == originSite && (v.Container == "m4a" || v.Container == "mp3")
+}
+
+// writeItems prints the videos of a page with several (docs/SITE-MEDIA-SPEC.md §3.7,
+// §3.12): position, id, title and length, the one listed above marked, and how many
+// other items the page has (photos, links, videos past 20 or without an MP4 offer), which are
+// not downloaded.
+func writeItems(w io.Writer, v *mediaView) error {
+	if len(v.Items) < 2 && v.ItemsLeftOut == 0 {
+		return nil
+	}
+	// An audio page's items are tracks (docs/SITE-MEDIA-SPEC.md §3.13).
+	noun, one, many := "Videos", "a photo, a link or a video", "photos, links or videos"
+	if v.audioPage() {
+		noun, one, many = "Tracks", "a link or audio", "links or audio"
+	}
+	head := fmt.Sprintf("%s on this page: %d", noun, len(v.Items))
+	if v.ItemsLeftOut > 0 {
+		if v.ItemsLeftOut == 1 {
+			head += " (1 other item not listed: " + one + " Downex cannot save)"
+		} else {
+			head += " (" + plural(v.ItemsLeftOut, "other item", "other items") + " not listed: " + many + " Downex cannot save)"
+		}
+	}
+	fmt.Fprintln(w, head)
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for i, it := range v.Items {
+		mark := " "
+		if it.ID == v.EntryID {
+			mark = "*"
+		}
+		length := "-"
+		if it.Duration > 0 {
+			length = media.FormatClipTime(time.Duration(it.Duration * float64(time.Second)))
+		}
+		fmt.Fprintf(tw, "%s %d\t%s\t%s\t%s\n", mark, i+1, printable(it.ID), printable(dash(it.Title)), length)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if len(v.Items) > 1 {
+		fmt.Fprintf(w, "* = the %s listed above; choose another with --item ID.\n", strings.ToLower(strings.TrimSuffix(noun, "s")))
+	}
 	return nil
 }
 
@@ -602,6 +792,8 @@ func codecNames(codecs string) string {
 			c = "AC-3"
 		case "ec-3":
 			c = "E-AC-3"
+		case "mp3":
+			c = "MP3"
 		}
 		parts[i] = c
 	}
@@ -653,7 +845,7 @@ func describeSelection(m *downexv1.MediaInfo) string {
 	if m == nil {
 		return "media"
 	}
-	site := m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE
+	site := pageVideo(m)
 	byID := make(map[string]*downexv1.MediaTrack, len(m.GetTracks()))
 	for _, t := range m.GetTracks() {
 		byID[t.GetId()] = t
@@ -685,9 +877,13 @@ func describeSelection(m *downexv1.MediaInfo) string {
 	}
 	prefix := strings.ToUpper(m.GetFormat())
 	if site {
-		prefix = "video"
+		kind := "video"
+		if c := m.GetContainer(); c == "m4a" || c == "mp3" {
+			kind = "audio" // an audio page's (docs/SITE-MEDIA-SPEC.md §3.13)
+		}
+		prefix = kind
 		if m.GetSite() != "" {
-			prefix = printable(m.GetSite()) + " video"
+			prefix = printable(m.GetSite()) + " " + kind
 		}
 	}
 	if len(parts) == 0 {
@@ -716,7 +912,14 @@ func partProgress(done, total int) string {
 // uneven sizes and measured by their bytes (docs/SITE-MEDIA-SPEC.md §2.4, §3.7); a site's
 // HLS/DASH stream counts fragments like any stream.
 func directSite(m *downexv1.MediaInfo) bool {
-	return m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE && m.GetFormat() == "http"
+	return pageVideo(m) && m.GetFormat() == "http"
+}
+
+// pageVideo reports a web page's video: a site's (yt-dlp) or one saved from what the
+// browser played (docs/SITE-MEDIA-SPEC.md §2.9).
+func pageVideo(m *downexv1.MediaInfo) bool {
+	o := m.GetOrigin()
+	return o == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE || o == downexv1.MediaOrigin_MEDIA_ORIGIN_PLAYED
 }
 
 // pieceProgress is m's parts (directSite) or fragments: "4/37 parts", "45/120 fragments".

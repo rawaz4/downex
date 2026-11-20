@@ -41,8 +41,10 @@ func TestAddCompletesAndWatchStreamsIt(t *testing.T) {
 	if !stream.Receive() {
 		t.Fatalf("no snapshot batch: %v", stream.Err())
 	}
-	// Without downloads the snapshot holds only the main queue (docs/M6-SPEC.md §1).
-	if evs := stream.Msg().GetEvents(); len(evs) != 1 || evs[0].GetQueueUpdated().GetId() != 1 {
+	// Without downloads the snapshot holds only the main queue (docs/M6-SPEC.md §1) and
+	// Polite mode's status (docs/POLITE-SPEC.md §7).
+	if evs := stream.Msg().GetEvents(); len(evs) != 2 || evs[0].GetQueueUpdated().GetId() != 1 ||
+		evs[1].GetPolite().GetState() != downexv1.PoliteState_POLITE_STATE_OFF {
 		t.Fatalf("snapshot of an empty daemon = %v", evs)
 	}
 

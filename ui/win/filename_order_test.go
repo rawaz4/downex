@@ -23,7 +23,7 @@ func TestFileNameOrderMatchesChromium(t *testing.T) {
 	r := newRes(t)
 	for _, c := range []struct{ name, want string }{
 		{"سلێمانی تا بەغداد بۆ بینینی The Odyssey و IMAX.mp4", "IMAX.mp4RTheOdysseyR"}, // the Kurdish fixture title
-		{"أطيب كباب في السليمانية_ أكلات شعبية وخبز التنور الحار.mp4", ".mp4R_R"},         // the Arabic one
+		{"أطيب كباب في السليمانية_ أكلات شعبية وخبز التنور الحار.mp4", ".mp4R_R"},      // the Arabic one
 		{"ڕاپۆرتی-ساڵانەی-٢٠٢٦.pdf", ".pdfR-R-R"},
 		{"تقرير-الميزانية-٢٠٢٦.xlsx", ".xlsxR-R-R"},
 		{"گەشتی-هەولێر-4k.mp4", "4k.mp4-R-R"},

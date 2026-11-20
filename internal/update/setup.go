@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -30,16 +31,25 @@ func (w *windowsInstaller) Prepare(context.Context) error {
 }
 
 // Stage checks the Authenticode signature of the Setup when the running downexd is
-// signed: then the Setup must carry a valid signature too.
+// signed: then the Setup must carry a valid signature by the same publisher, the same
+// subject distinguished name of the signing certificate (M6-SPEC §4). An unsigned downexd
+// (development and today's releases) leaves the Setup to the signed manifest.
 func (w *windowsInstaller) Stage(_ context.Context, path string, _ Version) (Staged, error) {
 	l, err := w.sys.Layout()
 	if err != nil {
 		return nil, fmt.Errorf("update: locate the installation: %w", err)
 	}
-	switch err := w.sys.Authenticode(l.Exe); {
+	switch own, err := w.sys.Authenticode(l.Exe); {
 	case err == nil:
-		if serr := w.sys.Authenticode(path); serr != nil {
+		setup, serr := w.sys.Authenticode(path)
+		if serr != nil {
 			return nil, fmt.Errorf("%w: this Downex is signed, the Setup is not validly signed: %v", ErrCodeSignature, serr)
+		}
+		if len(own.SubjectName) == 0 {
+			return nil, fmt.Errorf("%w: cannot read the publisher of this Downex's signature", ErrCodeSignature)
+		}
+		if !bytes.Equal(setup.SubjectName, own.SubjectName) {
+			return nil, fmt.Errorf("%w: the Setup is signed by %.64q, not by this Downex's publisher %.64q", ErrCodeSignature, setup.Subject, own.Subject)
 		}
 	case errors.Is(err, ErrUnsigned):
 		w.sys.Logger.Info("this downexd is not Authenticode signed; the update is checked by its signed manifest only")

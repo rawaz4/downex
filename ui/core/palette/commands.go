@@ -7,6 +7,7 @@ import (
 
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
+	"downex/ui/core/display"
 	"downex/ui/core/format"
 	"downex/ui/core/query"
 	"downex/ui/core/text"
@@ -37,6 +38,8 @@ const (
 	IconGear         = "gear"
 	IconQueue        = "queue"
 	IconFilter       = "filter"
+	IconLink         = "link"
+	IconExternal     = "external"
 )
 
 // CommandState is what the command list reads of the window.
@@ -53,8 +56,16 @@ type CommandState struct {
 	CompletedSelected int
 	// Active is the number of active downloads (the store's totals).
 	Active int
+	// Renewable: exactly one download is selected and New link… applies to it (a paused or
+	// failed file download); PageKnown: exactly one is selected and its page is known
+	// (docs/DESKTOP-SPEC.md §10).
+	Renewable, PageKnown bool
 	// GlobalSpeedLimit is the settings' limit in bytes per second (0 = unlimited).
 	GlobalSpeedLimit int64
+	// PoliteMode is the polite_mode setting; Polite Polite mode's status as downexd last
+	// reported it (nil: none yet).
+	PoliteMode bool
+	Polite     *downexv1.PoliteStatus
 	// WhenDone: the main queue's post-queue action is known (the "When done…" menu exists).
 	WhenDone bool
 	// DetailsCollapsed: the details pane is hidden.
@@ -129,14 +140,19 @@ func Commands(s CommandState) []Command {
 	list := []Command{
 		{ID: "add", Group: "Commands", Label: "Add download…", Icon: IconAdd, Shortcut: "Ctrl+N", Keywords: "new url link", Description: "Paste or type the links of files to download", Disabled: !s.CanAdd, DisabledReason: why(false, "")},
 		{ID: "add-video", Group: "Commands", Label: "Add video or stream…", Icon: IconStream, Keywords: "new youtube hls dash page", Description: "A video page or a stream address, saved as one MP4", Disabled: !s.CanAdd, DisabledReason: why(false, "")},
+		// docs/DESKTOP-SPEC.md §11: the rescue of a partial file a browser left unfinished.
+		{ID: "rescue", Group: "Commands", Label: display.RescueLabel, Icon: IconRestart, Keywords: display.RescueKeywords, Description: display.RescueDescription, Disabled: s.Stale || !s.CanAdd, DisabledReason: why(false, "")},
 		{ID: "pause", Group: "Commands", Label: "Pause selected", Icon: IconPause, Shortcut: "Space", Description: "Pauses " + selected + ", keeps " + its + " progress", Disabled: !s.CanPause, DisabledReason: why(true, "nothing to pause in the selection")},
 		{ID: "resume", Group: "Commands", Label: "Resume selected", Icon: IconResume, Shortcut: "Space", Description: "Continues " + selected + " where " + it + " stopped", Disabled: !s.CanResume, DisabledReason: why(true, "nothing to resume in the selection")},
 		{ID: "pause-all", Group: "Commands", Label: "Pause all", Icon: IconPauseAll, Description: pauseAll, Disabled: !s.CanPauseAll, DisabledReason: why(false, "nothing is downloading or queued")},
 		{ID: "resume-all", Group: "Commands", Label: "Resume all", Icon: IconResumeAll, Description: resumeAll, Disabled: !s.CanResumeAll, DisabledReason: why(false, "nothing is paused")},
 		{ID: "download-again", Group: "Commands", Label: "Download again…", Icon: IconRestart, Keywords: "restart redownload refresh completed finished", Description: again, Disabled: s.Stale || s.CompletedSelected == 0, DisabledReason: why(true, "nothing completed in the selection")},
+		{ID: "new-link", Group: "Commands", Label: "New link…", Icon: IconLink, Keywords: "renew expired link url continue", Description: "Gives the selected download a new link; it continues when the new link serves the same file", Disabled: s.Stale || !s.Renewable, DisabledReason: why(true, "select one paused or failed download")},
+		{ID: "open-page", Group: "Commands", Label: "Open download page", Icon: IconExternal, Keywords: "browser site source", Description: "Opens the page the selected download came from in the browser", Disabled: !s.PageKnown, DisabledReason: why(true, "the page of the selection is not known")},
 		{ID: "remove", Group: "Commands", Label: "Remove selected…", Icon: IconRemove, Shortcut: "Del", Keywords: "delete", Description: "Asks first; the files stay unless you choose to delete them", Disabled: !s.CanRemove, DisabledReason: why(true, "")},
 		{ID: "select-all", Group: "Commands", Label: "Select all", Icon: IconCheck, Shortcut: "Ctrl+A", Description: "Every download the list shows"},
 		{ID: "limit", Group: "Commands", Label: "Set global speed limit…", Icon: IconGauge, Keywords: "bandwidth throttle", Description: "Now " + limit + " · applies to every download", Disabled: s.Stale || !s.SettingsLoaded, DisabledReason: limitWhy},
+		politeCommand(s, limitWhy),
 	}
 	if s.WhenDone {
 		list = append(list, Command{ID: "when-done", Group: "Commands", Label: "When done…", Icon: IconPower, Keywords: "shut down sleep hibernate quit post queue", Description: "Keep running, sleep, shut down, or quit Downex", Disabled: s.Stale, DisabledReason: "downexd is not reachable"})
@@ -306,3 +322,34 @@ const (
 
 // NothingMatches is the line under an empty list: Nothing matches “query”.
 func NothingMatches(query string) string { return "Nothing matches “" + jsTrim(query) + "”." }
+
+// politeCommand is "Turn on Polite mode" / "Turn off Polite mode" (docs/POLITE-SPEC.md §8),
+// unavailable for the same reasons as the global speed limit.
+func politeCommand(s CommandState, why string) Command {
+	c := Command{ID: "polite", Group: "Commands", Label: "Turn on Polite mode", Icon: IconGauge,
+		Keywords: "lag latency calls games streaming bufferbloat bandwidth", Description: "Slow down when downloads make the line laggy",
+		Disabled: s.Stale || !s.SettingsLoaded, DisabledReason: why}
+	if s.PoliteMode {
+		c.Label = "Turn off Polite mode"
+		c.Description = "Now " + PoliteStateText(s.Polite)
+	}
+	return c
+}
+
+// PoliteStateText describes Polite mode's state while it is on: "slowed to 2.4 MB/s to keep
+// the line smooth", "on, full speed", ….
+func PoliteStateText(p *downexv1.PoliteStatus) string {
+	switch p.GetState() {
+	case downexv1.PoliteState_POLITE_STATE_SLOWED:
+		return "slowed to " + format.Speed(float64(p.GetRateLimit())) + " to keep the line smooth"
+	case downexv1.PoliteState_POLITE_STATE_MEASURING:
+		return "measuring the line"
+	case downexv1.PoliteState_POLITE_STATE_NO_SIGNAL:
+		return "on, but this connection can't be measured: full speed"
+	case downexv1.PoliteState_POLITE_STATE_UNAVAILABLE:
+		return "on, but not available with this downexd"
+	case downexv1.PoliteState_POLITE_STATE_IDLE:
+		return "on, nothing downloading"
+	}
+	return "on, full speed"
+}

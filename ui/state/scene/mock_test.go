@@ -577,11 +577,15 @@ func TestSendsASnapshotThenCoalescedUpdates(t *testing.T) {
 	m := mk(t, func(o *Options) { o.Count = 6 })
 	var batches []state.Batch
 	off := m.Subscribe(func(b state.Batch) { batches = append(batches, b) })
-	if len(batches) != 1 || len(batches[0]) != 7 || kindsOf(batches[0], func(e *downexv1.Event) bool { return e.GetSnapshot() != nil }) != 6 {
+	// The snapshot, then the tools' state and Polite mode's status, as Watch without ids sends.
+	if len(batches) != 1 || len(batches[0]) != 8 || kindsOf(batches[0], func(e *downexv1.Event) bool { return e.GetSnapshot() != nil }) != 6 {
 		t.Fatalf("first batch %v", batches)
 	}
 	if tl := batches[0][6].GetTools(); tl == nil || !tl.GetEnabled() || tl.GetReady() {
 		t.Fatal(batches[0][6])
+	}
+	if p := batches[0][7].GetPolite(); p.GetState() != downexv1.PoliteState_POLITE_STATE_OFF {
+		t.Fatal(batches[0][7])
 	}
 	add(t, m, &downexv1.AddRequest{Url: "https://downloads.example.com/pub/new.zip"})
 	m.Tick(250)

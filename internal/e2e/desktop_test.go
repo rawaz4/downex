@@ -232,8 +232,8 @@ func TestBrowserHandOffAwaitsConfirmation(t *testing.T) {
 		t.Fatalf("handed-off download = %v", dl)
 	}
 	call := inst.waitUICall(t)
-	if !slices.Equal(call.Args, []string{"--confirm", idArg(id)}) || call.Endpoint != h.endpoint {
-		t.Fatalf("confirmation window started with %q on endpoint %q, want [--confirm %d] on %q",
+	if !slices.Equal(call.Args, []string{"--confirm", idArg(id), "--raise"}) || call.Endpoint != h.endpoint {
+		t.Fatalf("confirmation window started with %q on endpoint %q, want [--confirm %d --raise] on %q",
 			call.Args, call.Endpoint, id, h.endpoint)
 	}
 	if e := entry(t, h.ls(), id); e.State != "awaiting" {
@@ -334,8 +334,8 @@ func TestBrowserHandOffWithoutConfirmation(t *testing.T) {
 	dl = h.waitCompleted(wid)
 	checkFile(t, filepath.Join(h.out, "Archives", "shown.zip"), seed+2, size)
 	call := inst.waitUICall(t)
-	if !slices.Equal(call.Args, []string{"--progress", idArg(wid)}) || call.Endpoint != h.endpoint {
-		t.Fatalf("window started with %q on endpoint %q, want [--progress %d] on %q (earlier downloads: %d, %d)",
+	if !slices.Equal(call.Args, []string{"--progress", idArg(wid), "--raise"}) || call.Endpoint != h.endpoint {
+		t.Fatalf("window started with %q on endpoint %q, want [--progress %d --raise] on %q (earlier downloads: %d, %d)",
 			call.Args, call.Endpoint, wid, h.endpoint, id, cid)
 	}
 	if calls := inst.uiCalls(t); len(calls) != 1 {

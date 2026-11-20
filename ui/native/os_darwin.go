@@ -31,6 +31,8 @@ type windowSpec struct {
 	CustomFrame bool
 	// Maximized: it opens zoomed, Size being the size it restores to.
 	Maximized bool
+	// Dialog: a dialog's window (the standalone Confirm download window).
+	Dialog bool
 }
 
 // openWindow opens root's window on a as ws says (-noactivate shows it without activating;

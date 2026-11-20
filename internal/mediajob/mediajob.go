@@ -59,6 +59,10 @@ type Selection struct {
 	// whatever track now has the ID.
 	VideoKey string `json:"videoKey,omitempty"`
 	AudioKey string `json:"audioKey,omitempty"`
+	// Clip is the part of the presentation to save (docs/MEDIA-SPEC.md §8); the zero
+	// Clip saves all of it. Run fetches only the fragments the part needs and cuts the
+	// output to it (remux.AssembleWindow). A LegacyTS run refuses a part.
+	Clip media.Clip `json:"clip,omitempty"`
 }
 
 // Info describes a probed presentation and the resolved selection.
@@ -93,6 +97,9 @@ type Checkpoint struct {
 	// (0 otherwise, and for Run): the total survives a pause. It mirrors
 	// model.MediaCheckpoint.BytesTotal.
 	BytesTotal int64 `json:"bytesTotal,omitempty"`
+	// LeadIn is the number of media fragments a part's window was extended back by to
+	// find a keyframe (docs/MEDIA-SPEC.md §8 C5). It mirrors model.MediaCheckpoint.LeadIn.
+	LeadIn int `json:"leadIn,omitempty"`
 }
 
 // TrackCheckpoint records which fragments of one track are durable.
@@ -125,6 +132,15 @@ type TrackCheckpoint struct {
 	// ignored: the chunk is fetched in full. Checkpoints written before prefixes existed
 	// have none. It mirrors model.MediaTrackCheckpoint.Partial.
 	Partial map[int]int64 `json:"partial,omitempty"`
+	// First is, in a part's window (docs/MEDIA-SPEC.md §8 C11), the full-plan index of
+	// the window's first fragment: Total then counts full-plan fragments from First, and
+	// bit i of Done is full-plan fragment First+i. Base is the resource offset of the
+	// first byte of a ranged track's file when it holds a span of the resource, and Head
+	// the length of its synced head file (docs/SITE-MEDIA-SPEC.md §2.7). They mirror
+	// model.MediaTrackCheckpoint.
+	First int   `json:"first,omitempty"`
+	Base  int64 `json:"base,omitempty"`
+	Head  int64 `json:"head,omitempty"`
 }
 
 // Progress is a snapshot of a running job, emitted at most 4 times per second and
@@ -162,6 +178,9 @@ type Progress struct {
 	// RetryAt the time of the next attempt), the reason after a failure, the step while
 	// connecting. The slice is fresh for every event: the receiver may keep it.
 	Workers []model.WorkerView
+	// Clip describes the assembled part of a run with a clip (docs/MEDIA-SPEC.md §8
+	// C20): set only in the event after the output is complete, nil otherwise.
+	Clip *model.MediaClip
 }
 
 // Connection limits, as in internal/engine.
@@ -178,14 +197,18 @@ const (
 	DefaultCheckpointInterval = 2 * time.Second
 )
 
-// AssembleFunc joins the downloaded tracks into outPath; remux.Assemble is the default.
-type AssembleFunc func(ctx context.Context, inputs []remux.Input, outPath string) (container string, err error)
+// AssembleFunc joins the downloaded tracks into outPath, cut to w (the zero Window: all
+// of them); remux.AssembleWindow is the default.
+type AssembleFunc func(ctx context.Context, inputs []remux.Input, outPath string, w remux.Window) (remux.Result, error)
+
+// TrimFunc cuts a part of a progressive MP4 into outPath; remux.TrimMP4 is the default.
+type TrimFunc func(ctx context.Context, src remux.ProgressiveSource, outPath string, w remux.Window) (remux.Result, error)
 
 // Options configures Run.
 type Options struct {
 	// Factory creates one transport slot per parallel connection (required).
 	Factory transport.Factory
-	// Limiter throttles the fragment bytes; nil means unlimited.
+	// Limiter throttles the fragment bytes and those of a part's head; nil means unlimited.
 	Limiter limiter.Limiter
 	// MaxConnections bounds the parallel fragment requests: the job uses
 	// min(pending fragments, MaxConnections, the hosts' caps of HostRules). 0 selects
@@ -221,8 +244,10 @@ type Options struct {
 	// CheckpointInterval is the shortest time between two checkpoint callbacks while
 	// fragments complete (default DefaultCheckpointInterval).
 	CheckpointInterval time.Duration
-	// Assemble replaces remux.Assemble (tests).
+	// Assemble replaces remux.AssembleWindow (tests).
 	Assemble AssembleFunc
+	// Trim replaces remux.TrimMP4 (tests).
+	Trim TrimFunc
 	// CheckTS replaces remux.CheckTS (tests).
 	CheckTS func(prefix []byte, k remux.Kind) error
 	// ConcatTS replaces remux.ConcatTS (tests).
@@ -240,6 +265,12 @@ type Options struct {
 	// turns out to be another container before its media fragments are, and an assembly
 	// of another container before it is published. RunRanged writes MP4 only anyway.
 	MP4Only bool
+	// AudioOnly makes a job the audio download of a page without video
+	// (docs/SITE-MEDIA-SPEC.md §3.13): Run takes the presentation's one track as audio
+	// (a transport stream gives its audio stream only), and Run and RunRanged refuse MP4
+	// data whose 'moov' has a video track (media.ErrUnsupported) before any other media
+	// is fetched. A part is refused. RunRanged implies it for one audio track.
+	AudioOnly bool
 	// LegacyTS keeps a record stored before 2026-10-23 as a byte-for-byte .ts: a single
 	// TS track is joined with ConcatTS instead of converted, and CheckTS is not run
 	// (docs/VIDEO-DETECT-SPEC.md §3.3). It ignores MP4Only.
@@ -269,9 +300,16 @@ var (
 	ErrRangeMismatch = errors.New("mediajob: server answered with a different byte range")
 	// ErrTruncated reports a response body that ended early or a fragment without data.
 	ErrTruncated = errors.New("mediajob: response ended early")
+	// ErrContentCoded reports a response whose bytes carry a content coding (RFC 9110
+	// §8.4) that the fetch cannot remove: an answer to a byte-range request, or a
+	// manifest in a coding other than gzip or deflate. Requests ask for identity.
+	ErrContentCoded = errors.New("mediajob: response has a content coding")
 	// ErrDiskFull reports a volume without room for a RunRanged job: its free space is
 	// below what the job needs, or a write or allocation failed because it is full.
 	ErrDiskFull = errors.New("mediajob: disk full")
+	// ErrRefusedAgain reports a RunRanged request answered with 403 or 410 again after
+	// the addresses were renewed; it wraps the *StatusError.
+	ErrRefusedAgain = errors.New("mediajob: refused again after the address was renewed")
 )
 
 // StatusError reports an HTTP status the job could not use.
@@ -314,7 +352,10 @@ func (o Options) withDefaults() (Options, error) {
 		o.CheckpointInterval = DefaultCheckpointInterval
 	}
 	if o.Assemble == nil {
-		o.Assemble = remux.Assemble
+		o.Assemble = remux.AssembleWindow
+	}
+	if o.Trim == nil {
+		o.Trim = remux.TrimMP4
 	}
 	if o.CheckTS == nil {
 		o.CheckTS = remux.CheckTS

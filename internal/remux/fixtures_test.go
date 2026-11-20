@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Eyevinn/mp4ff/aac"
+	"github.com/Eyevinn/mp4ff/av1"
 	"github.com/Eyevinn/mp4ff/mp4"
 )
 
@@ -125,7 +126,9 @@ type fxTrack struct {
 	perFrag   int      // samples per fragment
 	elst      int64    // media_time of an edit list in the init; 0 = none
 	optimize  bool     // let mp4ff move common sample values into tfhd defaults
-	samples   []fxSample
+	// codec is the video sample entry: "" (avc1), "av01" or "vp09".
+	codec   string
+	samples []fxSample
 }
 
 func (fx *fxTrack) id() uint32 {
@@ -180,7 +183,16 @@ func (fx *fxTrack) initSegment(t testing.TB) *mp4.InitSegment {
 		kind = "video"
 	}
 	trak := init.AddEmptyTrack(fx.timescale, kind, "und")
-	if fx.video {
+	if fx.video && fx.codec != "" {
+		// An AV1 or VP9 sample entry with its configuration box (ISO/IEC 14496-12 §12.1.3).
+		var conf mp4.Box = &mp4.VppCBox{Version: 1, Level: 31, BitDepth: 8, ChromaSubsampling: 1}
+		if fx.codec == "av01" {
+			conf = &mp4.Av1CBox{CodecConfRec: av1.CodecConfRec{Version: 1, SeqLevelIdx0: 8, ChromaSubsamplingX: 1, ChromaSubsamplingY: 1}}
+		}
+		stsd := trak.Mdia.Minf.Stbl.Stsd
+		stsd.Children, stsd.SampleCount = nil, 0
+		stsd.AddChild(mp4.CreateVisualSampleEntryBox(fx.codec, 1280, 720, conf))
+	} else if fx.video {
 		if err := trak.SetAVCDescriptor("avc1", [][]byte{testSPS()}, [][]byte{testPPS()}, true); err != nil {
 			t.Fatal(err)
 		}

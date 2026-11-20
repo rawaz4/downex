@@ -56,14 +56,25 @@ type System struct {
 	StartDetached func(exe string, args ...string) error
 	// Getenv reads the environment (os.Getenv): DOWNEX_ALLOW_UNSIGNED_UPDATE.
 	Getenv func(string) string
-	// Authenticode reports the Authenticode signature status of a file (Windows): nil
-	// for a valid signature, an error wrapping ErrUnsigned without one, any other error
-	// for an invalid one. The default is WinVerifyTrust on Windows.
-	Authenticode func(path string) error
+	// Authenticode reports the Authenticode signature of a file (Windows): its signer and
+	// nil for a valid signature, an error wrapping ErrUnsigned without one, any other error
+	// for an invalid one. The default is VerifyAuthenticode (WinVerifyTrust on Windows).
+	Authenticode func(path string) (Signer, error)
 	// Pid is the daemon's process id (os.Getpid), which a relaunch helper waits for.
 	Pid int
 	// Logger receives what the installer does (default: discarded).
 	Logger *slog.Logger
+}
+
+// Signer is who signed a file with Authenticode (VerifyAuthenticode).
+type Signer struct {
+	// Subject is the simple display name (the common name) of the signing certificate's
+	// subject, e.g. "Microsoft Corporation"; "" when it could not be read.
+	Subject string
+	// SubjectName is the signing certificate's whole subject distinguished name as it is
+	// encoded in the certificate (DER): the publisher, which a renewed certificate keeps
+	// while its thumbprint changes. Empty when it could not be read.
+	SubjectName []byte
 }
 
 // ErrUnsigned: a file has no Authenticode signature (System.Authenticode).
@@ -95,7 +106,7 @@ func (s System) withDefaults() System {
 		s.Getenv = os.Getenv
 	}
 	if s.Authenticode == nil {
-		s.Authenticode = authenticode
+		s.Authenticode = VerifyAuthenticode
 	}
 	if s.Pid == 0 {
 		s.Pid = os.Getpid()

@@ -2,6 +2,7 @@ package sitemedia
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -47,6 +48,8 @@ const (
 	maxCookies           = 50
 	maxCookieBytes       = 8 << 10
 	maxQueryDigits       = 20
+	maxThumbnailBytes    = 2 << 10
+	maxPlaylistCount     = 1_000_000
 	// availableAhead is how far ahead available_at may be before a format is dropped;
 	// expireAhead how far ahead an expire parameter is believed.
 	availableAhead = 10 * time.Minute
@@ -81,6 +84,20 @@ type rawInfo struct {
 	HasDRM       json.RawMessage `json:"_has_drm"`
 	Availability json.RawMessage `json:"availability"`
 	Formats      json.RawMessage `json:"formats"`
+	// A single-format answer carries its one format at the top level (§3.10).
+	URL       json.RawMessage `json:"url"`
+	Chapters  json.RawMessage `json:"chapters"`
+	Thumbnail json.RawMessage `json:"thumbnail"`
+	// A page with several videos (docs/SITE-MEDIA-SPEC.md §3.12).
+	Entries       json.RawMessage `json:"entries"`
+	PlaylistCount json.RawMessage `json:"playlist_count"`
+}
+
+// rawChapter holds the fields Parse reads of one chapter, undecoded.
+type rawChapter struct {
+	StartTime json.RawMessage `json:"start_time"`
+	EndTime   json.RawMessage `json:"end_time"`
+	Title     json.RawMessage `json:"title"`
 }
 
 // rawFormat holds the fields Parse reads of one format, undecoded.
@@ -128,18 +145,23 @@ type rawFormat struct {
 //
 // Unknown fields are ignored, a field of the wrong type or out of range counts as
 // absent, and a format that is then unusable is dropped. Parse refuses output larger
-// than MaxOutputBytes or with more than MaxFormats formats (media.ErrTooLarge),
-// output that is not one JSON object or lacks a valid id or extractor_key
-// (media.ErrMalformed), a playlist (media.ErrUnsupported), a link to another page
-// (ErrSiteUnsupported) and a live, upcoming or still processed stream
-// (media.ErrLive). Whether anything usable remains is for Offers to say. Errors never
-// repeat the output.
+// than MaxOutputBytes or with more than MaxFormats formats in one video
+// (media.ErrTooLarge), output that is not one JSON object or lacks a valid id or
+// extractor_key (media.ErrMalformed), a link to another page (ErrSiteUnsupported), a
+// JSON null (yt-dlp's answer for a post without a video, ErrSiteUnsupported) and a live,
+// upcoming or still processed stream (media.ErrLive). A playlist, a page with several
+// videos (§3.12), is read with its resolved video entries (Info.Entries); one without any
+// is refused (media.ErrUnsupported). Whether anything usable remains is for Offers to
+// say. Errors never repeat the output.
 func Parse(data []byte, now time.Time) (*Info, error) {
 	if len(data) > MaxOutputBytes {
 		return nil, fmt.Errorf("%w: yt-dlp output is larger than %d bytes", media.ErrTooLarge, MaxOutputBytes)
 	}
 	data = finiteJSON(data)
 	var raw rawInfo
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil, fmt.Errorf("%w: yt-dlp found nothing to play in it", ErrSiteUnsupported)
+	}
 	if trimmed := bytes.TrimLeft(data, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, fmt.Errorf("%w: yt-dlp output is not a JSON object", media.ErrMalformed)
 	}
@@ -150,39 +172,89 @@ func Parse(data []byte, now time.Time) (*Info, error) {
 	switch typ {
 	case "", "video":
 	case "playlist", "multi_video":
-		return nil, fmt.Errorf("%w: the page is a playlist; open a single video of it", media.ErrUnsupported)
+		return parsePlaylist(&raw, now)
 	case "url", "url_transparent":
 		return nil, fmt.Errorf("%w: yt-dlp found only a link to another page", ErrSiteUnsupported)
 	default:
 		return nil, fmt.Errorf("%w: yt-dlp returned an unknown kind of result", media.ErrUnsupported)
 	}
+	if err := liveError(&raw); err != nil {
+		return nil, err
+	}
+	info := &Info{}
+	if err := readHead(info, &raw, ""); err != nil {
+		return nil, err
+	}
+	if err := readVideo(info, &raw, data, now); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+// liveError is the refusal of a live, upcoming or still processed stream, else nil.
+func liveError(raw *rawInfo) error {
 	if live, _ := jsonBool(raw.IsLive); live {
-		return nil, fmt.Errorf("%w: the stream is live", media.ErrLive)
+		return fmt.Errorf("%w: the stream is live", media.ErrLive)
 	}
 	switch status, _ := jsonString(raw.LiveStatus); status {
 	case "is_live":
-		return nil, fmt.Errorf("%w: the stream is live", media.ErrLive)
+		return fmt.Errorf("%w: the stream is live", media.ErrLive)
 	case "is_upcoming":
-		return nil, fmt.Errorf("%w: the stream has not started yet", media.ErrLive)
+		return fmt.Errorf("%w: the stream has not started yet", media.ErrLive)
 	case "post_live":
-		return nil, fmt.Errorf("%w: the stream has ended but is still being processed", media.ErrLive)
+		return fmt.Errorf("%w: the stream has ended but is still being processed", media.ErrLive)
 	}
-	info := &Info{}
+	return nil
+}
+
+// readHead reads the id (required), the extractor key (required; parentKey, a playlist's,
+// stands in for an entry without a valid one of its own), the title (the id when there is
+// none) and the thumbnail.
+func readHead(info *Info, raw *rawInfo, parentKey string) error {
 	if id, ok := jsonString(raw.ID); ok && id != "" && len(id) <= maxIDBytes && printable(id, true) {
 		info.ID = id
 	} else {
-		return nil, fmt.Errorf("%w: yt-dlp output has no valid id", media.ErrMalformed)
+		return fmt.Errorf("%w: yt-dlp output has no valid id", media.ErrMalformed)
 	}
-	if key, ok := jsonString(raw.ExtractorKey); ok && extractorKeyRE.MatchString(key) {
+	switch key, ok := jsonString(raw.ExtractorKey); {
+	case ok && extractorKeyRE.MatchString(key):
 		info.ExtractorKey = key
-		info.Site = SiteName(key)
-	} else {
-		return nil, fmt.Errorf("%w: yt-dlp output has no valid extractor_key", media.ErrMalformed)
+	case parentKey != "":
+		info.ExtractorKey = parentKey
+	default:
+		return fmt.Errorf("%w: yt-dlp output has no valid extractor_key", media.ErrMalformed)
 	}
+	info.Site = SiteName(info.ExtractorKey)
 	title, _ := jsonString(raw.Title)
+	if strings.HasPrefix(info.ExtractorKey, "Facebook") {
+		title = trimCountsPrefix(title)
+	}
 	if info.Title = cleanText(title, validate.MaxTitleRunes); info.Title == "" {
 		info.Title = info.ID
 	}
+	info.Thumbnail = thumbnailURL(raw.Thumbnail)
+	return nil
+}
+
+// countsPrefix is a title's leading run of counts before the video's own text, as
+// Facebook's titles have them ("4.6K views · 38K reactions | <text> | <author>",
+// measured 2026-11-18): numbers with a word each, joined by " · ", then " | ".
+var countsPrefix = regexp.MustCompile(`^\d[\d.,]*\s?[KMBkmb]?\s+\pL+(?:\s+·\s+\d[\d.,]*\s?[KMBkmb]?\s+\pL+)*\s+\|\s+`)
+
+// trimCountsPrefix drops countsPrefix from a title that has text after it.
+func trimCountsPrefix(title string) string {
+	if loc := countsPrefix.FindStringIndex(title); loc != nil && strings.TrimSpace(title[loc[1]:]) != "" {
+		return title[loc[1]:]
+	}
+	return title
+}
+
+// readVideo reads the fields of one video: its duration, DRM mark, availability,
+// chapters and formats (at most MaxFormats, else media.ErrTooLarge). whole is the
+// video's JSON object: a single-format answer (no formats, or an empty list, and a url
+// at the top level; a podcast episode's one file) is read as one format element, the
+// object itself (docs/SITE-MEDIA-SPEC.md §3.10).
+func readVideo(info *Info, raw *rawInfo, whole json.RawMessage, now time.Time) error {
 	if d, ok := floatIn(raw.Duration, 0, maxDuration); ok {
 		info.Duration = time.Duration(d * float64(time.Second))
 	}
@@ -190,8 +262,22 @@ func Parse(data []byte, now time.Time) (*Info, error) {
 	if a, ok := jsonString(raw.Availability); ok && availabilityRE.MatchString(a) {
 		info.Availability = a
 	}
+	info.Chapters = parseChapters(raw.Chapters, info.Duration)
 	seen := make(map[string]bool)
-	err := eachElement(raw.Formats, MaxFormats, func(el json.RawMessage) {
+	elements, mute, noPicture := 0, 0, 0
+	formats := raw.Formats
+	if singleFormat(raw) {
+		formats = slices.Concat([]byte{'['}, whole, []byte{']'})
+	}
+	err := eachElement(formats, MaxFormats, func(el json.RawMessage) {
+		elements++
+		audio, video := noStreams(el)
+		if audio {
+			mute++
+		}
+		if video {
+			noPicture++
+		}
 		f, protected, ok := parseFormat(el, info, seen, now)
 		switch {
 		case protected:
@@ -201,9 +287,159 @@ func Parse(data []byte, now time.Time) (*Info, error) {
 		}
 	})
 	if err != nil {
+		return err
+	}
+	info.Silent = elements > 0 && mute == elements
+	info.AudioOnly = elements > 0 && noPicture == elements && mute < elements
+	return nil
+}
+
+// singleFormat reports a single-format answer: formats absent, null or an empty list,
+// and a url string at the top level.
+func singleFormat(raw *rawInfo) bool {
+	if f := bytes.TrimSpace(raw.Formats); len(f) > 0 && !bytes.Equal(f, []byte("null")) {
+		var list []json.RawMessage
+		if json.Unmarshal(f, &list) != nil || len(list) > 0 {
+			return false
+		}
+	}
+	u, ok := jsonString(raw.URL)
+	return ok && u != ""
+}
+
+// parsePlaylist reads a page with several videos (docs/SITE-MEDIA-SPEC.md §3.12): its id,
+// extractor key, title and thumbnail, and its entries in order. An entry is a video when
+// it is an object of _type video (or none) with a valid id, not live, whose fields and
+// formats read as a page's (at most MaxFormats); a later entry with the id of an earlier
+// one is the same video and is skipped. At most MaxEntries videos are read; every other
+// entry (a link, which --flat-playlist leaves unresolved, a nested list, a live stream, a
+// malformed entry, a video past the cap) counts in LeftOut, and so do the items
+// playlist_count names beyond the entries listed (items yt-dlp left out, such as
+// photos). A playlist without any video is refused: media.ErrLive when its only entries
+// were live, else media.ErrUnsupported.
+func parsePlaylist(raw *rawInfo, now time.Time) (*Info, error) {
+	info := &Info{Playlist: true}
+	if err := readHead(info, raw, ""); err != nil {
 		return nil, err
 	}
-	return info, nil
+	seen := make(map[string]bool)
+	listed, live := 0, 0
+	if len(raw.Entries) > 0 && raw.Entries[0] == '[' {
+		dec := json.NewDecoder(bytes.NewReader(raw.Entries))
+		if _, err := dec.Token(); err != nil {
+			return nil, fmt.Errorf("%w: yt-dlp entries are not valid JSON", media.ErrMalformed)
+		}
+		for dec.More() {
+			var el json.RawMessage
+			if err := dec.Decode(&el); err != nil {
+				return nil, fmt.Errorf("%w: yt-dlp entries are not valid JSON", media.ErrMalformed)
+			}
+			listed++
+			switch e, outcome := parseEntry(el, info.ExtractorKey, seen, len(info.Entries) < MaxEntries, now); outcome {
+			case entryVideo:
+				info.Entries = append(info.Entries, e)
+			case entryLive:
+				live++
+				info.LeftOut++
+			case entryOther:
+				info.LeftOut++
+			}
+		}
+	}
+	if n, ok := intIn(raw.PlaylistCount, 0, maxPlaylistCount); ok && int(n) > listed {
+		info.LeftOut += int(n) - listed
+	}
+	switch {
+	case len(info.Entries) > 0:
+		return info, nil
+	case live > 0 && live == listed:
+		return nil, fmt.Errorf("%w: the stream is live", media.ErrLive)
+	}
+	return nil, PlaylistError(media.ErrUnsupported, "")
+}
+
+// What parseEntry made of one entry of a playlist.
+type entryOutcome uint8
+
+const (
+	entryOther entryOutcome = iota // not a video Downex reads: left out
+	entryVideo                     // a video, read
+	entryLive                      // a live, upcoming or still processed stream: left out
+	entrySame                      // the id of an earlier entry: the same video, skipped
+)
+
+// parseEntry reads one entry of a playlist (parsePlaylist); it reads a video only while
+// read is true (the cap is not reached). seen collects the ids of the video entries met
+// so far, also of those past the cap (a link's id says nothing of a video's).
+func parseEntry(el json.RawMessage, parentKey string, seen map[string]bool, read bool, now time.Time) (*Info, entryOutcome) {
+	var raw rawInfo
+	if len(el) == 0 || el[0] != '{' || json.Unmarshal(el, &raw) != nil {
+		return nil, entryOther
+	}
+	if typ, _ := jsonString(raw.Type); typ != "" && typ != "video" {
+		return nil, entryOther
+	}
+	if id, ok := jsonString(raw.ID); ok && id != "" && len(id) <= maxIDBytes {
+		if seen[id] {
+			return nil, entrySame
+		}
+		seen[id] = true
+	}
+	if !read {
+		return nil, entryOther
+	}
+	if liveError(&raw) != nil {
+		return nil, entryLive
+	}
+	e := &Info{}
+	if readHead(e, &raw, parentKey) != nil || readVideo(e, &raw, el, now) != nil {
+		return nil, entryOther
+	}
+	return e, entryVideo
+}
+
+// thumbnailURL reads a thumbnail (docs/SITE-MEDIA-SPEC.md §3.12): an https URL
+// (validate.URL) of at most maxThumbnailBytes, without user information or fragment, on a
+// host name with a dot (not an IP address, not localhost); "" for anything else.
+func thumbnailURL(raw json.RawMessage) string {
+	s, ok := jsonString(raw)
+	if !ok || len(s) > maxThumbnailBytes || validate.URL(s) != nil {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" {
+		return ""
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if _, err := netip.ParseAddr(host); err == nil || !strings.Contains(host, ".") || strings.HasSuffix(host, ".localhost") {
+		return ""
+	}
+	return s
+}
+
+// noStreams reads what a format element says it lacks: noAudio when its acodec is
+// "none" (yt-dlp says it has no sound), noVideo when its vcodec is "none", or when it
+// names no vcodec and its file type is an audio type (docs/SITE-MEDIA-SPEC.md §3.10,
+// amendment 2026-11-18: an audio page).
+func noStreams(el json.RawMessage) (noAudio, noVideo bool) {
+	var raw struct {
+		ACodec json.RawMessage `json:"acodec"`
+		VCodec json.RawMessage `json:"vcodec"`
+		Ext    json.RawMessage `json:"ext"`
+	}
+	if len(el) == 0 || el[0] != '{' || json.Unmarshal(el, &raw) != nil {
+		return false, false
+	}
+	a, ok := jsonString(raw.ACodec)
+	noAudio = ok && a == "none"
+	switch v, ok := jsonString(raw.VCodec); {
+	case ok && v == "none":
+		noVideo = true
+	case !ok || v == "":
+		ext, _ := jsonString(raw.Ext)
+		noVideo = slices.Contains(audioExts, ext)
+	}
+	return noAudio, noVideo
 }
 
 // parseFormat validates one element of formats. ok reports a format to keep;
@@ -245,6 +481,9 @@ func parseFormat(el json.RawMessage, info *Info, seen map[string]bool, now time.
 			if f.ManifestURL, ok = formatURL(raw.URL); !ok {
 				return f, false, false
 			}
+		}
+		if u, ok := formatURL(raw.URL); ok && f.Protocol == protoHLS && u != f.ManifestURL {
+			f.PlaylistURL = u
 		}
 		cookieURL = f.ManifestURL
 	default:
@@ -301,6 +540,7 @@ func parseFormat(el json.RawMessage, info *Info, seen map[string]bool, now time.
 	}
 	note, _ := jsonString(raw.FormatNote)
 	f.Note = cleanText(note, maxNoteRunes)
+	f.Preview = previewWord.MatchString(id) || previewWord.MatchString(note)
 	var opts struct {
 		HTTPChunkSize json.RawMessage `json:"http_chunk_size"`
 	}
@@ -318,6 +558,8 @@ func parseFormat(el json.RawMessage, info *Info, seen map[string]bool, now time.
 	f.Unranged, _ = jsonBool(raw.NoResume)
 	if f.direct() {
 		f.Expires, f.Network, f.LMT = urlHints(f.URL, now)
+	} else {
+		f.Expires = earliest(signedExpiry(f.ManifestURL, now), signedExpiry(f.PlaylistURL, now))
 	}
 	if f.Headers, ok = formatHeaders(raw.HTTPHeaders, raw.Cookies, cookieURL, now); !ok {
 		return f, false, false
@@ -387,6 +629,74 @@ func urlHints(raw string, now time.Time) (expires time.Time, network, lmt string
 	}
 	return
 }
+
+// maxPolicyBytes bounds the Policy parameter signedExpiry decodes.
+const maxPolicyBytes = 4 << 10
+
+// signedExpiry reads when a signed manifest or playlist URL expires
+// (docs/SITE-MEDIA-SPEC.md §3.10, amendment 2026-11-18), from the parameters of a
+// CDN's signed URL as its public documentation names them: Expires (decimal Unix
+// seconds) and Policy (a custom policy: JSON in URL-safe base64, where "-", "_" and "~"
+// stand for "+", "=" and "/", whose statements' Condition.DateLessThan."AWS:EpochTime" is
+// the end). The earliest time within the next 7 days counts; zero when there is none.
+func signedExpiry(raw string, now time.Time) time.Time {
+	if raw == "" {
+		return time.Time{}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return time.Time{}
+	}
+	q, _ := url.ParseQuery(u.RawQuery)
+	var out time.Time
+	within := func(n int64) {
+		if t := time.Unix(n, 0).UTC(); t.After(now) && !t.After(now.Add(expireAhead)) {
+			out = earliest(out, t)
+		}
+	}
+	if v := q.Get("Expires"); decimal(v) {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			within(n)
+		}
+	}
+	if p := q.Get("Policy"); p != "" && len(p) <= maxPolicyBytes {
+		p = strings.NewReplacer("-", "+", "_", "=", "~", "/").Replace(p)
+		if data, err := base64.StdEncoding.DecodeString(p); err == nil {
+			var policy struct {
+				Statement []struct {
+					Condition struct {
+						DateLessThan struct {
+							EpochTime json.RawMessage `json:"AWS:EpochTime"`
+						}
+					}
+				}
+			}
+			if json.Unmarshal(data, &policy) == nil {
+				for _, st := range policy.Statement {
+					if n, ok := intIn(st.Condition.DateLessThan.EpochTime, 1, math.MaxInt64); ok {
+						within(n)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// earliest is the earlier of two times, a zero time being unknown.
+func earliest(a, b time.Time) time.Time {
+	switch {
+	case a.IsZero():
+		return b
+	case b.IsZero() || a.Before(b):
+		return a
+	}
+	return b
+}
+
+// previewWord finds the word "preview" in a format_id or format_note, which marks a
+// short part of a track (Format.Preview).
+var previewWord = regexp.MustCompile(`(?i)(^|[^a-z])preview([^a-z]|$)`)
 
 // decimal reports 1 to 20 decimal digits.
 func decimal(s string) bool {
@@ -757,4 +1067,33 @@ func isToken(s string) bool {
 		}
 	}
 	return true
+}
+
+// parseChapters reads yt-dlp's chapters (start_time, end_time, title in seconds) for
+// choosing a part of the video (docs/MEDIA-SPEC.md §8 C14, validate.Chapters): an entry
+// with a time missing or out of range is dropped, and more than validate.MaxChapters
+// entries, or a value that is not a list, mean no chapters.
+func parseChapters(v json.RawMessage, duration time.Duration) []validate.Chapter {
+	if !present(v) {
+		return nil
+	}
+	var els []json.RawMessage
+	if json.Unmarshal(v, &els) != nil || len(els) > validate.MaxChapters {
+		return nil
+	}
+	var cs []validate.Chapter
+	for _, el := range els {
+		var raw rawChapter
+		if len(el) == 0 || el[0] != '{' || json.Unmarshal(el, &raw) != nil {
+			continue
+		}
+		start, ok1 := floatIn(raw.StartTime, 0, maxDuration)
+		end, ok2 := floatIn(raw.EndTime, 0, maxDuration)
+		if !ok1 || !ok2 {
+			continue
+		}
+		title, _ := jsonString(raw.Title)
+		cs = append(cs, validate.Chapter{StartMs: int64(start * 1000), EndMs: int64(end * 1000), Title: title})
+	}
+	return validate.Chapters(cs, duration.Milliseconds())
 }

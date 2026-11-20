@@ -36,6 +36,7 @@ import (
 	"connectrpc.com/connect"
 
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/internal/sitemedia"
 	"downex/internal/tools"
 )
 
@@ -71,6 +72,10 @@ type fakePage struct {
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
 	Exit   int    `json:"exit"`
+	// SignedStdout, when set, is printed instead (with exit 0 and no stderr) by a run that
+	// was given a cookie file: a page that answers only a signed-in visitor
+	// (docs/SITE-MEDIA-SPEC.md §6.3).
+	SignedStdout string `json:"signedStdout"`
 }
 
 // fakeRun is one recorded extraction.
@@ -160,6 +165,10 @@ func fakeExtract(args []string) int {
 		fmt.Fprintf(os.Stderr, "ERROR: Unsupported URL: %s\n", page)
 		return 1
 	}
+	if p.SignedStdout != "" && run.Cookies != "" {
+		_, _ = os.Stdout.WriteString(strings.ReplaceAll(p.SignedStdout, "{{run}}", strconv.Itoa(n)))
+		return 0
+	}
 	_, _ = os.Stdout.WriteString(strings.ReplaceAll(p.Stdout, "{{run}}", strconv.Itoa(n)))
 	_, _ = os.Stderr.WriteString(p.Stderr)
 	return p.Exit
@@ -233,10 +242,13 @@ type siteServer struct {
 	reqs      []siteRequest
 	active    int
 	maxActive int
-	hold      func(siteRequest) bool  // held back while it reports true (setHold)
-	forbid    func(siteRequest) bool  // answered with 403 Forbidden (an expired address)
-	cut       func(siteRequest) int64 // sends only this many bytes of the range, then stalls (setCut)
-	wake      chan struct{}           // closed when hold or cut changes
+	hold      func(siteRequest) bool // held back while it reports true (setHold)
+	forbid    func(siteRequest) bool // answered with 403 Forbidden (an expired address)
+	// browserOnly answers 403 to every request without the header only the test browser
+	// sends (Sec-Fetch-Mode): a video server that answers only browsers (§2.8).
+	browserOnly bool
+	cut         func(siteRequest) int64 // sends only this many bytes of the range, then stalls (setCut)
+	wake        chan struct{}           // closed when hold or cut changes
 }
 
 // siteRequest is one request for a format.
@@ -245,6 +257,7 @@ type siteRequest struct {
 	Run        int
 	Start, End int64 // the requested bytes, End included; -1, -1 without a Range
 	Status     int   // the answer; 0 while it runs, -1 when the client gave up
+	Browser    bool  // made by the test browser (it carried Sec-Fetch-Mode)
 }
 
 func newSiteServer(t *testing.T) *siteServer {
@@ -283,7 +296,7 @@ func (s *siteServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	req := siteRequest{Format: format, Run: run, Start: -1, End: -1}
+	req := siteRequest{Format: format, Run: run, Start: -1, End: -1, Browser: r.Header.Get("Sec-Fetch-Mode") != ""}
 	if v := r.Header.Get("Range"); v != "" {
 		if req.Start, req.End, ok = parseRange(v); !ok {
 			http.Error(w, "bad range", http.StatusBadRequest)
@@ -307,9 +320,9 @@ func (s *siteServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	forbid := s.forbid
+	forbid, browserOnly := s.forbid, s.browserOnly
 	s.mu.Unlock()
-	if forbid != nil && forbid(req) {
+	if forbid != nil && forbid(req) || browserOnly && !req.Browser {
 		status = http.StatusForbidden
 		http.Error(w, "the address has expired", status)
 		return
@@ -814,6 +827,48 @@ func TestSiteVideoFromPath(t *testing.T) {
 	h.stop(d)
 }
 
+// The format fixes of the social-sites amendment (docs/SITE-MEDIA-SPEC.md §3.11, amendment
+// 2026-11-18), through the real daemon and CLI: a silent page (every format without sound)
+// whose video says its codec by a plain name ("h264") is listed as H.264 with "no sound" and
+// saved as a progressive MP4 of the video alone; a page whose split formats have no container
+// (a Bilibili-like page) is paired and joined as DASH formats are.
+func TestSiteSilentAndSplitFormats(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newSite(true, nil)
+	st := newSiteTracks(t)
+	silentVideo := s.format("720", st.video, 1500)
+	silentVideo["vcodec"] = "h264"
+	silent := s.videoPage("/reel/silent", "A silent reel", silentVideo)
+	splitVideo, splitAudio := s.format("30032", st.video, 1500), s.format("30232", st.audio, 128)
+	delete(splitVideo, "container")
+	delete(splitAudio, "container")
+	split := s.videoPage("/video/split", "A split video", splitVideo, splitAudio)
+	d := h.startDaemonFrom(bin.downexdHooks, s.env)
+	h.waitReady(d)
+	h.siteNetwork()
+
+	r := h.cli("media", "--site", silent, "--list").ok(t)
+	if !strings.Contains(r.stdout, "H.264 (no sound)") || !strings.Contains(r.stdout, "* 720") {
+		t.Errorf("media --list of the silent page:\n%s", r.stdout)
+	}
+	r = h.cli("media", "--site", silent, "-o", h.out).ok(t)
+	dl := h.waitCompleted(r.id(t))
+	if dl.GetMedia().GetSelectedVideo() != "720" || dl.GetMedia().GetSelectedAudio() != "" {
+		t.Fatalf("completed download = %v", dl)
+	}
+	checkMP4(t, filepath.Join(h.out, "A silent reel.mp4"), st.video)
+
+	r = h.cli("media", "--site", split, "-o", h.out).ok(t)
+	dl = h.waitCompleted(r.id(t))
+	if dl.GetMedia().GetSelectedVideo() != "30032" || dl.GetMedia().GetSelectedAudio() != "30232" {
+		t.Fatalf("completed download = %v", dl)
+	}
+	checkMP4(t, filepath.Join(h.out, "A split video.mp4"), st.video, st.audio)
+	noMediaLeftovers(t, h.out)
+	h.stop(d)
+}
+
 // samePath compares paths as the system does (case-insensitively on Windows).
 func samePath(a, b string) bool {
 	if runtime.GOOS == "windows" {
@@ -1020,6 +1075,32 @@ func TestSiteExpiredAddresses(t *testing.T) {
 	h.stop(d)
 }
 
+// A video server that answers 403 even to the renewed addresses (a site whose bot
+// protection refuses Downex, docs/SITE-MEDIA-SPEC.md §2.6 amendment 2026-11-18) fails the
+// queued download as site_error with the bot-protection reason, after exactly one
+// renewal, not with a raw HTTP status.
+func TestSiteForbiddenVideoServer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newSite(true, nil)
+	page := s.talkPage("/watch/forbidden", newSiteTracks(t))
+	d := h.startDaemonFrom(bin.downexdHooks, s.env)
+	h.waitReady(d)
+	h.siteNetwork()
+	s.srv.setForbid(func(siteRequest) bool { return true })
+
+	id := h.cli("media", "--site", page, "-o", h.out).ok(t).id(t)
+	dl := h.waitFailed(id)
+	if dl.GetErrorCode() != "site_error" || !strings.Contains(dl.GetError(), sitemedia.ReasonForbidden) ||
+		strings.Contains(dl.GetError(), "HTTP status") {
+		t.Errorf("download refused by the video server: code %q, error %q", dl.GetErrorCode(), dl.GetError())
+	}
+	if runs := s.runs(page); len(runs) != 2 {
+		t.Errorf("%d extractions, want 2 (the add's and one renewal)", len(runs))
+	}
+	h.stop(d)
+}
+
 // Refusals (docs/SITE-MEDIA-SPEC.md §8.2 steps 6 and 8): DRM, live, a playlist and a
 // sign-in wall are refused with their codes; a protected init in the served video fails
 // the run as encrypted after the first chunks only; with site media turned off every
@@ -1149,7 +1230,7 @@ func TestSiteBrowserHandOff(t *testing.T) {
 	}
 	p.closeAndWait()
 	call := ui.waitUICall(t)
-	if !slices.Equal(call.Args, []string{"--confirm", idArg(id)}) {
+	if !slices.Equal(call.Args, []string{"--confirm", idArg(id), "--raise"}) {
 		t.Errorf("confirmation window started with %q", call.Args)
 	}
 	dl := h.get(id)
@@ -1505,4 +1586,158 @@ func TestSiteFirstUseInstall(t *testing.T) {
 			t.Errorf("the unverified yt-dlp ran: %+v", runs)
 		}
 	})
+}
+
+// A page with several videos (docs/SITE-MEDIA-SPEC.md §3.12): `media --site --list` names
+// its items, `--item` downloads the one named (picked by id again when the run resolves
+// the page), and an item the page does not have is refused.
+func TestSiteItems(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newSite(true, nil)
+	st := newSiteTracks(t)
+	silentVideo := s.format("a720", st.video, 1500)
+	silentVideo["vcodec"] = "h264"
+	itemA := map[string]any{"id": "itemA", "title": "Video by example", "duration": 10, "formats": []any{silentVideo}}
+	itemB := map[string]any{"id": "itemB", "title": "Video by example", "duration": 10,
+		"formats": []any{s.format("b137", st.video, 1500), s.format("b140", st.audio, 128)}}
+	b, err := json.Marshal(map[string]any{"_type": "playlist", "id": "post1", "title": "Post by example",
+		"extractor_key": "Instagram", "playlist_count": 3, "entries": []any{itemA, itemB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := s.page("/p/post1/", fakePage{Stdout: string(b) + "\n"})
+	d := h.startDaemonFrom(bin.downexdHooks, s.env)
+	h.waitReady(d)
+	h.siteNetwork()
+
+	r := h.cli("media", "--site", page, "--list").ok(t)
+	for _, want := range []string{"Videos on this page: 2 (1 other item not listed: a photo, a link or a video Downex cannot save)",
+		"* 1  itemA", "  2  itemB", "H.264 (no sound)"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("media --list lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	r = h.cli("media", "--site", page, "--item", "itemB", "-o", h.out).ok(t)
+	dl := h.waitCompleted(r.id(t))
+	if m := dl.GetMedia(); m.GetEntryId() != "itemB" || m.GetSelectedVideo() != "b137" || m.GetSelectedAudio() != "b140" ||
+		dl.GetFilename() != "Video by example 2.mp4" {
+		t.Fatalf("completed download = %v", dl)
+	}
+	checkMP4(t, filepath.Join(h.out, "Video by example 2.mp4"), st.video, st.audio)
+	if r := h.cli("media", "--site", page, "--item", "itemZ", "-o", h.out); r.code == 0 ||
+		!strings.Contains(r.stderr, "no longer on the page") {
+		t.Errorf("a missing item: %+v", r)
+	}
+	noMediaLeftovers(t, h.out)
+	h.stop(d)
+}
+
+// Audio pages (docs/SITE-MEDIA-SPEC.md §3.13): a page without video is listed as its
+// audio and saved as it came (a direct MP3, .mp3) or joined into an MP4 with one sound
+// track (a fragmented AAC file, .m4a), filed under Audio, by a real downexd and CLI.
+func TestSiteAudioPages(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newSite(true, nil)
+	st := newSiteTracks(t)
+	mp3 := append([]byte("ID3\x04\x00\x00\x00\x00\x00\x00"), bytes.Repeat([]byte{0xff, 0xfb, 0x90, 0x64}, 400_000)...)
+	s.srv.add("mp3-128", mp3)
+	mp3Page := s.videoPage("/track/mp3", "A song", map[string]any{"format_id": "mp3-128", "protocol": "http",
+		"url": s.srv.srv.URL + "/media/mp3-128-{{run}}.mp3", "ext": "mp3", "vcodec": "none", "acodec": "mp3", "abr": 128,
+		"filesize": len(mp3)})
+	aacPage := s.videoPage("/track/aac", "A tune", s.format("140", st.audio, 128))
+	d := h.startDaemonFrom(bin.downexdHooks, s.env)
+	h.waitReady(d)
+	h.siteNetwork()
+
+	r := h.cli("media", "--site", mp3Page, "--list").ok(t)
+	if !strings.Contains(r.stdout, "Audio only: this page has no video; saved as .mp3.") || !strings.Contains(r.stdout, "* mp3-128") {
+		t.Errorf("media --list of the MP3 page:\n%s", r.stdout)
+	}
+	r = h.cli("media", "--site", mp3Page, "-o", h.out).ok(t)
+	dl := h.waitCompleted(r.id(t))
+	if dl.GetMedia().GetSelectedVideo() != "" || dl.GetMedia().GetSelectedAudio() != "mp3-128" || dl.GetMedia().GetContainer() != "mp3" ||
+		dl.GetCategory() != "Audio" || dl.GetFilename() != "A song.mp3" {
+		t.Fatalf("completed download = %v", dl)
+	}
+	if got, err := os.ReadFile(filepath.Join(h.out, "A song.mp3")); err != nil || !bytes.Equal(got, mp3) {
+		t.Fatalf("the MP3: %d bytes, %v", len(got), err)
+	}
+
+	r = h.cli("media", "--site", aacPage, "-o", h.out).ok(t)
+	dl = h.waitCompleted(r.id(t))
+	if dl.GetMedia().GetContainer() != "m4a" || dl.GetFilename() != "A tune.m4a" {
+		t.Fatalf("completed download = %v", dl)
+	}
+	checkMP4(t, filepath.Join(h.out, "A tune.m4a"), st.audio)
+	// A part of audio is refused.
+	if r := h.cli("media", "--site", aacPage, "--from", "1", "-o", h.out); r.code == 0 || !strings.Contains(r.stderr, "videos only") {
+		t.Errorf("a part of audio: %+v", r)
+	}
+	noMediaLeftovers(t, h.out)
+	h.stop(d)
+}
+
+// The user's sign-in for a site (docs/SITE-MEDIA-SPEC.md §6.3, amendment 2026-11-18),
+// through the real daemon and CLI: a page asked without a cookie gets no cookie file; with
+// a Cookie and the site's domain, yt-dlp gets a cookie file for that domain and its
+// subdomains, private to the user, never the value in its arguments, and the file goes
+// with the run; the page that refused the anonymous request lists its video then. A
+// domain that does not hold the page is refused before yt-dlp runs.
+func TestSiteSignInDomain(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newSite(true, nil)
+	signed, err := json.Marshal(map[string]any{"id": "private", "title": "A members' reel", "extractor_key": "Generic",
+		"duration": 10, "live_status": "not_live", "formats": []map[string]any{{"format_id": "720", "protocol": "https",
+			"url": "https://media.signin.example/v.mp4", "ext": "mp4", "vcodec": "avc1.4d401e", "acodec": "mp4a.40.2",
+			"width": 1280, "height": 720, "filesize": 1000}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.pages["/reel/private"] = fakePage{Stderr: "ERROR: [Example] private: This content is only available for registered users; login required\n",
+		Exit: 1, SignedStdout: string(signed) + "\n"}
+	s.writePages()
+	const page = "https://www.signin.example/reel/private"
+	d := h.startDaemonFrom(bin.downexdHooks, s.env)
+	h.waitReady(d)
+	h.siteNetwork()
+
+	r := h.cli("media", "--site", page, "--list")
+	if r.code == 0 || !strings.Contains(r.stderr, "sign in") {
+		t.Fatalf("anonymous list: %v", r)
+	}
+	const secret = "e2e-sign-in-value"
+	r = h.cli("media", "--site", page, "-H", "Cookie: sessionid="+secret+"; csrftoken=c2", "--cookie-domain", "signin.example", "--list")
+	if r.code != 0 || !strings.Contains(r.stdout, "720p") || strings.Contains(r.stdout+r.stderr, secret) {
+		t.Fatalf("signed-in list: %v", r)
+	}
+	r = h.cli("media", "--site", page, "-H", "Cookie: sessionid="+secret, "--cookie-domain", "other.example", "--list")
+	if r.code == 0 || !strings.Contains(r.stderr, "cookie-domain") {
+		t.Errorf("foreign domain: %v", r)
+	}
+	runs := s.runs(page)
+	if len(runs) != 2 {
+		t.Fatalf("%d extractions, want 2 (the foreign domain never runs): %+v", len(runs), runs)
+	}
+	if runs[0].Cookies != "" || slices.Contains(runs[0].Args, "--cookies") {
+		t.Errorf("the anonymous run had cookies: %q", runs[0].Args)
+	}
+	want := "# Netscape HTTP Cookie File\n" +
+		".signin.example\tTRUE\t/\tTRUE\t0\tsessionid\t" + secret + "\n" +
+		".signin.example\tTRUE\t/\tTRUE\t0\tcsrftoken\tc2\n"
+	if runs[1].Cookies != want {
+		t.Errorf("cookie file\n got %q\nwant %q", runs[1].Cookies, want)
+	}
+	for _, run := range runs {
+		if slices.ContainsFunc(run.Args, func(a string) bool { return strings.Contains(a, secret) }) {
+			t.Errorf("the cookie is in yt-dlp's arguments: %q", run.Args)
+		}
+		checkToolEnv(t, run.Env)
+	}
+	if left, _ := filepath.Glob(filepath.Join(s.toolsDir, "run", "*")); len(left) > 0 {
+		t.Errorf("work folders (and their cookie files) left after the runs: %v", left)
+	}
+	h.stop(d)
 }

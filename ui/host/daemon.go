@@ -34,6 +34,11 @@ type Daemon interface {
 	AddMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.AddMediaResponse, error)
 	ProbeMedia(ctx context.Context, req *downexv1.ProbeMediaRequest) (*downexv1.ProbeMediaResponse, error)
 	SetDownloadOptions(ctx context.Context, req *downexv1.SetDownloadOptionsRequest) (*downexv1.SetDownloadOptionsResponse, error)
+	// RenewLink gives a stopped download a new link (docs/DESKTOP-SPEC.md §10).
+	RenewLink(ctx context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error)
+	// Rescue finishes a download a browser left unfinished from its partial file
+	// (docs/DESKTOP-SPEC.md §11).
+	Rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.RescueResponse, error)
 	PauseAll(ctx context.Context) (*downexv1.PauseAllResponse, error)
 	ResumeAll(ctx context.Context) (*downexv1.ResumeAllResponse, error)
 	GetSettings(ctx context.Context) (*downexv1.GetSettingsResponse, error)
@@ -269,6 +274,18 @@ func (d *ClientDaemon) ProbeMedia(ctx context.Context, req *downexv1.ProbeMediaR
 func (d *ClientDaemon) SetDownloadOptions(ctx context.Context, req *downexv1.SetDownloadOptionsRequest) (*downexv1.SetDownloadOptionsResponse, error) {
 	return unary(ctx, d, req, func(c *client.Client) rpc[downexv1.SetDownloadOptionsRequest, downexv1.SetDownloadOptionsResponse] {
 		return c.Downloads.SetDownloadOptions
+	})
+}
+
+func (d *ClientDaemon) RenewLink(ctx context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
+	return unary(ctx, d, req, func(c *client.Client) rpc[downexv1.RenewLinkRequest, downexv1.RenewLinkResponse] {
+		return c.Downloads.RenewLink
+	})
+}
+
+func (d *ClientDaemon) Rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.RescueResponse, error) {
+	return unary(ctx, d, req, func(c *client.Client) rpc[downexv1.RescueRequest, downexv1.RescueResponse] {
+		return c.Downloads.Rescue
 	})
 }
 

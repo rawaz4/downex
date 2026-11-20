@@ -415,9 +415,42 @@ func (a *App) UpdateSettings(req json.RawMessage) (json.RawMessage, error) {
 		}
 		if s := cur.GetSettings(); s != nil {
 			keepUnknown(next.ProtoReflect(), s.ProtoReflect())
+			// The frontend (not maintained since 2026-11-10) has no control for the file
+			// check (docs/DESKTOP-SPEC.md §9.9): a save that does not name it keeps it.
+			if !namesSetting(req, "checkDownloadedFiles", "check_downloaded_files") {
+				next.CheckDownloadedFiles = s.GetCheckDownloadedFiles()
+			}
+			// Nor for Polite mode (docs/POLITE-SPEC.md) or renewing links: a save that
+			// does not name them keeps them.
+			if !namesSetting(req, "politeMode", "polite_mode") {
+				next.PoliteMode = s.GetPoliteMode()
+			}
+			if !namesSetting(req, "politeTargetMs", "polite_target_ms") {
+				next.PoliteTargetMs = s.GetPoliteTargetMs()
+			}
+			if !namesSetting(req, "renewLinks", "renew_links") {
+				next.RenewLinks = s.GetRenewLinks()
+			}
 		}
 	}
 	return reply(a.daemon.UpdateSettings(ctx, in))
+}
+
+// namesSetting reports whether the UpdateSettings request JSON req names one of the
+// settings' fields (protojson's JSON name or its proto name).
+func namesSetting(req json.RawMessage, names ...string) bool {
+	var r struct {
+		Settings map[string]json.RawMessage `json:"settings"`
+	}
+	if json.Unmarshal(req, &r) != nil {
+		return false
+	}
+	for _, n := range names {
+		if _, ok := r.Settings[n]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // keepUnknown copies the fields of cur that this build does not know into next: its own,

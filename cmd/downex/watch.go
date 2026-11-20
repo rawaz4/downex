@@ -20,6 +20,7 @@ import (
 	"downex/internal/engine"
 	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/internal/sitemedia"
 )
 
 func (a *app) watch(ctx context.Context, args []string) error {
@@ -419,6 +420,15 @@ func (a *app) follow(ctx context.Context, c *client.Client, t *daemonTarget, d *
 				"try other tracks (downex media --list).\n")
 			return silentError{errors.New(msg)}
 		}
+		if last.GetErrorCode() == "site_error" && strings.Contains(msg, sitemedia.ReasonForbidden) {
+			// The site's video server refused even the renewed addresses
+			// (docs/SITE-MEDIA-SPEC.md §2.6): trying again rarely helps, and only when
+			// progress is kept.
+			a.con.printf("The site's video server refused Downex (often bot protection, which Downex does not get past).\n")
+			if !(directSite(m) && last.GetReceived() > 0 || m.GetFragmentsDone() > 0) {
+				return silentError{errors.New(msg)}
+			}
+		}
 		// Measured as ls, info, pause and the progress line measure it: a web page's direct
 		// video by its bytes of an exact size, else by its parts or fragments.
 		switch size := rpcSize(last); {
@@ -428,6 +438,17 @@ func (a *app) follow(ctx context.Context, c *client.Client, t *daemonTarget, d *
 			a.con.printf("Its progress (%s) is kept.\n", pieceProgress(m))
 		}
 		a.con.printf("Try again with: %s\n", commandLine(t, "resume", id))
+		return silentError{errors.New(msg)}
+	}
+	if last.GetErrorCode() == codeLinkExpired {
+		a.con.printf("The link stopped working (it expired, was revoked or leads to a web page).")
+		if last.GetReceived() > 0 {
+			a.con.printf(" Its progress (%s) is kept.", keptText(rpcSize(last), last.GetReceived()))
+		}
+		a.con.printf("\nGive it a new link with:\n  %s\n", commandLine(t, "renew", id, "<new-url>"))
+		if p := last.GetPageUrl(); p != "" {
+			a.con.printf("The page it came from: %s\n", printable(p))
+		}
 		return silentError{errors.New(msg)}
 	}
 	if last.GetErrorCode() == "validator_changed" {

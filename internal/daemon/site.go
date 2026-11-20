@@ -43,11 +43,20 @@ import (
 type SiteSelection struct {
 	PageURL                string
 	Cookie, Referer        string    // "" = none
+	CookieDomain           string    // the domain of Cookie's sign-in (§6.3); "" = the page's host
 	Proxy                  SiteProxy // the route for PageURL
 	Format                 string    // "" (probe) | "http" | "hls" | "dash": the format recorded at Add
 	VideoTrack, AudioTrack string
 	VideoKey, AudioKey     string
-	Prefetch               bool // Probe only: a look-ahead
+	Prefetch               bool       // Probe only: a look-ahead
+	Clip                   media.Clip // Run only: the part of the video (docs/MEDIA-SPEC.md §8)
+	// EntryID is the video of a page with several (docs/SITE-MEDIA-SPEC.md §3.12) by the
+	// site's id of it; "" = the page's default (a probe) or a page with one video. A run
+	// of an item the page no longer has fails (site_unavailable), never takes another.
+	EntryID string
+	// BrowserFetch (Run only): the record says its bytes come through the browser
+	// (model.Media.BrowserFetch, docs/SITE-MEDIA-SPEC.md §2.8).
+	BrowserFetch bool
 }
 
 // SiteProxy is the proxy route of a page for yt-dlp: URL "" is direct, else
@@ -63,6 +72,17 @@ type SiteProxy struct{ URL, Username, Password string }
 type SiteProbe struct {
 	MediaProbe
 	Site, Title string
+	// Chapters are the video's chapters, checked (docs/MEDIA-SPEC.md §8 C14).
+	Chapters []model.Chapter
+	// A page with several videos (docs/SITE-MEDIA-SPEC.md §3.12): the item described
+	// (EntryID), the page's videos Downex can save (Items, with thumbnails) and how many
+	// other items it has (ItemsLeftOut). EntryID "" and no items for a page with one video.
+	EntryID      string
+	Items        []model.MediaItem
+	ItemsLeftOut int
+	// BrowserFetch: the site's video servers answer only web browsers
+	// (sitemedia.BrowserOnly, docs/SITE-MEDIA-SPEC.md §2.8).
+	BrowserFetch bool
 }
 
 // SiteMedia resolves web pages and downloads their videos. downexd implements it with
@@ -168,9 +188,29 @@ const (
 // errNoSiteMedia is the error of site media in a daemon without Config.Site.
 var errNoSiteMedia = fmt.Errorf("%w: this downexd cannot download videos from web pages", ErrMediaUnsupported)
 
+// maxItems bounds the items of a page with several videos that are recorded and sent
+// (docs/SITE-MEDIA-SPEC.md §3.12, sitemedia.MaxEntries).
+const maxItems = 20
+
+// errEntryNotSite refuses an item for a manifest: only a web page has items
+// (docs/SITE-MEDIA-SPEC.md §3.12).
+var errEntryNotSite = errors.New("entry_id is only for web pages (origin SITE)")
+
+// errCookieDomainNotSite refuses a sign-in domain for a manifest: its headers go to the
+// manifest's own origin (docs/SITE-MEDIA-SPEC.md §6.3).
+var errCookieDomainNotSite = errors.New("cookie_domain is only for web pages (origin SITE)")
+
+// errPrefetchCookie refuses a look-ahead that carries cookies: a look-ahead never does
+// (docs/SITE-MEDIA-SPEC.md §5.6, §6.3).
+var errPrefetchCookie = errors.New("a look-ahead (prefetch) never carries cookies")
+
 // errNoMP4 refuses a page without an MP4 video Downex can save (an audio-only page, or a
 // manifest that is not fragmented MP4).
 var errNoMP4 = fmt.Errorf("%w: no MP4 video on this page", ErrMediaUnsupported)
+
+// errNoAudio refuses an audio page's answer that is not audio tracks with a pick
+// (docs/SITE-MEDIA-SPEC.md §3.13).
+var errNoAudio = fmt.Errorf("%w: no AAC or MP3 audio on this page", ErrMediaUnsupported)
 
 // errPrefetchTools refuses a look-ahead while yt-dlp and Deno are known not to be ready:
 // only a user's request sets them up (docs/SITE-MEDIA-SPEC.md §5.6, §6.6).
@@ -182,7 +222,9 @@ var errPrefetchTools = fmt.Errorf("%w: a look-ahead waits until a download sets 
 type siteRequest struct {
 	pageURL         string
 	cookie, referer string // "" = none
+	cookieDomain    string // the domain the cookie's sign-in is for (§6.3); "" = the page's host
 	video, audio    string // requested track ids ("" = the default pick)
+	entry           string // the item of a page with several videos ("" = the page's default)
 	prefetch        bool   // a look-ahead (ProbeMedia only)
 }
 
@@ -201,9 +243,12 @@ func isSiteOrigin(o downexv1.MediaOrigin) (bool, error) {
 // parseSiteRequest validates a request for a web page (docs/SITE-MEDIA-SPEC.md §3.3):
 // page_url is required and manifest_url must be empty; the headers pass validate.Headers
 // and only Cookie (joined) and Referer (an http(s) URL) are used, every other header is
-// ignored; track ids are validated like Add's. page_url and Referer never carry user
-// information: they reach yt-dlp's arguments, which other users of the machine can read.
-func parseSiteRequest(manifestURL, pageURL string, hs []*downexv1.Header, video, audio string) (siteRequest, error) {
+// ignored; track ids are validated like Add's, the item's id with validate.EntryID
+// (§3.12); the Cookie (at most 16 KiB) and the domain of its sign-in pass
+// validate.SiteCookie (§6.3: a domain that holds the page and is no public suffix).
+// page_url and Referer never carry user information: they reach yt-dlp's arguments,
+// which other users of the machine can read.
+func parseSiteRequest(manifestURL, pageURL string, hs []*downexv1.Header, video, audio, entry, cookieDomain string) (siteRequest, error) {
 	if manifestURL != "" {
 		return siteRequest{}, errors.New("manifest_url must be empty for a web page (origin SITE); send the page as page_url")
 	}
@@ -219,7 +264,10 @@ func parseSiteRequest(manifestURL, pageURL string, hs []*downexv1.Header, video,
 			return siteRequest{}, err
 		}
 	}
-	req := siteRequest{pageURL: pageURL, video: video, audio: audio}
+	if err := validate.EntryID(entry); err != nil {
+		return siteRequest{}, err
+	}
+	req := siteRequest{pageURL: pageURL, video: video, audio: audio, entry: entry}
 	var cookies []string
 	for _, c := range headers.Values("Cookie") {
 		if c = strings.TrimSpace(c); c != "" {
@@ -227,6 +275,10 @@ func parseSiteRequest(manifestURL, pageURL string, hs []*downexv1.Header, video,
 		}
 	}
 	req.cookie = strings.Join(cookies, "; ")
+	if err := validate.SiteCookie(pageURL, req.cookie, cookieDomain); err != nil {
+		return siteRequest{}, err
+	}
+	req.cookieDomain = cookieDomain
 	if ref := headers.Get("Referer"); ref != "" {
 		if err := siteURL(ref); err != nil {
 			return siteRequest{}, fmt.Errorf("header Referer: %w", err)
@@ -252,8 +304,9 @@ func siteURL(raw string) error {
 
 // selection is the probe selection of r.
 func (r siteRequest) selection() SiteSelection {
-	return SiteSelection{PageURL: r.pageURL, Cookie: r.cookie, Referer: r.referer, VideoTrack: r.video, AudioTrack: r.audio,
-		Prefetch: r.prefetch}
+	return SiteSelection{PageURL: r.pageURL, Cookie: r.cookie, CookieDomain: r.cookieDomain, Referer: r.referer,
+		VideoTrack: r.video, AudioTrack: r.audio,
+		Prefetch: r.prefetch, EntryID: r.entry}
 }
 
 // ---- probing ----------------------------------------------------------------------
@@ -417,7 +470,9 @@ func (m *Manager) siteProxy(ctx context.Context, pageURL string) (SiteProxy, err
 
 // mediaFromSiteProbe converts a resolved page into the stored media description: origin
 // site, format http/hls/dash, container mp4 and a pick with a video (audio alone is never
-// a download), checked like a manifest's selection.
+// a download of a video page), checked like a manifest's selection. An audio page's
+// answer (docs/SITE-MEDIA-SPEC.md §3.13: container m4a or mp3) is audio tracks only and
+// a pick of one of them, without video.
 func mediaFromSiteProbe(info *SiteProbe, pageURL string) (*model.Media, error) {
 	switch info.Format {
 	case "http", "hls", "dash":
@@ -425,19 +480,41 @@ func mediaFromSiteProbe(info *SiteProbe, pageURL string) (*model.Media, error) {
 		return nil, mediaError(CodeMediaUnsupported, connect.CodeInvalidArgument,
 			fmt.Errorf("%w: unknown format %q", ErrMediaUnsupported, truncate(info.Format, 32)))
 	}
-	if info.Container != "mp4" {
+	audio := sitemedia.IsAudioContainer(info.Container)
+	if info.Container != sitemedia.ContainerMP4 && !audio {
 		return nil, mediaError(CodeMediaUnsupported, connect.CodeInvalidArgument, errNoMP4)
 	}
 	med := &model.Media{
 		Origin: sitemedia.OriginSite, Site: info.Site, Format: info.Format,
 		Tracks:        make([]model.MediaTrack, 0, len(info.Tracks)),
 		SelectedVideo: info.DefaultVideo, SelectedAudio: info.DefaultAudio, Duration: max(info.Duration, 0),
-		Container: "mp4", FragmentsTotal: max(info.FragmentsTotal, 0), Title: info.Title, PageURL: pageURL,
+		Container: info.Container, FragmentsTotal: max(info.FragmentsTotal, 0), Title: info.Title, PageURL: pageURL,
+		Chapters: checkChapters(info.Chapters, max(info.Duration, 0)),
+		EntryID:  info.EntryID, ItemsLeftOut: max(info.ItemsLeftOut, 0), BrowserFetch: info.BrowserFetch,
+	}
+	for _, it := range info.Items {
+		if len(med.Items) == maxItems {
+			med.ItemsLeftOut++
+			continue
+		}
+		if validate.EntryID(it.ID) != nil || it.ID == "" {
+			continue
+		}
+		title, err := validate.Title(it.Title)
+		if err != nil {
+			title = ""
+		}
+		med.Items = append(med.Items, model.MediaItem{ID: it.ID, Title: title, Duration: max(it.Duration, 0),
+			Thumbnail: it.Thumbnail})
 	}
 	for _, t := range info.Tracks {
 		med.Tracks = append(med.Tracks, modelTrack(t))
 	}
-	if med.SelectedVideo == "" {
+	switch {
+	case audio && (med.SelectedVideo != "" || med.SelectedAudio == "" ||
+		slices.ContainsFunc(med.Tracks, func(t model.MediaTrack) bool { return t.Kind != string(media.KindAudio) })):
+		return nil, mediaError(CodeMediaUnsupported, connect.CodeInvalidArgument, errNoAudio)
+	case !audio && med.SelectedVideo == "":
 		return nil, mediaError(CodeMediaUnsupported, connect.CodeInvalidArgument, errNoMP4)
 	}
 	if err := checkSelection(med, med.SelectedVideo, med.SelectedAudio); err != nil {
@@ -462,7 +539,8 @@ func modelTrack(t media.Track) model.MediaTrack {
 
 // pickSiteTracks applies the tracks a request named to a resolved page's media: the
 // resolver normally resolved them already; otherwise they are chosen as Confirm chooses
-// them (selectMediaTracks). A pick without video is refused.
+// them (selectMediaTracks). A pick without video is refused, except of an audio page
+// (docs/SITE-MEDIA-SPEC.md §3.13), which has no video.
 func pickSiteTracks(med *model.Media, video, audio string) error {
 	if (video == "" || video == med.SelectedVideo) && (audio == "" || audio == med.SelectedAudio) {
 		return nil
@@ -472,7 +550,7 @@ func pickSiteTracks(med *model.Media, video, audio string) error {
 		return err
 	}
 	*med = *tmp.Media
-	if med.SelectedVideo == "" {
+	if med.SelectedVideo == "" && !isAudioMedia(med) {
 		return mediaError(CodeMediaInvalid, connect.CodeInvalidArgument, errors.New("a video download needs a video track"))
 	}
 	return nil
@@ -497,9 +575,39 @@ func siteExpectedSize(med *model.Media) int64 {
 
 // siteFileName names a site download: the requested name, else the site's title, else
 // the requested title, else the page path's last segment, else "video"; sanitised, with
-// ".mp4".
-func siteFileName(requested, siteTitle, title, pageURL string) string {
-	return mediaFileName(cmp.Or(requested, siteTitle, title, pageSegment(pageURL)), "", "", "mp4")
+// the container's extension: ".mp4", or an audio page's ".m4a" or ".mp3"
+// (docs/SITE-MEDIA-SPEC.md §3.13).
+func siteFileName(requested, siteTitle, title, pageURL, container string) string {
+	return mediaFileName(cmp.Or(requested, siteTitle, title, pageSegment(pageURL)), "", "", container)
+}
+
+// isAudioMedia reports the download of an audio page (docs/SITE-MEDIA-SPEC.md §3.13): a
+// site download saved as .m4a or .mp3.
+func isAudioMedia(med *model.Media) bool {
+	return isSite(med) && sitemedia.IsAudioContainer(med.Container)
+}
+
+// siteTitle is the title a site download is named by (siteFileName): the video's, and for
+// an item of a page with several videos whose title another item has too (a carousel's
+// "Video by …"), that title and the item's position, "Video by example 2"
+// (docs/SITE-MEDIA-SPEC.md §3.12).
+func siteTitle(med *model.Media) string {
+	if med.EntryID == "" || med.Title == "" {
+		return med.Title
+	}
+	pos, same := 0, false
+	for i, it := range med.Items {
+		switch {
+		case it.ID == med.EntryID:
+			pos = i + 1
+		case it.Title == med.Title:
+			same = true
+		}
+	}
+	if pos == 0 || !same {
+		return med.Title
+	}
+	return fmt.Sprintf("%s %d", med.Title, pos)
 }
 
 // pageSegment is the last non-empty path segment of rawURL ("" when there is none).
@@ -536,10 +644,12 @@ func (m *Manager) runSite(ctx context.Context, rec *model.Download, opts MediaRu
 		}
 	}
 	med := rec.Media
+	signIn := m.siteCookies.get(rec.ID)
 	sel := SiteSelection{
-		PageURL: rec.Request.URL, Cookie: m.siteCookies.get(rec.ID), Referer: rec.Request.Headers.Get("Referer"),
+		PageURL: rec.Request.URL, Cookie: signIn.cookie, CookieDomain: signIn.domain, Referer: rec.Request.Headers.Get("Referer"),
 		Format: med.Format, VideoTrack: med.SelectedVideo, AudioTrack: med.SelectedAudio,
 		VideoKey: trackKey(med, med.SelectedVideo), AudioKey: trackKey(med, med.SelectedAudio),
+		Clip: clipOf(med), EntryID: med.EntryID, BrowserFetch: med.BrowserFetch,
 	}
 	proxy, err := m.siteProxy(ctx, sel.PageURL)
 	if err != nil {
@@ -557,25 +667,30 @@ func (m *Manager) runSite(ctx context.Context, rec *model.Download, opts MediaRu
 // maxSiteCookies bounds the cookies kept; the oldest downloads' are dropped first.
 const maxSiteCookies = 1024
 
-// siteCookies keeps the Cookie header a site download was added with (the user's opt-in,
-// docs/SITE-MEDIA-SPEC.md §6.3) in memory only, so that its runs resolve the page the
-// way it was probed, and the resolver reuses that extraction. Cookies are never stored
-// or logged: a restarted daemon resolves without them. Safe for concurrent use.
+// siteCookies keeps the sign-in a site download was added with (its Cookie header and
+// that sign-in's domain, docs/SITE-MEDIA-SPEC.md §6.3) in memory only, so that its runs
+// resolve the page the way it was probed, and the resolver reuses that extraction.
+// Cookies are never stored or logged: a restarted daemon resolves without them. Safe
+// for concurrent use.
 type siteCookies struct {
 	mu sync.Mutex
-	m  map[model.DownloadID]string
+	m  map[model.DownloadID]siteSignIn
 }
 
-// set remembers c for download id ("" forgets it).
-func (s *siteCookies) set(id model.DownloadID, c string) {
+// siteSignIn is the sign-in of a site download: a Cookie header and its domain ("" =
+// the page's host).
+type siteSignIn struct{ cookie, domain string }
+
+// set remembers c for download id (a cookie "" forgets it).
+func (s *siteCookies) set(id model.DownloadID, c siteSignIn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c == "" {
+	if c.cookie == "" {
 		delete(s.m, id)
 		return
 	}
 	if s.m == nil {
-		s.m = make(map[model.DownloadID]string)
+		s.m = make(map[model.DownloadID]siteSignIn)
 	}
 	if _, ok := s.m[id]; !ok && len(s.m) >= maxSiteCookies {
 		delete(s.m, slices.Min(slices.Collect(maps.Keys(s.m))))
@@ -583,8 +698,8 @@ func (s *siteCookies) set(id model.DownloadID, c string) {
 	s.m[id] = c
 }
 
-// get returns the cookie of download id ("" = none).
-func (s *siteCookies) get(id model.DownloadID) string {
+// get returns the sign-in of download id (a cookie "" = none).
+func (s *siteCookies) get(id model.DownloadID) siteSignIn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.m[id]

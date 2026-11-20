@@ -50,6 +50,14 @@ type writer struct {
 	done    chan flushResult // the final flush after in is closed
 
 	front map[*segment]*frontier
+
+	// Progress.Head (docs/ENGINE-SPEC.md §9): once every byte of [0, headNeed) is
+	// written, the writer reads them back and hands them over on head (once per run).
+	// headNeed 0 disables it; headSent is owned by the writer goroutine once it runs.
+	headNeed  int64
+	headFront frontier
+	headSent  bool
+	head      chan []byte
 }
 
 func newWriter(f partFile, clock Clock, interval time.Duration, limit int64, bufs *bufPool) *writer {
@@ -60,6 +68,28 @@ func newWriter(f partFile, clock Clock, interval time.Duration, limit int64, buf
 		failed:  make(chan error, 1),
 		done:    make(chan flushResult, 1),
 		front:   make(map[*segment]*frontier),
+		head:    make(chan []byte, 1),
+	}
+}
+
+// noteHead counts the written span [off, off+n) towards the head and sends the head
+// once all of it is written. Called by the writer goroutine only.
+func (w *writer) noteHead(off, n int64) {
+	if w.headSent || off >= w.headNeed {
+		return
+	}
+	w.headFront.add(off, min(n, w.headNeed-off))
+	if w.headFront.next < w.headNeed {
+		return
+	}
+	w.headSent = true
+	buf := make([]byte, w.headNeed)
+	if _, err := w.file.ReadAt(buf, 0); err != nil {
+		return // advisory: no head this run
+	}
+	select {
+	case w.head <- buf:
+	default:
 	}
 }
 
@@ -95,6 +125,7 @@ func (w *writer) run() {
 					w.failed <- werr
 				} else {
 					w.track(req.seg, req.off, int64(len(req.buf)))
+					w.noteHead(req.off, int64(len(req.buf)))
 					unflushed += int64(len(req.buf))
 				}
 			}

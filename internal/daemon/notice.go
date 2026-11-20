@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"downex/internal/model"
+	"downex/internal/polite"
 	downexv1 "downex/internal/rpc/downex/v1"
 )
 
@@ -36,6 +37,16 @@ const (
 	// check that finds one (at most one a day, and one after downexd starts), so that the
 	// user who chose Later hears of it again.
 	NoticeUpdateAvailable
+	// NoticeFileCheck: the final file check of Download, which has just completed, found
+	// that the file is not what its name says (docs/DESKTOP-SPEC.md §9.7): DANGER always,
+	// CAUTION only while notify_on_complete is on. Text is the notification ("<name> is
+	// not what its name says."), Level the check's level. The download stays completed
+	// and its file is never opened automatically.
+	NoticeFileCheck
+	// NoticeLinkRenewed: Download, whose link had expired, continues with the link of a
+	// new add that proved to serve the same file (docs/DESKTOP-SPEC.md §10; the new add
+	// was removed). The tray says "Download continues" while notify_on_complete is on.
+	NoticeLinkRenewed
 )
 
 // Notice is a one-off occurrence for in-process observers such as the tray and its
@@ -43,13 +54,15 @@ const (
 // with Watch, which can be called in-process too.
 type Notice struct {
 	Kind       NoticeKind
-	Download   *downexv1.Download // NoticeCompleted, NoticeFailed, NoticeAwaiting: the download then
+	Download   *downexv1.Download // NoticeCompleted, NoticeFailed, NoticeAwaiting, NoticeLinkRenewed: the download then
 	UILaunched bool               // NoticeAwaiting
 	Settings   Settings           // NoticeSettings (a copy)
 	// NoticePostAction: the countdown (or its cancellation).
 	PostAction *downexv1.PostActionPending
-	// NoticeScanProblem: the notification text.
+	// NoticeScanProblem, NoticeFileCheck: the notification text.
 	Text string
+	// NoticeFileCheck: the check's level.
+	Level model.FileCheckLevel
 	// NoticeUpdateAvailable: the available version.
 	Update *downexv1.UpdateInfo
 }
@@ -157,6 +170,8 @@ type Activity struct {
 	Queued   int     // downloads waiting for a free slot or for their queue to run
 	Awaiting int     // browser hand-offs awaiting confirmation
 	SpeedBps float64 // total speed of the running downloads, bytes per second
+	// PoliteSlowed: Polite mode holds the downloads back now (docs/POLITE-SPEC.md §8).
+	PoliteSlowed bool
 }
 
 // Activity returns the current queue summary. It is cheap; call it when Watch reports
@@ -164,7 +179,7 @@ type Activity struct {
 func (m *Manager) Activity() Activity {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	a := Activity{Active: m.running, Queued: len(m.waiting)}
+	a := Activity{Active: m.running, Queued: len(m.waiting), PoliteSlowed: m.politeStatus().State == polite.Slowed}
 	for _, e := range m.entries {
 		if e.run != nil {
 			if p := e.run.progress.Load(); p != nil {

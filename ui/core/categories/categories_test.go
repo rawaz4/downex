@@ -33,6 +33,10 @@ func TestExtensionOf(t *testing.T) {
 		{"https://example.com/a/b.pdf?x=1.zip#frag.exe", "pdf"},
 		{`C:\Users\you\setup.EXE`, "exe"},
 		{"/home/you/dir.v2/readme", ""},
+		{"Show #37 (1h41m01s-1h57m22s).mp4", "mp4"},
+		{"game#1.exe", "exe"},
+		{"what?.pdf", "pdf"},
+		{`C:\Users\you\Video\Show #37.mp4`, "mp4"},
 	} {
 		if got := categories.ExtensionOf(c[0]); got != c[1] {
 			t.Errorf("ExtensionOf(%q) = %q, want %q", c[0], got, c[1])

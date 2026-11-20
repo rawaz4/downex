@@ -18,6 +18,7 @@ import (
 	"downex/ui/core/progress"
 	"downex/ui/core/segments"
 	"downex/ui/core/text"
+	"downex/ui/host"
 	"downex/ui/kit"
 	"downex/ui/kit/icons"
 	"downex/ui/kit/tokens"
@@ -351,6 +352,9 @@ type statusView struct {
 	pieces, resumable, quality, limit     *views.Text
 	addrI, rateI, leftI, piecesI, qualI   int
 	limitI                                int
+	// check is the file check's note under the facts while the download runs
+	// (DESKTOP-SPEC §9.7): the early result, with "Downex checks it again…".
+	check *views.FileCheckNote
 	// rateInk is the rate's colour drawn (0 none yet, 1 live in --accent, 2 --ink).
 	rateInk int8
 }
@@ -403,8 +407,11 @@ func newStatusView(s *Screen) *statusView {
 	v.limitI = v.facts.add("Speed limit", v.limit, false)
 	v.live = liveRegion()
 	v.facts.addLive(v.live)
+	v.check = views.NewFileCheckNote("", "", "", true)
+	v.check.Style.Margin = kit.Edges{Top: tokens.Sp4}
+	v.check.SetHidden(true)
 	v.Style = kit.Style{Display: kit.DisplayBlock, MinWidth: kit.Px(0)}
-	v.Add(v.hint, v.facts)
+	v.Add(v.hint, v.facts, v.check)
 	return v
 }
 
@@ -479,6 +486,13 @@ func (v *statusView) set(s *Screen, d *downexv1.Download) {
 	if d.GetSpeedLimit() > 0 {
 		v.limit.SetText(format.Speed(float64(d.GetSpeedLimit())) + " for this download")
 	}
+	warn := display.FileCheckWarns(d) && d.GetState() != downexv1.DownloadState_DOWNLOAD_STATE_COMPLETED
+	v.check.SetHidden(!warn)
+	if warn {
+		fc := d.GetFileCheck()
+		v.check.SetDanger(display.ToneOfFileCheck(d) == display.FileCheckFail)
+		v.check.Set(display.FileCheckHeading(d), fc.GetSummary(), fc.GetDetail())
+	}
 }
 
 // actionsRow is div.actions: Show/Hide details, then Pause/Resume and Cancel/Close, or for a
@@ -489,6 +503,8 @@ type actionsRow struct {
 	pause, resume         *widgets.Button
 	retry, restart, close *widgets.Button
 	cancel                *widgets.Button
+	// A link that expired (docs/DESKTOP-SPEC.md §10): New link… and Open page.
+	renew, page *widgets.Button
 }
 
 func newActionsRow(s *Screen) *actionsRow {
@@ -501,7 +517,9 @@ func newActionsRow(s *Screen) *actionsRow {
 	a.pause = widgets.NewButton("Pause", "pause", widgets.Secondary, widgets.SizeMd, s.togglePause)
 	a.resume = widgets.NewButton("Resume", "resume", widgets.Secondary, widgets.SizeMd, s.togglePause)
 	a.cancel = widgets.NewButton("Cancel", "", widgets.Secondary, widgets.SizeMd, s.cancel)
-	a.Add(a.toggle, spacer(), a.retry, a.restart, a.close, a.pause, a.resume, a.cancel)
+	a.renew = widgets.NewButton(display.NewLinkLabel, "link", widgets.Primary, widgets.SizeMd, s.renewLink)
+	a.page = widgets.NewButton(display.OpenPageLabel, "external", widgets.Secondary, widgets.SizeMd, s.openPage)
+	a.Add(a.toggle, spacer(), a.renew, a.page, a.retry, a.restart, a.close, a.pause, a.resume, a.cancel)
 	return a
 }
 
@@ -638,12 +656,15 @@ func (s *Screen) media(d *downexv1.Download) bool {
 
 // failHint is the hint under a failure: a web page's own, else the shared one.
 func (s *Screen) failHint(d *downexv1.Download) string {
+	if r, ok := media.SiteRefusalOfDownload(d); ok {
+		return r.Action
+	}
 	if media.IsSiteDownload(d) {
 		if h := media.SiteErrorHint(d.GetErrorCode()); h != "" {
 			return h
 		}
 	}
-	return display.ErrorHint(d.GetErrorCode())
+	return display.ErrorHintOf(d)
 }
 
 func (s *Screen) canPause(d *downexv1.Download) bool { return d != nil && state.IsActive(d.GetState()) }
@@ -880,6 +901,50 @@ func (s *Screen) cancel() {
 	s.closeWindow()
 }
 
+// renewLink is New link…: the main window shows its New link dialog (in this process on
+// Windows, Downex.app on macOS).
+func (s *Screen) renewLink() {
+	d := s.d()
+	if d == nil {
+		return
+	}
+	renew := s.pw.o.Renew
+	if renew == nil {
+		renew = host.StartMainRenew
+	}
+	id := d.GetId()
+	s.app.Go(func() {
+		if err := renew(id); err != nil {
+			s.app.UI(func() {
+				s.actionError = "Downex could not show the main window."
+				s.render()
+			})
+		}
+	})
+}
+
+// openPage is Open page: the page the download came from, in the browser.
+func (s *Screen) openPage() {
+	d := s.d()
+	if d == nil {
+		return
+	}
+	page := display.PageURL(d)
+	if page == "" {
+		return
+	}
+	s.app.Go(func() {
+		ctx, cancel := s.app.CallContext()
+		defer cancel()
+		if err := s.app.Platform.OpenPage(ctx, page); err != nil {
+			s.app.UI(func() {
+				s.actionError = display.OpenPageFailed
+				s.render()
+			})
+		}
+	})
+}
+
 func (s *Screen) retry() {
 	d := s.d()
 	if s.offline() || d == nil {
@@ -934,11 +999,9 @@ func (s *Screen) onTab(v string) {
 	s.render()
 }
 
-// needsPrompt: a program, or a name that hides its type, is confirmed before anything opens it.
-func needsPrompt(d *downexv1.Download) bool {
-	raw := categories.RawName(d)
-	return categories.IsExecutableName(raw) || text.HasBidiControls(raw)
-}
+// needsPrompt: a program, a name that hides its type, or a file that is not what its name says
+// is confirmed before anything opens it (the one gate of every open path).
+func needsPrompt(d *downexv1.Download) bool { return categories.NeedsOpenConfirm(d) }
 
 func (s *Screen) open() {
 	d := s.d()
@@ -1021,6 +1084,7 @@ func (s *Screen) ask(mode string) {
 	q := OpenQuestion{
 		ID: d.GetId(), Name: categories.DisplayName(d), Executable: categories.IsExecutableName(raw),
 		HiddenControls: text.HasBidiControls(raw), WithApp: mode == "with",
+		Disguise: display.DisguiseText(d),
 		Confirm: func() {
 			if mode == "with" {
 				s.openWithApp()
@@ -1200,6 +1264,12 @@ func (s *Screen) renderActions(d *downexv1.Download, failed bool) {
 	a.toggle.chev.setUp(s.expanded)
 	canPause, canResume := s.canPause(d), s.canResume(d)
 	refused, restart := progress.IsRefused(d), views.NeedsRestart(d)
+	expired := failed && display.LinkExpired(d) && !s.media(d)
+	showButton(w, a.renew, expired, a.close)
+	showButton(w, a.page, expired && display.PageURL(d) != "", a.close)
+	if expired {
+		refused = true // New link… takes Retry's place
+	}
 	showButton(w, a.retry, failed && !refused && !restart, a.restart)
 	showButton(w, a.restart, failed && !refused && restart, a.retry)
 	showButton(w, a.close, failed, a.cancel)

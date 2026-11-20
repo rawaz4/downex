@@ -7,6 +7,7 @@ import (
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
 	"downex/ui/core/display"
+	"downex/ui/core/media"
 	"downex/ui/core/progress"
 	"downex/ui/kit"
 	"downex/ui/kit/tokens"
@@ -47,7 +48,13 @@ type completeView struct {
 	format  *views.Text
 	qualI   int
 	quality *views.Text
+	partI   int
+	part    *views.Text
+	contI   int
+	content *views.Text
 	live    *kit.Element
+	// check is the file check's note (DESKTOP-SPEC §9.7), between the facts and the choice.
+	check *views.FileCheckNote
 
 	pref      *kit.Element
 	dontShow  *widgets.Checkbox
@@ -110,11 +117,14 @@ func newCompleteView(s *Screen) *completeView {
 		t.Semantics.Role = kit.RoleDefinition
 		return t
 	}
-	v.size, v.taken, v.format, v.quality = wrapText(), wrapText(), wrapText(), wrapText()
+	v.size, v.taken, v.format, v.quality, v.content = wrapText(), wrapText(), wrapText(), wrapText(), wrapText()
+	v.part = wrapText()
 	v.facts.add("File size", v.size, false)
 	v.facts.add("Time taken", v.taken, false)
 	v.formatI = v.facts.add("Format", v.format, false)
 	v.qualI = v.facts.add("Quality", v.quality, false)
+	v.partI = v.facts.add(media.ClipPartLabel, v.part, false) // a part of the video (MEDIA-SPEC §8, B6)
+	v.contI = v.facts.add("Contents", v.content, false)
 	v.live = liveRegion()
 	v.facts.addLive(v.live)
 
@@ -125,6 +135,9 @@ func newCompleteView(s *Screen) *completeView {
 	v.prefError = views.NewText("", fontSmall, views.InkDanger, kit.TextOptions{Wrap: kit.TextWrapWords})
 	v.prefError.Semantics.Role, v.prefError.Semantics.Live = kit.RoleAlert, kit.LiveAssertive
 	v.pref = box(kit.Style{Display: kit.DisplayBlock, RowGap: tokens.Sp3}, alignStart(v.dontShow), v.prefHint, v.prefError)
+
+	v.check = views.NewFileCheckNote("", "", "", true)
+	v.check.SetHidden(true)
 
 	v.note = newNote(views.NoteFail, " ")
 	v.note.Semantics.Role, v.note.Semantics.Live = kit.RoleAlert, kit.LiveAssertive
@@ -141,7 +154,7 @@ func newCompleteView(s *Screen) *completeView {
 	actions.Add(v.open, v.openWith, v.folder, spacer(), v.close)
 	v.openWith.SetHidden(!s.pw.o.Caps.OpenWith)
 
-	v.body.Add(head, v.facts, v.pref, v.note, actions)
+	v.body.Add(head, v.facts, v.check, v.pref, v.note, actions)
 	return v
 }
 
@@ -180,6 +193,22 @@ func (v *completeView) set(s *Screen, d *downexv1.Download) {
 	v.quality.SetText(escapeBidi(q))
 	v.quality.Tooltip = escapeBidi(progress.QualityDetail(d))
 	v.facts.setShown(v.qualI, q != "")
+	var part, partTip string
+	if d.GetKind() == downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA {
+		part, partTip = media.PartValue(d.GetMedia())
+	}
+	v.part.SetText(part)
+	v.part.Tooltip = partTip
+	v.facts.setShown(v.partI, part != "")
+	c := display.ContentsText(d)
+	v.content.SetText(c)
+	v.facts.setShown(v.contI, c != "")
+	v.check.SetHidden(!display.FileCheckWarns(d))
+	if display.FileCheckWarns(d) {
+		fc := d.GetFileCheck()
+		v.check.SetDanger(display.ToneOfFileCheck(d) == display.FileCheckFail)
+		v.check.Set(display.FileCheckHeading(d), fc.GetSummary(), fc.GetDetail())
+	}
 	v.render(s)
 }
 

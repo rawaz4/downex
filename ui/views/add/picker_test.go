@@ -265,3 +265,23 @@ func hasText(e *kit.Element, s string) bool {
 	}
 	return false
 }
+
+// A video listed without audio (a silent page, SITE-MEDIA-SPEC §5.3 amendment 2026-11-18): its
+// card's name and tooltip say it has no sound, and so does the audio line.
+func TestMediaPickerNoSound(t *testing.T) {
+	info := formattest.SiteMediaInfo(func(m *downexv1.MediaInfo) {
+		var keep []*downexv1.MediaTrack
+		for _, tr := range m.GetTracks() {
+			if tr.GetKind() == "video" {
+				keep = append(keep, tr)
+			}
+		}
+		m.Tracks, m.SelectedVideo, m.SelectedAudio = keep, keep[0].GetId(), ""
+	})
+	_, p := showPicker(t, info, PartAll, false)
+	card := p.QualitySection().Card("299")
+	eq(t, "name", card.Semantics.Name, "1080p (Full HD) 60fps · H.264 · No sound · 472 MB")
+	eq(t, "tip", card.Tooltip, "1080p (Full HD) 60fps · 1920×1080 · No sound")
+	eq(t, "audio part", p.audio[0].Mode(), "static")
+	eq(t, "audio line", p.audio[0].StaticText(), "This video has no sound.")
+}

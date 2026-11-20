@@ -1,0 +1,16 @@
+{"_type": "playlist", "id": "CarouselPost1", "title": "Post by example", "extractor_key": "Instagram", "playlist_count": 3, "entries": [
+  {"id": "CarouselItem1", "title": "Video by example", "extractor_key": "Instagram", "thumbnail": "https://img.example/carousel/1.jpg?stp=dst-jpg&oh=00_A1&oe=6B02878B", "formats": [
+    {"format_id": "0", "ext": "mp4", "protocol": "https", "acodec": "none", "abr": 0, "dynamic_range": "SDR", "url": "https://media.example/CarouselItem1/0.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+    {"format_id": "1", "ext": "mp4", "protocol": "https", "acodec": "none", "abr": 0, "dynamic_range": "SDR", "url": "https://media.example/CarouselItem1/1.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+    {"format_id": "2", "ext": "mp4", "protocol": "https", "acodec": "none", "abr": 0, "dynamic_range": "SDR", "url": "https://media.example/CarouselItem1/2.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+    {"format_id": "dash-975165557122390v", "ext": "mp4", "protocol": "https", "vcodec": "avc1.4d401e", "acodec": "none", "container": "mp4_dash", "width": 640, "height": 640, "tbr": 79.426, "vbr": 79.426, "abr": 0, "format_note": "DASH video", "dynamic_range": "SDR", "url": "https://media.example/CarouselItem1/3.mp4", "http_headers": {"Referer": "https://www.example.com/"}}
+  ]},
+  {"id": "CarouselItem2", "title": "Video by example", "extractor_key": "Instagram", "thumbnail": "https://img.example/carousel/2.jpg?oe=6B02878B", "formats": [
+    {"format_id": "0", "ext": "mp4", "protocol": "https", "acodec": "none", "abr": 0, "dynamic_range": "SDR", "url": "https://media.example/CarouselItem2/0.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+    {"format_id": "dash-681006613649773v", "ext": "mp4", "protocol": "https", "vcodec": "avc1.4d401e", "acodec": "none", "container": "mp4_dash", "width": 640, "height": 640, "tbr": 88.1, "vbr": 88.1, "abr": 0, "format_note": "DASH video", "dynamic_range": "SDR", "url": "https://media.example/CarouselItem2/3.mp4", "http_headers": {"Referer": "https://www.example.com/"}}
+  ]},
+  {"id": "CarouselItem3", "title": "Video by example", "extractor_key": "Instagram", "thumbnail": "http://img.example/carousel/3.jpg", "formats": [
+    {"format_id": "0", "ext": "mp4", "protocol": "https", "acodec": "none", "abr": 0, "dynamic_range": "SDR", "url": "https://media.example/CarouselItem3/0.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+    {"format_id": "dash-1037826227370157v", "ext": "mp4", "protocol": "https", "vcodec": "avc1.4d401e", "acodec": "none", "container": "mp4_dash", "width": 640, "height": 640, "tbr": 70.2, "vbr": 70.2, "abr": 0, "format_note": "DASH video", "dynamic_range": "SDR", "url": "https://media.example/CarouselItem3/3.mp4", "http_headers": {"Referer": "https://www.example.com/"}}
+  ]}
+]}

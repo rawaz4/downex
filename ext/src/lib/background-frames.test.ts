@@ -48,6 +48,8 @@ const fake = vi.hoisted(() => {
   const posted: (Record<string, unknown> & { id: string; type: string })[] = [];
   const flow = {
     probeAnswer: undefined as Record<string, unknown> | undefined,
+    /** How a frame's content script answers tabs.sendMessage (undefined: nobody answers). */
+    frameMessage: undefined as ((tabId: number, msg: unknown, opts: { frameId: number }) => Promise<unknown>) | undefined,
   };
   const videoInfo = {
     type: 'videoInfo',
@@ -70,12 +72,14 @@ const fake = vi.hoisted(() => {
       const msg = JSON.parse(JSON.stringify(m)) as Record<string, unknown> & { id: string; type: string };
       posted.push(msg);
       const reply = (r: Record<string, unknown>) => queueMicrotask(() => port.onMessage.emit({ id: msg.id, ...r }));
-      if (msg.type === 'hello') reply({ ok: true, type: 'welcome', protocol: 1, daemonVersion: '9.9.9', features: ['video', 'prefetch', 'streams'] });
+      if (msg.type === 'hello') reply({ ok: true, type: 'welcome', protocol: 1, daemonVersion: '9.9.9', features: ['video', 'prefetch', 'streams', 'browserFetch', 'played'] });
       else if (msg.type === 'status') reply({ ok: true, type: 'status', running: true, active: 0, queued: 0 });
       else if (msg.type === 'add') reply({ ok: true, type: 'added', downloadId: 41, awaiting: true });
       else if (msg.type === 'addMedia') reply({ ok: true, type: 'added', downloadId: 42, awaiting: false });
       else if (msg.type === 'probeStream') reply(flow.probeAnswer ?? { ok: true, ...videoInfo });
       else if (msg.type === 'probeVideo') reply({ ok: true, ...videoInfo, site: 'news.example', format: 'http' });
+      else if (msg.type === 'probePlayed') reply({ ok: true, ...videoInfo, site: 'social.example', format: 'http', selectedVideo: 'r1', selectedAudio: '', tracks: [{ ...videoInfo.tracks[0], id: 'r1', kind: 'muxed' }] });
+      else if (msg.type === 'addPlayed') reply({ ok: true, type: 'added', downloadId: 43, awaiting: false, fetchTicket: '0123456789abcdef0123456789abcdef' });
     },
     disconnect() {},
   };
@@ -96,6 +100,10 @@ const fake = vi.hoisted(() => {
       return { id, ...t };
     },
     'tabs.query': async () => [],
+    'tabs.sendMessage': async (tabId: number, msg: unknown, opts: { frameId: number }) => {
+      calls.push({ path: 'tabs.sendMessage', args: [tabId, msg, opts] });
+      return flow.frameMessage?.(tabId, msg, opts);
+    },
     'webNavigation.getAllFrames': async () => [],
     'webNavigation.getFrame': async () => ({ url: 'https://player.example/embed/9' }),
     'cookies.getAll': async (q: unknown) => {
@@ -171,6 +179,8 @@ interface Load {
   headers?: Record<string, string>;
   requestId?: string;
   requestHeaders?: [string, string][];
+  /** The server's address the browser reports (absent: from its cache). */
+  ip?: string;
 }
 
 /** A request the page sent and its response, as webRequest reports them. */
@@ -195,6 +205,7 @@ function load(l: Load) {
   const headers = l.headers ?? { 'Content-Type': l.contentType ?? 'video/mp4', 'Content-Range': 'bytes 0-1023/50000000' };
   event('webRequest.onResponseStarted').emit({
     ...base,
+    ...(l.ip ? { ip: l.ip } : {}),
     statusCode: l.statusCode ?? 206,
     responseHeaders: Object.entries(headers).map(([name, value]) => ({ name, value })),
   });
@@ -213,7 +224,13 @@ const badge = (tabId: number) =>
 
 type Offers = {
   ok: true;
-  value: { files: Record<string, unknown>[]; streams: Record<string, unknown>[]; site?: Record<string, unknown>; features: Record<string, boolean> };
+  value: {
+    files: Record<string, unknown>[];
+    streams: Record<string, unknown>[];
+    site?: Record<string, unknown>;
+    features: Record<string, boolean>;
+    networkOnly?: true; feed?: string;
+  };
 };
 
 describe('background video detection on every site', () => {
@@ -282,7 +299,7 @@ describe('background video detection on every site', () => {
     expect((await tabMedia(2))?.files).toEqual([]);
   });
 
-  it('hands a file off with the first URL of its redirect chain and the headers sent for it, never other cookies', async () => {
+  it('hands a file off with the first URL of its redirect chain and the headers sent for it, the cookie only with the sign-in option', async () => {
     fake.tabs[3] = { url: PAGE, title: 'A story' };
     const first = 'https://news.example/v/clip';
     const final = 'https://cdn2.example/cdn/clip.mp4?sig=abc';
@@ -305,11 +322,11 @@ describe('background video detection on every site', () => {
     const cookies = fake.cookieCalls.length;
     const r = await ask({ type: 'downex:add-file', tabId: 3, url: final });
     expect(r).toEqual({ ok: true, value: { type: 'added', downloadId: 41, awaiting: true } });
+    // The sign-in option is off (the default): the page's cookie never goes to Downex (review 2026-11-18).
     expect(posts('add').at(-1)).toMatchObject({
       url: first,
       method: 'GET',
       headers: [
-        ['Cookie', 'session=first'],
         ['Referer', PAGE],
         ['User-Agent', navigator.userAgent],
       ],
@@ -320,6 +337,17 @@ describe('background video detection on every site', () => {
       referrer: PAGE,
     });
     expect(fake.cookieCalls).toHaveLength(cookies);
+    await vi.waitFor(() =>
+      expect(fake.session.data.handoffHistory).toEqual(
+        expect.arrayContaining([expect.objectContaining({ source: 'video-file', ok: true, url: first, awaiting: true })]),
+      ),
+    );
+    // With the option on, the cookie the browser sent goes with it (and no other).
+    await fake.local.set({ videoOptions: { useSignInForVideos: true } });
+    await ask({ type: 'downex:add-file', tabId: 3, url: final });
+    expect(posts('add').at(-1)).toMatchObject({ headers: [['Cookie', 'session=first'], ['Referer', PAGE], ['User-Agent', navigator.userAgent]] });
+    expect(fake.cookieCalls).toHaveLength(cookies);
+    await fake.local.set({ videoOptions: {} });
     await vi.waitFor(() =>
       expect(fake.session.data.handoffHistory).toEqual(
         expect.arrayContaining([expect.objectContaining({ source: 'video-file', ok: true, url: first, awaiting: true })]),
@@ -388,7 +416,7 @@ describe('background video detection on every site', () => {
     expect(fromSub.value.files.map((f) => [f.display, f.frame])).toEqual([['player.example/embed.mp4', 'this']]);
     expect(fromSub.value.streams).toEqual([expect.objectContaining({ format: 'hls', frame: 'this', matched: true, display: 'player.example/master.m3u8' })]);
     expect(fromSub.value.site).toEqual({ key: `page:${EMBED}`, site: 'player.example', kind: 'page', pageUrl: EMBED, curated: false });
-    expect(fromSub.value.features).toEqual({ streams: true, video: true });
+    expect(fromSub.value.features).toEqual({ streams: true, video: true, clips: false });
     expect(JSON.stringify([fromSub.value.files, fromSub.value.streams])).not.toContain('https://');
     // The embedded frame learns neither the tab's title nor its host.
     expect(fromSub.value).toMatchObject({ title: '', topHost: '' });
@@ -416,6 +444,55 @@ describe('background video detection on every site', () => {
       ok: false,
       error: { code: 'unsupported_page' },
     });
+  });
+
+  it('offers only the browser’s own traffic on a network site, with its own empty text (VIDEO-DETECT-SPEC §3.8)', async () => {
+    const threads = 'https://www.threads.com/@someone/post/AbC12dEfGh';
+    fake.tabs[16] = { url: threads, title: 'A post', active: true };
+    const relayCalls = fake.posted.length;
+    const offers = (await send<Offers>({ type: 'downex:frame-offers', src: '', mse: true }, frame(16, 0, threads)))!;
+    expect(offers.ok).toBe(true);
+    expect(offers.value.site).toBeUndefined();
+    expect(offers.value.networkOnly).toBe(true);
+    // Its overlay cannot ask yt-dlp about it either.
+    await expect(send({ type: 'downex:page-video-probe', url: threads }, frame(16, 0, threads))).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unsupported_page' },
+    });
+    expect(fake.posted).toHaveLength(relayCalls);
+    // Any other page has no such mark.
+    const other = (await send<Offers>({ type: 'downex:frame-offers', src: '', mse: true }, frame(6)))!;
+    expect(other.value).not.toHaveProperty('networkOnly');
+  });
+
+  it('offers a feed video’s own post as its Site source, checked again, and says so when none was found (§5.1 "Feed videos")', async () => {
+    const feed = 'https://www.instagram.com/';
+    const post = 'https://www.instagram.com/p/CODEaaa111/';
+    fake.tabs[17] = { url: feed, title: 'Instagram', active: true };
+    const relayCalls = fake.posted.length;
+    const linked = (await send<Offers>({ type: 'downex:frame-offers', src: '', mse: true, post }, frame(17, 0, feed)))!;
+    expect(linked.value.site).toEqual({ key: 'instagram:CODEaaa111', site: 'Instagram', kind: 'watch', pageUrl: post, curated: true, linked: true });
+    expect(linked.value).not.toHaveProperty('feed');
+    // Without a post, or with one the background does not take (another origin), no Site source.
+    for (const p of [undefined, 'https://evil.example/p/CODEaaa111/']) {
+      const msg = p ? { type: 'downex:frame-offers', src: '', mse: true, post: p } : { type: 'downex:frame-offers', src: '', mse: true };
+      const none = (await send<Offers>(msg, frame(17, 0, feed)))!;
+      expect(none.value.site).toBeUndefined();
+      // No text sends the user elsewhere (SITE-MEDIA-SPEC §2.9): without a trace, no Played source either.
+      expect(none.value).not.toHaveProperty('feed');
+      expect(none.value).not.toHaveProperty('played');
+    }
+    // A malformed post is refused as a message.
+    await expect(send({ type: 'downex:frame-offers', src: '', mse: true, post: 'javascript:alert(1)' }, frame(17, 0, feed))).resolves.toBeUndefined();
+    // Nothing reached Downex for any of it: the panel asks when it probes.
+    expect(fake.posted).toHaveLength(relayCalls);
+    // A network site's feed is network-only, not a feed.
+    const threads = 'https://www.threads.com/';
+    fake.tabs[18] = { url: threads, title: 'Threads', active: true };
+    const t = (await send<Offers>({ type: 'downex:frame-offers', src: '', mse: true }, frame(18, 0, threads)))!;
+    expect(t.value).toMatchObject({ networkOnly: true });
+    expect(t.value).not.toHaveProperty('feed');
+    expect(t.value.site).toBeUndefined();
   });
 
   it('offers the clicked element’s MP4 address and adds it without headers or cookies', async () => {
@@ -476,10 +553,12 @@ describe('background video detection on every site', () => {
     expect(probe).toMatchObject({ ok: true, value: { type: 'videoInfo', container: 'mp4' } });
     expect(posts('probeStream').at(-1)).toMatchObject({
       manifestUrl: 'https://cdn.example/news/master.m3u8',
-      headers: expect.arrayContaining([['Cookie', 'sid=1']]),
+      headers: expect.arrayContaining([['Referer', PAGE]]),
       pageUrl: PAGE,
       deadlineMs: expect.any(Number),
     });
+    // The sign-in option is off: the page's cookie never goes with the stream.
+    expect(JSON.stringify(posts('probeStream').at(-1))).not.toContain('Cookie');
     await send({ type: 'downex:stream-probe', key: hls?.key }, top);
     expect(posts('probeStream')).toHaveLength(1);
     // A file key is not a stream.
@@ -530,6 +609,43 @@ describe('background video detection on every site', () => {
     await expect(ask({ type: 'downex:video-ui' })).resolves.toBeUndefined();
   });
 
+  it('lets "Show Downex download panel" put the overlay UI where buttons are off or the site is hidden, and only then', async () => {
+    const injections = () => fake.calls.filter((c) => c.path === 'scripting.executeScript');
+    const failures = async () =>
+      (await ask<{ history: { url: string; ok: boolean; error?: { message: string } }[] }>({ type: 'downex:get-state' }))!.history.filter((h) => !h.ok);
+    const onClicked = event('contextMenus.onClicked');
+    const cases: [number, Record<string, unknown>][] = [
+      [31, { videoButton: false, hiddenSites: [] }],
+      [32, { videoButton: true, hiddenSites: ['videos.example'] }],
+    ];
+    for (const [tabId, videoOptions] of cases) {
+      fake.tabs[tabId] = { url: 'https://videos.example/watch', title: 'Videos' };
+      await fake.local.set({ videoOptions });
+      // Unasked (a page cannot ask for it either), the frame gets no UI.
+      await expect(send({ type: 'downex:video-ui' }, frame(tabId, 3, EMBED, `DOC${tabId}-3`))).resolves.toEqual({ ok: false });
+      // The tracker asks for the UI while it answers the menu's request, as video.content.ts does.
+      fake.flow.frameMessage = async (id, msg, opts) => {
+        expect(msg).toEqual({ type: 'downex:show-panel' });
+        const ui = await send<{ ok: boolean }>({ type: 'downex:video-ui' }, frame(id, opts.frameId, EMBED, `DOC${id}-${opts.frameId}`));
+        return { shown: ui?.ok === true };
+      };
+      const before = injections().length;
+      const failed = (await failures()).length;
+      onClicked.emit(
+        { menuItemId: 'downex-show-panel', frameId: 3, frameUrl: EMBED, pageUrl: 'https://videos.example/watch' },
+        { id: tabId, url: 'https://videos.example/watch' },
+      );
+      await vi.waitFor(() => expect(injections()).toHaveLength(before + 1));
+      expect(injections().at(-1)?.args[0]).toEqual({ target: { tabId, documentIds: [`DOC${tabId}-3`] }, files: ['/video-ui.js'] });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(await failures()).toHaveLength(failed);
+      // The request ended with the frame's answer: another frame asking is refused again.
+      fake.flow.frameMessage = undefined;
+      await expect(send({ type: 'downex:video-ui' }, frame(tabId, 5, EMBED, `DOC${tabId}-5`))).resolves.toEqual({ ok: false });
+    }
+    await fake.local.set({ videoOptions: { videoButton: true, hiddenSites: [] } });
+  });
+
   it('hides and shows the buttons per site, from a panel or from the popup', async () => {
     fake.tabs[10] = { url: 'https://videos.example/watch', title: 'Videos' };
     const sub = frame(10, 2, EMBED, 'DOC10-2');
@@ -549,6 +665,13 @@ describe('background video detection on every site', () => {
     await expect(ask({ type: 'downex:set-site-hidden', tabId: 10, hidden: false })).resolves.toEqual({ hidden: true });
     await fake.local.set({ videoOptions: { videoButton: true, hiddenSites: [] } });
     await expect(ask({ type: 'downex:set-site-hidden', tabId: 404, hidden: true })).resolves.toEqual({ hidden: false });
+  });
+
+  it('tells the YouTube overlay whether Downex takes a part of a video, and no extension page', async () => {
+    fake.tabs[12] = { url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', title: 'YouTube' };
+    // This relay's welcome lists no `clips`: the panel shows no Part row.
+    await expect(send({ type: 'downex:video-features' }, frame(12))).resolves.toEqual({ clips: false });
+    await expect(ask({ type: 'downex:video-features' })).resolves.toBeUndefined();
   });
 
   it('tells a frame that reported no video about its media traffic, at most once per 5 s', async () => {
@@ -605,5 +728,110 @@ describe('background video detection on every site', () => {
       frame(12, 5, 'https://drm.example/player'),
     );
     expect(badge(12)).toBe('1');
+  });
+});
+
+describe('save what is playing (SITE-MEDIA-SPEC §2.9)', () => {
+  // The background started in the describe above (main runs once per module).
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const FEED = 'https://www.social.example/feed';
+  const trace = { element: '1-abc', durationMs: 19_000, others: [6243], width: 720, height: 1280, audio: 1, recent: [], segments: [], name: 'someone - a caption', href: FEED };
+
+  it('records the played file, reads its head without credentials, probes and adds it, bound to its address', async () => {
+    fake.tabs[31] = { url: FEED, title: 'Social', active: true };
+    // A piece whose byte range is in its query, fetched by the player's script.
+    load({
+      tabId: 31,
+      type: 'xmlhttprequest',
+      url: 'https://media.example/v/a.mp4?oh=1&bytestart=0&byteend=999',
+      statusCode: 200,
+      headers: { 'Content-Type': 'video/mp4', 'Content-Length': '1000' },
+      ip: '93.184.215.14',
+    });
+    const fetched: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetched.push({ url, init });
+        const head = new Uint8Array(64);
+        head.set([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70]);
+        return new Response(head, { status: 206, headers: { 'Content-Range': 'bytes 0-63/3000000' } });
+      }),
+    );
+    await settle();
+    const ask = () => send<Offers & { value: { played?: Record<string, unknown> } }>({ type: 'downex:frame-offers', src: '', mse: true, played: trace }, frame(31, 0, FEED));
+    let o = (await ask())!;
+    expect(o.value.played).toMatchObject({ key: 'p1' });
+    await vi.waitFor(async () => {
+      o = (await ask())!;
+      expect(o.value.played).toMatchObject({ probe: { result: { ok: true } } });
+    });
+    // The head was read by the background itself, without credentials, at the whole file's address.
+    expect(fetched[0]).toMatchObject({ url: 'https://media.example/v/a.mp4?oh=1', init: { credentials: 'omit', headers: { Range: 'bytes=0-65535' } } });
+    const probe = posts('probePlayed').at(-1) as unknown as { pageUrl: string; played: { resources: Record<string, unknown>[]; durationMs: number } };
+    expect(probe.pageUrl).toBe(FEED);
+    expect(probe.played.durationMs).toBe(19_000);
+    // The frame's other videos' lengths go with it: their files are theirs.
+    expect((probe.played as { otherDurationsMs?: number[] }).otherDurationsMs).toEqual([6243]);
+    expect(probe.played.resources).toEqual([
+      { id: 'r1', url: 'https://media.example/v/a.mp4?oh=1', size: 3_000_000, kind: 'video', head: expect.any(String), browser: false },
+    ]);
+    // No cookie, no Referer: none was read.
+    expect(JSON.stringify(probe)).not.toContain('Cookie');
+    const added = await send<{ ok: boolean }>({ type: 'downex:offer-add', key: 'p1', videoTrack: 'r1', played: trace }, frame(31, 0, FEED));
+    expect(added).toMatchObject({ ok: true });
+    expect(posts('addPlayed').at(-1)).toMatchObject({ pageUrl: FEED, videoTrack: 'r1', title: 'someone - a caption' });
+    await vi.waitFor(() => {
+      const tickets = fake.local.data.browserFetchTickets as { ticket: string; played?: { urls: string[]; include: string[] } }[];
+      expect(tickets.at(-1)).toMatchObject({ ticket: '0123456789abcdef0123456789abcdef', played: { urls: ['https://media.example/v/a.mp4?oh=1'], include: [] } });
+    });
+  });
+
+  it('refuses a Played source and its add once the element is protected, and names a nameless post "<Site> video"', async () => {
+    fake.tabs[35] = { url: FEED, title: 'Watch trending videos for you | Social', active: true };
+    const drm = await send<Offers & { value: { played?: unknown; drm: boolean } }>(
+      { type: 'downex:frame-offers', src: '', mse: true, played: { ...trace, drm: true } },
+      frame(35, 0, FEED),
+    );
+    expect(drm?.value.drm).toBe(true);
+    expect(drm?.value).not.toHaveProperty('played');
+    const before = posts('addPlayed').length;
+    await expect(send({ type: 'downex:offer-add', key: 'p1', played: { ...trace, drm: true } }, frame(35, 0, FEED))).resolves.toMatchObject({
+      ok: false,
+      error: { reason: 'encrypted' },
+    });
+    expect(posts('addPlayed')).toHaveLength(before);
+    // A post whose name was not found: never the feed's own title.
+    const nameless = await send<Offers & { value: { title: string } }>({ type: 'downex:frame-offers', src: '', mse: true, played: { ...trace, element: '1-nameless', name: '' } }, frame(35, 0, FEED));
+    expect(nameless?.value.title).toBe('social.example video');
+  });
+
+  it('offers no Played source on YouTube, for a file element, or without a trace', async () => {
+    fake.tabs[32] = { url: 'https://www.youtube.com/watch?v=abcdefghijk', title: 'YouTube', active: true };
+    const yt = await send<Offers & { value: { played?: unknown } }>(
+      { type: 'downex:frame-offers', src: '', mse: true, played: { ...trace, href: 'https://www.youtube.com/watch?v=abcdefghijk' } },
+      frame(32, 0, 'https://www.youtube.com/watch?v=abcdefghijk'),
+    );
+    expect(yt?.value).not.toHaveProperty('played');
+    fake.tabs[33] = { url: FEED, title: 'Social', active: true };
+    const file = await send<Offers & { value: { played?: unknown } }>({ type: 'downex:frame-offers', src: MP4, mse: false, played: trace }, frame(33, 0, FEED));
+    expect(file?.value).not.toHaveProperty('played');
+    // A trace out of bounds is refused as a message.
+    await expect(send({ type: 'downex:frame-offers', src: '', mse: true, played: { ...trace, durationMs: -1 } }, frame(33, 0, FEED))).resolves.toBeUndefined();
+  });
+
+  it('judges the frame by the address read at the click, on the same origin only (VIDEO-DETECT-SPEC §3.6)', async () => {
+    fake.tabs[34] = { url: 'https://www.tiktok.com/foryou', title: 'TikTok', active: true };
+    const own = 'https://www.tiktok.com/@someone/video/7123456789012345678';
+    const o = await send<Offers>({ type: 'downex:frame-offers', src: '', mse: true, played: { ...trace, href: own } }, frame(34, 0, 'https://www.tiktok.com/foryou'));
+    expect(o?.value.site).toMatchObject({ key: 'tiktok:7123456789012345678' });
+    const other = await send<Offers>(
+      { type: 'downex:frame-offers', src: '', mse: true, played: { ...trace, href: 'https://evil.example/@someone/video/7123456789012345678' } },
+      frame(34, 0, 'https://www.tiktok.com/foryou'),
+    );
+    expect(other?.value.site).toBeUndefined();
   });
 });

@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"downex/internal/filecheck"
+	imedia "downex/internal/media"
+	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
 	"downex/ui/core/confirm"
@@ -55,6 +58,15 @@ type ConfirmOptions struct {
 	// Go runs background work (nil: App.Go). Now is the guard's clock (nil: the window's).
 	Go  func(func())
 	Now func() time.Time
+	// Renew continues the stopped download of the offer with this download's link
+	// (docs/DESKTOP-SPEC.md §10, "Continue that download"); nil is DownloadsStore.RenewLink.
+	Renew func(ctx context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error)
+	// ProbeMedia gets the qualities of another video of the page (docs/SITE-MEDIA-SPEC.md
+	// §3.12); nil is DownloadsStore.ProbeMedia.
+	ProbeMedia func(ctx context.Context, req *downexv1.ProbeMediaRequest) (*downexv1.MediaInfo, error)
+	// Window makes the dialog the content of a window of its own (the standalone Confirm
+	// download window, docs/DESKTOP-SPEC.md §1; widgets.DialogOptions.Fill).
+	Window bool
 }
 
 // Confirm is ConfirmDialog.svelte (DESIGN-SYSTEM.md §4.7): a download awaiting confirmation
@@ -77,25 +89,41 @@ type Confirm struct {
 
 	filename, dir, category string
 	attempted               bool
-	busy                    string // "", "start", "later", "cancel"
-	failure                 string
-	queueID, proposedQueue  int64
-	queues                  []*downexv1.Queue
-	openedAt                time.Time
-	gone                    bool
-	container               kit.DIP // the dialog's content width (@container dialog), from the form's
+	busy                    string // "", "start", "later", "cancel", "item"
+	// itemStop stops getting another item's qualities (the dialog closed).
+	itemStop context.CancelFunc
+	// mounted are the picker's parts and the part section, with the element each is in.
+	mounted                []mountedPart
+	failure                string
+	queueID, proposedQueue int64
+	queues                 []*downexv1.Queue
+	openedAt               time.Time
+	gone                   bool
+	completed              bool    // done: confirmed, put off or cancelled (Completed)
+	container              kit.DIP // the dialog's content width (@container dialog), from the form's
 
-	form           *grid
-	cardArea       *kit.Element
-	Video          *VideoCard
-	address        *views.Field
-	url            *clampText
-	qualityArea    *kit.Element
-	Picker         *Picker
-	fields         *kit.Element
-	nameHint       *views.Text
-	Name           *widgets.Input
-	nameErr        *views.Text
+	form        *grid
+	cardArea    *kit.Element
+	Video       *VideoCard
+	address     *views.Field
+	url         *clampText
+	qualityArea *kit.Element
+	// Items is the row of a page with several videos (nil for other downloads,
+	// docs/SITE-MEDIA-SPEC.md §3.12): under the video card.
+	Items    *ItemRow
+	Picker   *Picker
+	fields   *kit.Element
+	nameHint *views.Text
+	// Clip is the "Save only part of the video" section of a stream or a web page's video
+	// (nil for a file); derived the name it gave the name field, which follows the part
+	// until the name is edited.
+	Clip    *ClipSection
+	derived string
+	Name    *widgets.Input
+	nameErr *views.Text
+	// nameCheck warns under File name when the name (as edited) is a program that pretends to
+	// be another type (the file check's NAME stage, DESKTOP-SPEC §9.7); DANGER only.
+	nameCheck      *views.FileCheckNote
 	where          *grid
 	CategorySelect *widgets.Select
 	QueueSelect    *widgets.Select
@@ -111,6 +139,10 @@ type Confirm struct {
 
 	cancel, later, start *widgets.Button
 	chip                 *waitingChip
+	// Offer is the card of a download whose link serves the same file as a stopped
+	// download (docs/DESKTOP-SPEC.md §10); OfferButton its "Continue that download".
+	Offer       *views.Note
+	OfferButton *widgets.Button
 }
 
 // NewConfirm makes the Confirm dialog of d (App.svelte's {#if dialog?.kind === 'confirm'}).
@@ -208,7 +240,7 @@ func (c *Confirm) pick() media.TrackPick {
 // SizeLabel is the size after "Size: ".
 func (c *Confirm) SizeLabel() string {
 	if c.info != nil {
-		if s := media.PickSizeText(media.PickSizeOf(c.info, c.pick())); s != "" {
+		if s := media.PickSizeText(media.ClipSize(media.PickSizeOf(c.info, c.pick()), c.clip(), c.info.GetDurationMs())); s != "" {
 			return s
 		}
 		return "unknown"
@@ -239,6 +271,8 @@ func (c *Confirm) errors() confirmErrors {
 
 func (c *Confirm) description() string {
 	switch {
+	case c.site && media.AudioPage(c.info):
+		return "Audio from the browser is waiting. Choose its quality and where it is saved, then start it."
 	case c.site:
 		return "A video from the browser is waiting. Choose its quality and where it is saved, then start it."
 	case c.info != nil:
@@ -254,7 +288,7 @@ func (c *Confirm) build() {
 	}
 	c.Dialog = c.app.NewDialog(views.ModalConfirm, widgets.DialogOptions{
 		Title: "Confirm download", Description: c.description(), Size: widgets.DialogMd, Width: width,
-		FocusSelf: !c.o.Requested, OnSubmit: func() { c.confirm(true) }, OnClose: c.closed,
+		FocusSelf: !c.o.Requested, OnSubmit: func() { c.confirm(true) }, OnClose: c.closed, Fill: c.o.Window,
 	})
 	c.SetIcon(newFileTile(categories.KindOf(c.download), 32))
 	if c.waiting() > 1 {
@@ -311,22 +345,35 @@ func (c *Confirm) build() {
 		}
 		c.Video = NewVideoCard(c.info, CardOptions{FallbackTitle: c.proposed.filename, URL: c.download.GetUrl(), ShowAddress: true, AddressLabel: label})
 		c.cardArea.Add(c.Video)
+		if c.site && media.ShowsItems(c.info) {
+			c.Items = NewItemRow(c.info)
+			c.Items.OnChoose = c.chooseItem
+		}
 		c.form.Add(c.cardArea)
-		c.Picker = NewPicker(c.info, media.DefaultPick(c.info))
-		c.Picker.OnChange = func(media.TrackPick) { c.refresh() }
-		c.Picker.OnSubmit = func() { c.confirm(true) }
 		if c.qualities {
 			c.qualityArea = &kit.Element{Style: kit.Style{MinWidth: kit.Px(0)}}
-			if w := c.Picker.Part(PartVideo); w != nil {
-				c.qualityArea.Add(w)
-			}
 			c.form.Add(c.qualityArea)
+		}
+		// The item row: above the quality cards, in their column (as in Add → Video), where the
+		// form's other column is the longer one; under the card without quality cards.
+		switch {
+		case c.Items == nil:
+		case c.qualities:
+			c.Items.Style.Margin = kit.Edges{Bottom: tokens.Sp6}
+			c.qualityArea.Add(c.Items)
+		default:
+			c.Items.Style.Margin = kit.Edges{Top: tokens.Sp6}
+			c.cardArea.Add(c.Items)
 		}
 	} else {
 		c.cardArea = &kit.Element{}
 		c.url = newClampText(text.EscapeBidi(c.download.GetUrl()))
 		lab := views.NewText("Address", views.FontLabel, views.InkInk, kit.TextOptions{})
 		c.address = views.NewField("", lab, c.url)
+		if o := c.download.GetRenewOffer(); o != nil {
+			c.Offer = c.offerCard(o)
+			c.form.Add(c.Offer)
+		}
 		c.form.Add(c.address)
 	}
 	if c.qualityArea == nil {
@@ -334,14 +381,8 @@ func (c *Confirm) build() {
 	}
 
 	c.fields = &kit.Element{Style: kit.Style{Display: kit.DisplayBlock, RowGap: tokens.Sp6, MinWidth: kit.Px(0)}}
-	if c.Picker != nil {
-		part := PartAll
-		if c.qualities {
-			part = PartAudio
-		}
-		if w := c.Picker.Part(part); w != nil {
-			c.fields.Add(w)
-		}
+	if c.info != nil {
+		c.mountPicker()
 	}
 	c.nameHint = views.NewHint("")
 	ph := c.proposed.filename
@@ -354,7 +395,10 @@ func (c *Confirm) build() {
 	})
 	c.Name.Autofocus = c.o.Requested
 	c.nameErr = views.NewErrorText("")
-	c.fields.Add(views.NewField("", views.NewLabelRow("File name", c.nameHint), c.Name, c.nameErr))
+	c.nameCheck = views.NewFileCheckNote(display.FileCheckHeading(dangerCheck), "", "", true)
+	c.nameCheck.Detail.SetHidden(true)
+	c.nameCheck.SetHidden(true)
+	c.fields.Add(views.NewField("", views.NewLabelRow("File name", c.nameHint), c.Name, c.nameErr, c.nameCheck))
 	c.buildWhere()
 	c.fields.Add(c.where)
 	c.form.Add(c.fields)
@@ -374,6 +418,132 @@ func (c *Confirm) build() {
 }
 
 func (c *Confirm) containerWide(w kit.DIP, s kit.Scale) bool { return w < 0 || w+40 >= s.Rem(42) }
+
+// mountedPart is a widget mountPicker placed, and where.
+type mountedPart struct {
+	in *kit.Element
+	w  kit.Widget
+}
+
+// mountPicker makes the picker of c.info and places its parts (again, for another item): the
+// quality cards in their column, the audio track at the top of the fields, and the part of the
+// video (docs/MEDIA-SPEC.md §8, B1) in the shorter of the two columns, so that the dialog keeps
+// its fit: under up to six qualities (two rows of cards), in their column; under more, or
+// without a quality column, under the audio track.
+func (c *Confirm) mountPicker() {
+	for _, m := range c.mounted {
+		m.in.Remove(m.w)
+	}
+	c.mounted = nil
+	put := func(in *kit.Element, at int, w kit.Widget) {
+		if at < 0 {
+			in.Add(w)
+		} else {
+			in.Insert(at, w)
+		}
+		c.mounted = append(c.mounted, mountedPart{in: in, w: w})
+	}
+	c.Picker = NewPicker(c.info, media.DefaultPick(c.info))
+	c.Picker.OnChange = func(media.TrackPick) { c.refresh() }
+	c.Picker.OnSubmit = func() { c.confirm(true) }
+	if c.qualities {
+		if w := c.Picker.Part(PartVideo); w != nil {
+			put(c.qualityArea, -1, w)
+		}
+	}
+	part, at := PartAll, 0
+	if c.qualities {
+		part = PartAudio
+	}
+	if media.AudioPage(c.info) {
+		// An audio page (SITE-MEDIA-SPEC §3.13): its audio tracks under the hint, no part.
+		put(c.fields, at, views.NewHint(media.AudioPageHint(c.info)))
+		if w := c.Picker.Part(PartAudio); w != nil {
+			put(c.fields, at+1, w)
+		}
+		return
+	}
+	if w := c.Picker.Part(part); w != nil {
+		put(c.fields, at, w)
+		at++
+	}
+	c.Clip = NewClipSection(c.info, c.info.GetClip())
+	c.Clip.OnChange = c.clipChanged
+	if c.qualities && len(c.Picker.Videos()) <= clipBesideCards {
+		c.Clip.Style.Margin = kit.Edges{Top: tokens.Sp6}
+		put(c.qualityArea, -1, c.Clip)
+	} else {
+		put(c.fields, at, c.Clip)
+	}
+}
+
+// chooseItem gets the qualities of another video of the page (docs/SITE-MEDIA-SPEC.md §3.12),
+// asking again while downexd reads the page: the card, the qualities and the part follow the
+// answer, a proposed name the new video, and Start download sends it (ConfirmRequest.entry_id).
+// The buttons wait meanwhile; a failure shows under the form and keeps the video shown.
+func (c *Confirm) chooseItem(id string) {
+	if c.busy != "" || c.gone || c.info == nil || id == c.info.GetEntryId() {
+		if c.Items != nil {
+			c.Items.Restore()
+		}
+		return
+	}
+	probe := c.o.ProbeMedia
+	if probe == nil {
+		probe = c.app.Main.Downloads.ProbeMedia
+	}
+	page := c.info.GetPageUrl()
+	if page == "" {
+		page = c.download.GetUrl()
+	}
+	req := &downexv1.ProbeMediaRequest{PageUrl: page, Origin: downexv1.MediaOrigin_MEDIA_ORIGIN_SITE, EntryId: id}
+	ctx, stop := context.WithCancel(context.Background())
+	c.itemStop = stop
+	c.busy = "item"
+	c.failure = ""
+	c.refresh()
+	c.goFn(func() {
+		info, err := media.RetrySite(ctx, func(ctx context.Context) (*downexv1.MediaInfo, error) { return probe(ctx, req) }, media.RetryOptions{})
+		stop()
+		c.app.UI(func() {
+			if c.gone {
+				return
+			}
+			c.busy = ""
+			if err != nil {
+				c.failure = media.MediaErrorText(err, true)
+				c.refresh()
+				return
+			}
+			c.showItem(info)
+		})
+	})
+}
+
+// showItem shows another video of the page: its card, its items, its qualities and part; a
+// proposed name follows it (media.ItemName; downexd makes the final one).
+func (c *Confirm) showItem(info *downexv1.MediaInfo) {
+	edited := c.filename != c.proposed.filename && c.filename != c.derived
+	c.info = info
+	if c.Video != nil {
+		c.cardArea.Remove(c.Video)
+	}
+	c.Video = NewVideoCard(info, CardOptions{FallbackTitle: c.proposed.filename, URL: c.download.GetUrl(), ShowAddress: true, AddressLabel: "Page"})
+	c.cardArea.Insert(0, c.Video)
+	if c.Items != nil {
+		c.Items.SetInfo(info)
+	}
+	c.mountPicker()
+	if !edited {
+		c.proposed.filename = media.ItemName(info)
+		c.filename, c.derived = c.proposed.filename, ""
+		c.Name.SetText(c.filename)
+	}
+	c.refresh()
+	if w := c.app.Window; w != nil && c.Items != nil {
+		w.Focus(c.Items.Select)
+	}
+}
 
 func (c *Confirm) buildWhere() {
 	opts := make([]widgets.SelectOption, 0, len(c.settings.GetCategories())+1)
@@ -446,17 +616,52 @@ func (c *Confirm) buildWhere() {
 	}
 }
 
+// clip is the part the section holds (the zero Clip: none, or the form has errors).
+func (c *Confirm) clip() imedia.Clip {
+	if c.Clip == nil {
+		return imedia.Clip{}
+	}
+	cl, _ := c.Clip.Clip()
+	return cl
+}
+
+// clipChanged makes the name follow the part (media.ClipName) while it is the derived one.
+func (c *Confirm) clipChanged() {
+	if c.filename == c.proposed.filename || c.filename == c.derived {
+		next := media.ClipName(c.proposed.filename, c.clip())
+		if next != c.filename {
+			c.filename = next
+			c.Name.SetText(next)
+		}
+		c.derived = next
+	}
+	c.refresh()
+}
+
 // refresh shows the dialog's state.
 func (c *Confirm) refresh() {
 	errs := c.errors()
 	saved := ""
 	if c.site {
-		saved = " · saved as MP4"
+		saved = " · saved as " + media.SiteFileType(c.info)
+	}
+	// the cards' sizes and the card's length are the part's while one is chosen (the whole
+	// video's while the part is off, the whole, or has errors), as "Size:" is
+	if c.Picker != nil {
+		c.Picker.SetClip(c.clip())
+	}
+	if c.Video != nil {
+		c.Video.SetPart(c.clip())
 	}
 	c.nameHint.SetText("Size: " + c.SizeLabel() + saved)
 	c.Name.Semantics.Description = describe(c.nameHint.Text(), errs.filename)
 	setError(c.nameErr, errs.filename)
 	c.Name.SetInvalid(errs.filename != "")
+	warning := c.NameWarning()
+	c.nameCheck.SetHidden(warning == "")
+	if warning != "" {
+		c.nameCheck.Summary.SetText(warning)
+	}
 	setError(c.dirErr, errs.dir)
 	c.Folder.SetInvalid(errs.dir != "")
 	c.Folder.Semantics.Description = errs.dir
@@ -476,6 +681,19 @@ func (c *Confirm) refresh() {
 		c.queueHint.SetText(h)
 		c.QueueSelect.Semantics.Description = h
 	}
+	clipBad := false
+	if c.Clip != nil {
+		c.Clip.SetDisabled(busy)
+		_, errs := c.Clip.Clip()
+		clipBad = errs.Range != "" || c.Clip.ErrorText() != ""
+	}
+	if c.Items != nil {
+		c.Items.SetLoading(c.busy == "item")
+		c.Items.SetDisabled(busy)
+		if c.busy != "item" {
+			c.Items.Restore()
+		}
+	}
 	if c.Picker != nil {
 		c.Picker.SetDisabled(busy)
 		if c.Video != nil {
@@ -492,11 +710,38 @@ func (c *Confirm) refresh() {
 	c.form.Relayout()
 
 	setDisabled(c.cancel, busy)
-	setDisabled(c.later, busy)
-	setDisabled(c.start, busy)
+	// An error under the part blocks Start and Download later while it is shown (B3).
+	setDisabled(c.later, busy || clipBad)
+	setDisabled(c.start, busy || clipBad)
 	c.cancel.SetText(pick(c.busy == "cancel", "Canceling…", "Cancel download"))
 	c.later.SetText(pick(c.busy == "later", "Saving…", "Download later"))
 	c.start.SetText(pick(c.busy == "start", "Starting…", "Start download"))
+}
+
+// dangerCheck is a DANGER result, for the heading of the name's warning.
+var dangerCheck = &downexv1.Download{FileCheck: &downexv1.FileCheck{Level: downexv1.FileCheckLevel_FILE_CHECK_LEVEL_DANGER}}
+
+// NameWarning is the summary of the warning under File name ("" for none): the NAME stage of
+// the file check on the name as it stands (DESKTOP-SPEC §9.7). The proposed name keeps the
+// daemon's result, which knows whether the name it came with hid text-direction characters;
+// an edited name is checked here, with the requester's MIME hint. Only DANGER warns; the
+// buttons do not change.
+func (c *Confirm) NameWarning() string {
+	name := strings.TrimSpace(c.filename)
+	if name == "" {
+		return ""
+	}
+	if name == c.proposed.filename {
+		if fc := c.download.GetFileCheck(); fc.GetLevel() == downexv1.FileCheckLevel_FILE_CHECK_LEVEL_DANGER {
+			return fc.GetSummary()
+		}
+		return ""
+	}
+	fc := filecheck.CheckName(name, filecheck.HasHiddenControls(name), c.download.GetMime())
+	if fc == nil || fc.Level != model.FileCheckDanger {
+		return ""
+	}
+	return filecheck.Summary(fc, name)
 }
 
 func pick(cond bool, a, b string) string {
@@ -560,21 +805,36 @@ func (c *Confirm) confirm(start bool) {
 	c.failure = ""
 	c.refresh()
 	errs := c.errors()
-	if errs.filename != "" || errs.dir != "" {
+	var clip *downexv1.MediaClip
+	clipOK := true
+	if c.Clip != nil {
+		clip, clipOK = c.Clip.Request()
+		if !clipOK {
+			c.Clip.ShowErrors()
+			c.refresh()
+		}
+	}
+	if errs.filename != "" || errs.dir != "" || !clipOK {
 		if w := c.app.Window; w != nil {
-			if errs.filename != "" {
+			switch {
+			case errs.filename != "":
 				w.Focus(c.Name)
-			} else {
+			case errs.dir != "":
 				w.Focus(c.Folder)
+			default:
+				if f := c.Clip.FirstInvalid(); f != nil {
+					w.Focus(f)
+				}
 			}
 		}
 		return
 	}
 	typed := text.TrimJS(c.filename)
-	// a web page's video is always one MP4 file: a renamed one keeps the extension
+	// a web page's video is always one MP4 file (an audio page's one .m4a or .mp3,
+	// SITE-MEDIA-SPEC §3.13): a renamed one keeps the extension
 	name := typed
-	if c.site && typed != "" && !strings.HasSuffix(strings.ToLower(typed), ".mp4") {
-		name = typed + ".mp4"
+	if ext := media.SiteExtension(c.info); c.site && typed != "" && !strings.HasSuffix(strings.ToLower(typed), ext) {
+		name = typed + ext
 	}
 	folder := text.TrimJS(c.dir)
 	c.busy = "later"
@@ -599,12 +859,24 @@ func (c *Confirm) confirm(start bool) {
 	if folder != c.proposed.dir {
 		req.Dir = folder
 	}
-	if name != c.proposed.filename {
-		req.Filename = name
+	if name != c.proposed.filename && (c.derived == "" || name != c.derived) {
+		req.Filename = name // a name the user typed; the derived one is downexd's to make
 	}
 	if c.info != nil {
 		p := c.Picker.Pick()
 		req.VideoTrack, req.AudioTrack = p.Video, media.PickedAudio(c.info, p)
+		// Another video of the page than the one proposed (docs/SITE-MEDIA-SPEC.md §3.12).
+		if e := c.info.GetEntryId(); c.site && e != c.download.GetMedia().GetEntryId() {
+			req.EntryId = e
+		}
+		// The part: sent when it differs from the proposal (unset keeps it; 0–0 is the whole
+		// video, docs/MEDIA-SPEC.md §8 C1).
+		switch had := c.info.GetClip(); {
+		case clip != nil && (had == nil || had.GetStartMs() != clip.GetStartMs() || had.GetEndMs() != clip.GetEndMs() || had.GetChapter() != clip.GetChapter()):
+			req.Clip = clip
+		case clip == nil && had != nil:
+			req.Clip = &downexv1.MediaClip{}
+		}
 	}
 	confirmFn := c.o.Confirm
 	if confirmFn == nil {
@@ -625,6 +897,57 @@ func (c *Confirm) confirm(start bool) {
 			err = confirmFn(ctx, req)
 		}
 		c.app.UI(func() { c.finished(err) })
+	})
+}
+
+// offerCard is the offer of a download whose link serves the same file as a stopped one:
+// "Continue that download" gives that one this link and removes this one.
+func (c *Confirm) offerCard(o *downexv1.RenewOffer) *views.Note {
+	head := views.NewParagraph(display.OfferTitle, views.FontLabel, views.InkInk)
+	para := views.NewParagraph(display.OfferText(o, c.proposed.filename), views.FontCell, views.InkInk2)
+	c.OfferButton = widgets.NewButton(display.OfferButton, "link", widgets.Primary, widgets.SizeSm, func() { c.continueOld(o.GetDownloadId()) })
+	c.OfferButton.Style.AlignSelf = kit.AlignStart
+	c.OfferButton.Style.Margin = kit.Edges{Top: tokens.Sp3}
+	n := views.NewNote(views.NoteInfo, "", head, para, c.OfferButton)
+	n.Style.Display, n.Style.Axis, n.Style.RowGap = kit.DisplayFlex, kit.AxisColumn, tokens.Sp2
+	return n
+}
+
+// continueOld is "Continue that download": RenewLink of the stopped download from this one
+// (started, another name accepted); the dialog then closes with the success toast.
+func (c *Confirm) continueOld(old int64) {
+	if c.busy != "" || c.tooSoon() || c.gone {
+		return
+	}
+	c.failure, c.busy = "", "renew"
+	c.OfferButton.SetDisabled(true, false)
+	c.refresh()
+	renew := c.o.Renew
+	if renew == nil {
+		renew = c.app.Main.Downloads.RenewLink
+	}
+	req := &downexv1.RenewLinkRequest{Id: old, Link: &downexv1.RenewLinkRequest_FromDownload{FromDownload: c.download.GetId()},
+		Start: true, AllowNameChange: true}
+	name := c.download.GetRenewOffer().GetFilename()
+	c.goFn(func() {
+		ctx, cancel := c.app.CallContext()
+		defer cancel()
+		resp, err := renew(ctx, req)
+		c.app.UI(func() {
+			if c.gone {
+				return
+			}
+			c.busy = ""
+			c.OfferButton.SetDisabled(false, false)
+			if err != nil {
+				c.failure = state.Message(err)
+				c.refresh()
+				return
+			}
+			c.refresh()
+			c.app.Success(display.RenewedToast(name, resp.GetRestarted()))
+			c.done()
+		})
 	})
 }
 
@@ -685,6 +1008,10 @@ func (c *Confirm) onCancel() {
 	})
 }
 
+// Completed reports a dialog that closed after its download was started, put off, cancelled
+// or continued (not one closed with Escape or taken away).
+func (c *Confirm) Completed() bool { return c.completed }
+
 // Failure is the refusal shown ("" for none).
 func (c *Confirm) Failure() string { return c.failure }
 
@@ -693,7 +1020,7 @@ func (c *Confirm) Download() *downexv1.Download { return c.download }
 
 // done closes the dialog after a confirmation or a cancel (onclose).
 func (c *Confirm) done() {
-	c.gone = true
+	c.gone, c.completed = true, true
 	c.Remove()
 	if c.o.OnClose != nil {
 		c.o.OnClose()
@@ -702,6 +1029,9 @@ func (c *Confirm) done() {
 
 func (c *Confirm) closed() {
 	c.gone = true
+	if c.itemStop != nil {
+		c.itemStop()
+	}
 	if c.o.OnClose != nil {
 		c.o.OnClose()
 	}
@@ -716,6 +1046,9 @@ func (c *Confirm) ShowModal(w *kit.Window, done func()) kit.Widget {
 // DismissModal is views.Modal's.
 func (c *Confirm) DismissModal() {
 	c.gone = true
+	if c.itemStop != nil {
+		c.itemStop()
+	}
 	c.Dialog.DismissModal()
 }
 

@@ -3,11 +3,12 @@ package add
 import (
 	"math"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
+	imedia "downex/internal/media"
 	downexv1 "downex/internal/rpc/downex/v1"
-	"downex/ui/core/format"
 	"downex/ui/core/media"
 	"downex/ui/core/text"
 	"downex/ui/kit"
@@ -108,6 +109,10 @@ type VideoCard struct {
 	Title   *views.Text
 	Address *addressText
 	chips   *kit.Element
+	// length is the length chip (nil while the duration is unknown), part what it shows.
+	length     *fact
+	durationMs int64
+	part       imedia.Clip
 }
 
 // NewVideoCard makes the card of info.
@@ -124,10 +129,8 @@ func NewVideoCard(info *downexv1.MediaInfo, o CardOptions) *VideoCard {
 	if title == "" {
 		title = "Untitled video"
 	}
-	duration := ""
-	if info.GetDurationMs() > 0 {
-		duration = format.Duration(float64(info.GetDurationMs()))
-	}
+	c.durationMs = info.GetDurationMs()
+	duration, _ := media.LengthText(imedia.Clip{}, c.durationMs)
 	best := bestClassText(info)
 	container := media.ContainerLabel(info.GetContainer())
 	if container == "" && media.IsSite(info) {
@@ -168,9 +171,11 @@ func NewVideoCard(info *downexv1.MediaInfo, o CardOptions) *VideoCard {
 	c.chips = &kit.Element{Style: kit.Style{Display: kit.DisplayFlex, Flex: kit.FlexOf(0, 1, kit.Length{}), Wrap: true, RowGap: kit.Px(6), ColumnGap: kit.Px(6), MinWidth: kit.Px(0)}}
 	c.chips.Semantics.Role = kit.RoleList
 	c.chips.Semantics.Name = "About this video"
-	if duration != "" {
-		c.chips.Add(newFact(duration, "clock"))
-	}
+	// The length chip is there even when the whole length is unknown (Instagram): a part's own
+	// length still shows in it (SetPart); it is hidden while it has nothing to say.
+	c.length = newFact(duration, "clock")
+	c.length.Style.Hidden = duration == ""
+	c.chips.Add(c.length)
 	if best != "" {
 		c.chips.Add(newFact(best, ""))
 	}
@@ -186,6 +191,25 @@ func NewVideoCard(info *downexv1.MediaInfo, o CardOptions) *VideoCard {
 	return c
 }
 
+// SetPart shows the part's length in the length chip ("8:28 of 31:54", read "8:28 selected of
+// 31:54"; the whole's for the zero Clip), as the browser panel's "8:28 selected".
+func (c *VideoCard) SetPart(part imedia.Clip) {
+	if c.length == nil || part == c.part {
+		return
+	}
+	c.part = part
+	shown, name := media.LengthText(part, c.durationMs)
+	c.length.label.SetText(shown)
+	c.length.SetHidden(shown == "")
+	c.length.Semantics.Name = name
+	c.length.Tooltip = ""
+	if !part.IsZero() {
+		c.length.Tooltip = "Part " + imedia.FormatClipRange(part, time.Duration(c.durationMs)*time.Millisecond) + ": " + name
+	}
+	c.length.SemanticsChanged()
+	c.Relayout()
+}
+
 // SetPicture sets the card's tooltip, the chosen quality's picture ("1920×1080").
 func (c *VideoCard) SetPicture(s string) { c.Tooltip = s }
 
@@ -193,7 +217,7 @@ func (c *VideoCard) SetPicture(s string) { c.Tooltip = s }
 func (c *VideoCard) Facts() []string {
 	var out []string
 	for _, k := range c.chips.Children() {
-		if f, ok := k.Widget().(*fact); ok {
+		if f, ok := k.Widget().(*fact); ok && !f.Style.Hidden {
 			out = append(out, f.label.Text())
 		}
 	}

@@ -3,8 +3,12 @@ package mediajob
 import (
 	"bytes"
 	"cmp"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"slices"
@@ -46,10 +50,11 @@ type resolved struct {
 
 // resolve fetches and parses the manifest of sel (and, for an HLS master playlist, the
 // media playlists of the selected tracks; each at most media.MaxManifestBytes), resolves
-// the selection and plans its tracks, for Run; legacy is Options.LegacyTS. Encrypted
+// the selection and plans its tracks, for Run; legacy is Options.LegacyTS, audio
+// Options.AudioOnly (the one track pickAudio resolves). Encrypted
 // presentations yield an error wrapping media.ErrEncrypted, live ones media.ErrLive,
 // selections that cannot be assembled media.ErrUnsupported.
-func resolve(ctx context.Context, f transport.Fetcher, rt retrier, sel Selection, legacy bool) (*resolved, error) {
+func resolve(ctx context.Context, f transport.Fetcher, rt retrier, sel Selection, legacy, audio bool) (*resolved, error) {
 	if err := checkManifestURL(sel.ManifestURL); err != nil {
 		return nil, err
 	}
@@ -64,9 +69,9 @@ func resolve(ctx context.Context, f transport.Fetcher, rt retrier, sel Selection
 	}
 	var res *resolved
 	if format == "hls" {
-		res, err = resolveHLS(ctx, f, rt, hp, sel, base, body, legacy)
+		res, err = resolveHLS(ctx, f, rt, hp, sel, base, body, legacy, audio)
 	} else {
-		res, err = resolveDASH(sel, base, body)
+		res, err = resolveDASH(sel, base, body, audio)
 	}
 	if err != nil {
 		return nil, err
@@ -137,7 +142,7 @@ var errNoMP4Video = fmt.Errorf("mediajob: %w: no MP4 video in this stream", medi
 // encryption, with the first of those reasons); a failed manifest fetch fails the
 // probe. Info.Container is "mp4".
 func ProbeMP4(ctx context.Context, tf transport.Factory, sel Selection, offer func([]media.Track) []media.Track) (*Info, error) {
-	return probeMP4(ctx, tf, sel, offer, true)
+	return probeMP4(ctx, tf, sel, offer, true, false)
 }
 
 // ProbeMP4Playlists is ProbeMP4 that fetches the manifest and media playlists only,
@@ -145,12 +150,36 @@ func ProbeMP4(ctx context.Context, tf transport.Factory, sel Selection, offer fu
 // playlist's track is listed without a size or picture. A look-ahead uses it
 // (docs/SITE-MEDIA-SPEC.md §5.6): it is made without the user asking.
 func ProbeMP4Playlists(ctx context.Context, tf transport.Factory, sel Selection, offer func([]media.Track) []media.Track) (*Info, error) {
-	return probeMP4(ctx, tf, sel, offer, false)
+	return probeMP4(ctx, tf, sel, offer, false, false)
 }
 
-// probeMP4 is ProbeMP4, which measures the tracks that need it when describe is set.
+// ProbeAudio is ProbeMP4 for the stream of a web page without video
+// (docs/SITE-MEDIA-SPEC.md §3.13): the presentation is saved as one track's sound
+// (Options.AudioOnly), so every offered track that is planned and is not video only is
+// listed alone, without a video to pair it with: the audio-only Representations of an
+// MPD, the audio-only variants of an HLS master, or a media playlist's one track. The
+// selection is the track sel names, as its video or as its audio (by key, else by ID),
+// else the first listed; Info.DefaultAudio (an audio track) or Info.DefaultVideo (a
+// track of unknown content) names it. A presentation with nothing listed is refused
+// with the first reason a candidate was refused for, else ErrNoMP4Audio.
+func ProbeAudio(ctx context.Context, tf transport.Factory, sel Selection, offer func([]media.Track) []media.Track) (*Info, error) {
+	return probeMP4(ctx, tf, sel, offer, true, true)
+}
+
+// ProbeAudioPlaylists is ProbeAudio that fetches the manifest and media playlists only,
+// as ProbeMP4Playlists does: a look-ahead's.
+func ProbeAudioPlaylists(ctx context.Context, tf transport.Factory, sel Selection, offer func([]media.Track) []media.Track) (*Info, error) {
+	return probeMP4(ctx, tf, sel, offer, false, true)
+}
+
+// ErrNoMP4Audio refuses an audio page's stream without a track whose sound can be
+// saved as an MP4 (ProbeAudio).
+var ErrNoMP4Audio = fmt.Errorf("mediajob: %w: no AAC audio in this stream", media.ErrUnsupported)
+
+// probeMP4 is ProbeMP4, which measures the tracks that need it when describe is set,
+// and ProbeAudio with audioOnly.
 func probeMP4(ctx context.Context, tf transport.Factory, sel Selection, offer func([]media.Track) []media.Track,
-	describe bool) (*Info, error) {
+	describe, audioOnly bool) (*Info, error) {
 	if tf == nil {
 		return nil, fmt.Errorf("%w: no transport factory", ErrInvalidOptions)
 	}
@@ -178,6 +207,9 @@ func probeMP4(ctx context.Context, tf transport.Factory, sel Selection, offer fu
 		pl, err := media.ParseHLS(base, body)
 		if err != nil {
 			return nil, fmt.Errorf("mediajob: playlist: %w", err)
+		}
+		if m := masterOf(ctx, f, rt, hp, pl); m != nil {
+			pl = m // a level without sound: its master offers it with its sound
 		}
 		cands = pl.Options()
 		plan = func(ctx context.Context, ts []media.Track) ([]candidate, error) {
@@ -215,6 +247,9 @@ func probeMP4(ctx context.Context, tf transport.Factory, sel Selection, offer fu
 		if err := planInto(ctx, plan, fresh, planned); err != nil {
 			return nil, err
 		}
+	}
+	if audioOnly {
+		return probeAudio(ctx, tf, hp, sel, format, offered, planned, fallback, describe)
 	}
 	tracks, byID, reason := listMP4(offered, planned, hasAudio)
 	if !slices.ContainsFunc(tracks, func(t media.Track) bool { return t.Kind != media.KindAudio }) {
@@ -531,15 +566,19 @@ func checkManifestURL(raw string) error {
 
 // fetchManifest fetches one playlist or MPD of at most media.MaxManifestBytes and
 // returns it with the URL it came from after redirects (the base of its relative URIs)
-// and its media type.
+// and its media type. The manifest is asked for whole, without a Range header, and a
+// gzip- or deflate-coded answer is decoded (decodeManifest).
 func fetchManifest(ctx context.Context, f transport.Fetcher, rt retrier, hp headerPolicy, rawURL string) ([]byte, *url.URL, string, error) {
 	buf := &limitedBuffer{max: media.MaxManifestBytes}
 	cp := &copier{buf: make([]byte, sliceCapped), clock: rt.clock}
 	var meta respMeta
 	err := rt.do(ctx, func() error {
 		buf.b = buf.b[:0]
-		m, _, err := fetchInto(ctx, f, fetchSpec{url: rawURL, headers: hp.forURL(rawURL)}, buf, cp, nil)
+		m, _, err := fetchInto(ctx, f, fetchSpec{url: rawURL, headers: hp.forURL(rawURL), whole: true}, buf, cp, nil)
 		meta = m
+		if err == nil && len(m.coding) > 0 {
+			buf.b, err = decodeManifest(buf.b, m.coding)
+		}
 		return err
 	})
 	if err != nil {
@@ -554,6 +593,41 @@ func fetchManifest(ctx context.Context, f transport.Fetcher, rt retrier, hp head
 		return nil, nil, "", fmt.Errorf("%w: unusable URL after redirects", ErrNotManifest)
 	}
 	return buf.b, base, meta.contentType, nil
+}
+
+// decodeManifest removes the content codings of a manifest's bytes (applied in the order
+// listed, so removed last first): gzip (also "x-gzip") and deflate, the zlib format
+// (RFC 9110 §8.4.1). Any other coding is refused as unsupported. The decoded manifest is
+// bounded by media.MaxManifestBytes like a plain one.
+func decodeManifest(data []byte, codings []string) ([]byte, error) {
+	for i := len(codings) - 1; i >= 0; i-- {
+		var (
+			r   io.ReadCloser
+			err error
+		)
+		switch codings[i] {
+		case "gzip", "x-gzip":
+			r, err = gzip.NewReader(bytes.NewReader(data))
+		case "deflate":
+			r, err = zlib.NewReader(bytes.NewReader(data))
+		default:
+			return nil, fmt.Errorf("%w: %w: %q", ErrContentCoded, media.ErrUnsupported, codings[i])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s data: %w", ErrContentCoded, codings[i], err)
+		}
+		out := &limitedBuffer{max: media.MaxManifestBytes}
+		_, err = io.Copy(out, r)
+		_ = r.Close()
+		if errors.Is(err, media.ErrTooLarge) {
+			return nil, err
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s data: %w", ErrContentCoded, codings[i], err)
+		}
+		data = out.b
+	}
+	return data, nil
 }
 
 // detectFormat identifies a manifest by its first bytes, then by its media type
@@ -581,13 +655,16 @@ func detectFormat(body []byte, contentType string) (string, error) {
 // (Options.LegacyTS), a transport stream that ProbeMP4 would not list (savableHLS:
 // unconvertible CODECS, packed audio) is refused before anything of it is fetched.
 func resolveHLS(ctx context.Context, f transport.Fetcher, rt retrier, hp headerPolicy, sel Selection, base *url.URL, body []byte,
-	legacy bool) (*resolved, error) {
+	legacy, audioOnly bool) (*resolved, error) {
 	pl, err := media.ParseHLS(base, body)
 	if err != nil {
 		return nil, fmt.Errorf("mediajob: playlist: %w", err)
 	}
+	if m := masterOf(ctx, f, rt, hp, pl); m != nil {
+		pl = m // as ProbeMP4 does, so the probe's track ids name the same tracks
+	}
 	tracks := pl.Options()
-	video, audio, err := pick(tracks, sel, nil)
+	video, audio, err := choose(tracks, sel, nil, audioOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +700,7 @@ func resolveHLS(ctx context.Context, f transport.Fetcher, rt retrier, hp headerP
 	return res, nil
 }
 
-func resolveDASH(sel Selection, base *url.URL, body []byte) (*resolved, error) {
+func resolveDASH(sel Selection, base *url.URL, body []byte, audioOnly bool) (*resolved, error) {
 	mpd, err := media.ParseDASH(base, body)
 	if err != nil {
 		return nil, fmt.Errorf("mediajob: MPD: %w", err)
@@ -638,7 +715,7 @@ func resolveDASH(sel Selection, base *url.URL, body []byte) (*resolved, error) {
 		mime := strings.ToLower(rep.MimeType)
 		return !strings.Contains(mime, "webm") && !strings.Contains(mime, "matroska")
 	}
-	video, audio, err := pick(tracks, sel, usable)
+	video, audio, err := choose(tracks, sel, usable, audioOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -679,6 +756,16 @@ func findRepresentation(mpd *media.MPD, id string) *media.Representation {
 		}
 	}
 	return nil
+}
+
+// choose is pick, or for an audio download (audioOnly, Options.AudioOnly) the one track
+// pickAudio resolves, returned as the audio.
+func choose(tracks []media.Track, sel Selection, usable func(*media.Track) bool, audioOnly bool) (video, audio *media.Track, err error) {
+	if !audioOnly {
+		return pick(tracks, sel, usable)
+	}
+	audio, err = pickAudio(tracks, sel)
+	return nil, audio, err
 }
 
 // pick resolves a selection against tracks. A chosen track is found by its key when the

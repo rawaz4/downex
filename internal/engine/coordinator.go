@@ -71,8 +71,13 @@ type coordinator struct {
 	stopping  bool
 	succeeded bool
 	failure   error
+	// expiry is the first connection's link-expired error (§7.2 E3): the download fails
+	// with it once the connections still receiving have ended, unless they completed it.
+	expiry error
 
 	onProgress func(Progress)
+	head       []byte // Progress.Head waiting for the next event
+	headSeen   bool   // this run's head was taken (from the writer or from disk)
 	lastEmit   time.Time
 	lastCommit time.Time
 	dirty      bool // the segment layout (or the record) changed since the last commit
@@ -106,6 +111,7 @@ func (e *Engine) newCoordinator(ctx, sctx context.Context, d *model.Download, fi
 		onProgress: onProgress,
 	}
 	c.wr = newWriter(file, e.clock, e.opts.FlushInterval, e.opts.FlushBytes, e.bufs)
+	c.wr.headNeed = headNeed(d.Size)
 	if c.ctl = e.control(d.ID); c.ctl != nil {
 		if n, ok := c.ctl.takeMaxConnections(); ok { // changed while probing
 			d.MaxConnections = n
@@ -145,6 +151,7 @@ type probeConn struct {
 // run drives the download to completion, pause (ctx cancelled) or failure. first, when
 // non-nil, is the probe connection that becomes the first worker.
 func (c *coordinator) run(first *probeConn) error {
+	c.primeHead()
 	go c.wr.run()
 	ticker := c.e.clock.NewTicker(tickInterval)
 	defer ticker.Stop()
@@ -188,6 +195,8 @@ func (c *coordinator) run(first *probeConn) error {
 				switch {
 				case c.allDone():
 					c.finish()
+				case c.job.expired.Load():
+					c.fail(c.expiryErr())
 				case c.ctx.Err() == nil:
 					c.fail(errNoWork)
 				}
@@ -204,6 +213,8 @@ func (c *coordinator) run(first *probeConn) error {
 			c.commit(model.StateDownloading)
 		case err := <-c.wr.failed:
 			c.fail(err)
+		case h := <-c.wr.head:
+			c.head, c.headSeen = h, true
 		case <-ticker.C():
 			c.tick(c.e.clock.Now())
 		case <-ctxDone:
@@ -249,6 +260,10 @@ func (c *coordinator) onIdle(ev event) {
 		c.finish()
 		return
 	}
+	if c.job.expired.Load() { // no takeover, no split, no new request (§7.2 E3)
+		c.retire(w)
+		return
+	}
 	// A takeover never adds a connection: it replaces one that has received nothing.
 	if ev.hasStream {
 		if s := c.takeover(w, ev.streamOff); s != nil {
@@ -273,6 +288,12 @@ func (c *coordinator) onExit(ev event) {
 	w := ev.w
 	delete(c.workers, w)
 	failed := ev.err != nil && !w.cancelled && !c.stopping && !isContextError(ev.err)
+	// After an expiry a ranged download lets its live streams finish (§7.2 E3): the
+	// expired connection and those that would send a request stop without failing it.
+	expired := failed && !c.job.single && errors.Is(ev.err, ErrLinkExpired)
+	if failed && errors.Is(ev.err, errLinkStopped) {
+		failed = false
+	}
 	finished := w.retired && !w.cancelled // told to exit after finishing its range
 	if !w.retired {
 		w.retired = true
@@ -295,9 +316,24 @@ func (c *coordinator) onExit(ev event) {
 			row.show = false
 		}
 	}
-	if failed {
+	switch {
+	case expired:
+		if c.expiry == nil {
+			c.expiry = fmt.Errorf("connection %d: %w", w.id, ev.err)
+			c.log.Warn("link expired; no new requests, the connections still receiving finish their ranges",
+				"live", c.live, "err", ev.err)
+		}
+	case failed:
 		c.fail(fmt.Errorf("connection %d: %w", w.id, ev.err))
 	}
+}
+
+// expiryErr is the error a download whose link expired fails with.
+func (c *coordinator) expiryErr() error {
+	if c.expiry != nil {
+		return c.expiry
+	}
+	return fmt.Errorf("a connection found the link expired: %w", ErrLinkExpired)
 }
 
 // onThrottled lowers the per-host connection cap after 429/503/421, or after a refused
@@ -436,7 +472,7 @@ func midStallTimeout(o *Options, rtt, gap time.Duration) time.Duration {
 func (c *coordinator) fill() {
 	replaced := c.replaced
 	c.replaced = 0
-	if c.stopping || c.ctx.Err() != nil {
+	if c.stopping || c.ctx.Err() != nil || c.job.expired.Load() {
 		return
 	}
 	n := c.allowed() - c.live
@@ -814,8 +850,43 @@ func (c *coordinator) persistable() []model.Segment {
 func (c *coordinator) emit(now time.Time) {
 	c.lastEmit = now
 	if c.onProgress != nil {
-		c.onProgress(c.progress())
+		p := c.progress()
+		p.Head, c.head = c.head, nil
+		c.onProgress(p)
 	}
+}
+
+// primeHead prepares Progress.Head before the writer starts: the bytes resumed from
+// disk count towards it, and when they already cover it the head is read from the part
+// file for the first event (docs/ENGINE-SPEC.md §9).
+func (c *coordinator) primeHead() {
+	need := c.wr.headNeed
+	if need <= 0 {
+		return
+	}
+	for _, s := range c.segs {
+		if s.start < need && s.durable > 0 {
+			c.wr.headFront.add(s.start, min(s.durable, need-s.start))
+		}
+	}
+	if c.wr.headFront.next >= need {
+		c.wr.headSent = true
+		c.readHead(need)
+	}
+}
+
+// readHead reads the part file's first n bytes as the run's Progress.Head.
+func (c *coordinator) readHead(n int64) {
+	c.headSeen = true
+	if n <= 0 {
+		return
+	}
+	buf := make([]byte, n)
+	if _, err := c.file.ReadAt(buf, 0); err != nil {
+		c.log.Debug("head not read", "err", err)
+		return
+	}
+	c.head = buf
 }
 
 func (c *coordinator) progress() Progress {
@@ -887,6 +958,11 @@ func (c *coordinator) conclude() error {
 			waiting = false
 		}
 	}
+	select { // a head the writer sent after the loop's last receive
+	case h := <-c.wr.head:
+		c.head, c.headSeen = h, true
+	default:
+	}
 	if final.err != nil {
 		c.succeeded = false
 		if c.failure == nil {
@@ -947,6 +1023,9 @@ func (c *coordinator) complete() error {
 			size = max(size, pos)
 		}
 		c.d.Size = size
+	}
+	if !c.headSeen && !c.wr.headSent { // shorter than the head: the whole file is it
+		c.readHead(headNeed(c.d.Size))
 	}
 	if err := c.commit(model.StateDownloading); err != nil {
 		return c.abandon(model.StateFailed, err)

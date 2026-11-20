@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { VideoInfoResult, VideoTrack } from './protocol';
 import {
   audioLabel,
+  clipSize,
   codecName,
   codecsLabel,
   defaultPick,
@@ -288,5 +289,53 @@ describe('labels', () => {
       'Commentary (French) · AAC',
     );
     expect(audioLabel(track({ id: 'y', kind: 'audio' }))).toBe('Audio');
+  });
+});
+
+describe('clipSize', () => {
+  it('scales a size to the part as the desktop does (ui/core/media TestClipSize), always an estimate', () => {
+    // 1:20 – 2:45 of 12:34: (85 s + 5 s) of 754 s.
+    expect(clipSize({ bytes: 754_000_000, approx: false }, { startMs: 80_000, endMs: 165_000 }, 754_000)).toEqual({ bytes: 90_000_000, approx: true });
+    // To the end: 1:20 – 12:34, the 5 s capped by the duration.
+    expect(clipSize({ bytes: 754_000_000, approx: false }, { startMs: 80_000, endMs: 0 }, 754_000)).toEqual({ bytes: 679_000_000, approx: true });
+    // Rounded up to a second: 0:10.2 – 0:20 is 15 s.
+    expect(clipSize({ bytes: 60_000, approx: false }, { startMs: 10_200, endMs: 20_000 }, 60_000)).toEqual({ bytes: 15_000, approx: true });
+  });
+
+  it('keeps the size of the whole video, an unknown size or an unknown duration', () => {
+    const size = { bytes: 5, approx: false };
+    expect(clipSize(size, undefined, 754_000)).toBe(size);
+    expect(clipSize(size, { startMs: 1000, endMs: 3000 }, 0)).toBe(size);
+    expect(clipSize(undefined, { startMs: 1000, endMs: 3000 }, 754_000)).toBeUndefined();
+    // A part within 5 s of the whole: the whole size.
+    expect(clipSize(size, { startMs: 2000, endMs: 0 }, 6000)).toBe(size);
+  });
+
+  it('says "No sound" of a video-only quality when the list has no audio', () => {
+    const info: VideoInfoResult = {
+      type: 'videoInfo', site: 'Instagram', title: '', durationMs: 10_000, format: 'http', container: 'mp4', selectedVideo: 'v', selectedAudio: '',
+      tracks: [
+        track({ id: 'v', kind: 'video', codecs: 'avc1.64001F', height: 1280, width: 720, size: 2 * MB, name: '720p (HD)' }),
+        track({ id: 'u', kind: 'video', size: MB }),
+      ],
+    };
+    expect(qualityRows(info, '').map((r) => [r.codecs, r.label])).toEqual([
+      ['H.264 · No sound', '720p (HD) · H.264 · No sound · 2.0 MB'],
+      ['No sound', 'Video · No sound · 1.0 MB'],
+    ]);
+    expect(defaultPick(info)).toEqual({ video: 'v', audio: '' });
+    expect(needsAudio(info, 'v')).toBe(false);
+    // With an audio track the same video is paired, and nothing is said of its sound.
+    const paired = { ...info, tracks: [...info.tracks, track({ id: 'a', kind: 'audio', codecs: 'mp4a.40.2', size: MB })] };
+    expect(qualityRows(paired, 'a')[0]?.codecs).toBe('H.264');
+  });
+
+  it('gives the rows the part’s sizes', () => {
+    const info: VideoInfoResult = {
+      type: 'videoInfo', site: 'YouTube', title: '', durationMs: 100_000, format: 'http', container: 'mp4', selectedVideo: 'v', selectedAudio: '',
+      tracks: [track({ id: 'v', kind: 'muxed', height: 720, size: 100_000_000, name: '720p (HD)' })],
+    };
+    expect(qualityRows(info, '')[0]?.size).toBe('100 MB');
+    expect(qualityRows(info, '', { startMs: 0, endMs: 15_000 })[0]?.size).toBe('~20.0 MB');
   });
 });

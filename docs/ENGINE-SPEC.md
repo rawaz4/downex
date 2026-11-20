@@ -11,6 +11,10 @@ All sizes are bytes; ranges are inclusive `[start, end]`.
   that are known to be flushed to disk and committed to the store). Invariant: `durable ≤ received`
   and committed state never claims bytes that were not flushed.
 - Segments never overlap; their union plus the completed prefix of each covers `[0, size-1]`.
+- Expired links (§7.2, store migration 9): a file download records its **page URL** (the page it
+  was started from, http(s), ≤ 32 KiB, `""` = unknown; set from the add) and its **remote name**,
+  the server's name for the file at the first probe (Content-Disposition, else the URL), before
+  any `name (n).ext` variant; `""` before the probe and after a restart (`resetRemote`).
 
 ## 2. Probe and mode selection
 1. The first worker sends `GET` with `Range: bytes=0-` and `Accept-Encoding: identity`.
@@ -20,7 +24,11 @@ All sizes are bytes; ranges are inclusive `[start, end]`.
    no splitting, resume disabled (restart from 0), surface a warning.
 4. Record validators from the probe response (strong ETag preferred, else Last-Modified).
 5. Filename: `Content-Disposition` (RFC 6266/5987, `filename*` preferred) else last URL path
-   segment, then sanitised; never overwrite an existing file silently (append ` (n)`).
+   segment, then sanitised; never overwrite an existing file silently (append ` (n)`). When the
+   name chosen this way held bidi embeddings, overrides or isolates that sanitising removed, the
+   record's `name_controls` is set (DESKTOP-SPEC §9.5 N1). The probe response's Content-Type
+   media type (lower case, without parameters) is stored as `served_type` for the file check;
+   a fresh start or restart clears it first.
 6. Later segment requests use bounded `Range: bytes=s-e` so a finished connection can be reused.
 
 ## 3. Connection budget and ramp-up
@@ -137,7 +145,8 @@ All sizes are bytes; ranges are inclusive `[start, end]`.
 - **A completed download** is restarted only on request (`RestartOptions.Completed`; the API: a
   `ResumeRequest` with `restart`, else FailedPrecondition; `existing_file` without `restart` is
   InvalidArgument). It is downloaded again from its address; a video of a web page is resolved
-  again by yt-dlp, so its signed addresses are fresh. `existing_file` says what happens to the
+  again by yt-dlp, so its signed addresses are fresh. A part of a video (`MEDIA-SPEC.md` §8) stays
+  the part; only what the last run reported of it (keyframe, fetched span) is forgotten. `existing_file` says what happens to the
   file:
   - **Keep both** (`EXISTING_FILE_KEEP_BOTH`, also `UNSPECIFIED`): the file stays and the new copy
     gets the first free variant, `name (1).ext`, reserved at once (files: its `.dxpart` is made with
@@ -165,9 +174,198 @@ All sizes are bytes; ranges are inclusive `[start, end]`.
 - Restarting a download that is not completed ignores `existing_file`: it keeps the choice it was
   restarted with.
 
+### 7.2 Expired links
+Applies to file downloads (`KindFile`); site videos keep their own refresh (SITE-MEDIA-SPEC §2.6)
+and manifest streams are out of scope (MEDIA-SPEC §10).
+- **E1. Classification** (`isExpiry`, the one classifier; checked after the pinned target's
+  fallback of `pin.go`, so a pinned target's first 401/403/404/410 still retries the original URL
+  once, and before the other status checks). A response says the link expired when:
+  - (a) its status is 403 or 410;
+  - (b) its status is 401 **without** any `WWW-Authenticate` challenge (with one it stays
+    `ErrAuthRequired` / `auth_required`);
+  - (c) the request was redirected (the final URL differs from the one sent, compared after
+    parsing) and the final status is 404 (a plain 404 stays `http_status`: the file was removed);
+  - (d) its status is 200 with `Content-Type` `text/html` or `application/xhtml+xml`, answering a
+    range request of a ranged download (a segment, resumed or not). This amends §7: a 200 to a
+    resumed range was "the remote file changed"; a 200 web page is now an expiry;
+  - (e) the probe of a fresh download was redirected and its 2xx answer is a web page, for a
+    download that is not an HTML file (its reserved or proposed name has an extension outside
+    htm, html, xhtml, shtml, mht, mhtml and its MIME hint is not an HTML type; a download without
+    a name yet never uses (e)).
+  A 206 is never an expiry (its `Content-Range` is checked as usual).
+- **E2. Error.** `ErrLinkExpired` ("engine: link expired") is permanent: in `isTransient`'s
+  permanent list, never a throttle, never a refusal. Messages name the range and the answer,
+  never the URL: `bytes %d-%d: HTTP 403 Forbidden: engine: link expired`,
+  `bytes %d-%d: a web page (text/html) instead of the range: engine: link expired`,
+  `probe: redirected to a web page (text/html): engine: link expired`.
+- **E3. Ranged run.** The worker whose request is an expiry stops at once without retrying; its
+  range keeps its durable prefix and becomes unowned. The run sets its `expired` flag: from then
+  on no worker starts, no segment is split, no takeover happens, no stalled connection is
+  replaced, and every worker checks the flag before each request (`serve`), ending without
+  failing the download. Responses already streaming continue to the end of their range or until
+  they break. When no worker is live, the download fails with the first expiry error and
+  `abandon` commits the durable segments as for any failure; if the live streams finished every
+  range, it completes normally.
+- **E4. Single mode and the fresh probe.** An expiry fails the run at once; Run's single-mode
+  restart loop does not retry it (permanent). Single mode keeps nothing (it cannot resume).
+- **E5.** `fresh` records the remote name before it reserves the file name; `resetRemote` clears
+  it.
+
+### 7.3 Renewing a link
+- **P1. `Engine.ProveLink(ctx, id, req, opts) (LinkProof, error)`** holds the download like
+  Restart (`ErrAlreadyRunning` while it runs). It refuses with `ErrInvalidRequest` a media or
+  completed download and a request other than a plain GET of an http(s) address ("only a GET link
+  can continue a download"). It sends nothing and answers **Fresh** (nothing to splice: the
+  renewal downloads from byte 0) when the download is not ranged, its size is unknown, it has no
+  durable bytes, or its part file is missing or of another size.
+- **P2. What is compared.** The durable runs `[Start, Start+Durable-1]` of the stored segments,
+  adjacent runs merged, total T. **Full proof** when T ≤ 1 MiB in ≤ 8 runs: one request per run,
+  every durable byte. Otherwise a **sampled proof** of N windows of ≤ 65,536 bytes, each inside one
+  run: N = 4 when the new server's first answer carries a strong ETag equal to the stored strong
+  ETag ("the server vouches"), else 8. In order: (1) the last 64 KiB of the run that starts at 0
+  (the boundary), (2) the last 64 KiB of the run with the largest end, (3) the first 64 KiB of the
+  run that starts at 0, (4..N) random windows: an offset drawn with `crypto/rand` uniformly over
+  the durable bytes, aligned down to 4,096 (not below its run's start), clipped to its run. A
+  window an earlier one contains is dropped (a random one is drawn again at most twice). The pure
+  function `proofWindows(runs, n, rand)` holds this rule (`proof.go`, the one proof primitive).
+- **P3. Requests.** `Range: bytes=a-b`, no `If-Range`, through a transport slot of the engine's
+  factory (the same proxy, logins and host rules), ≤ 10 s each, sequential, at most 8, stopping
+  at the first failure; the whole proof is bounded by the caller's context (downexd: 15 s for an
+  automatic check, the RPC deadline for RenewLink). Every answer must be 206 with
+  `Content-Range` exactly `a-b/total` and exactly `b-a+1` body bytes (read with that cap). An
+  expiry (E1) is `ErrLinkExpired`; a 401 with a challenge or a 407 `ErrAuthRequired`; a 200 or
+  another range `ErrLinkNoRanges`; another total `ErrLinkSize` ("%d bytes, expected %d"); any
+  other status a `*StatusError`; transport errors as usual.
+- **P4. Validators.** All answers of one proof must carry the same validators, else
+  `ErrLinkChanged`. They are compared with the stored ones (as §6's `compareValidators`) only when
+  the new final URL has the same origin as the stored final URL (else the stored request URL):
+  a difference there is `ErrLinkChanged`. Across origins (mirrors, new signed CDN hosts) they are
+  not compared.
+- **P5. Name.** The first answer's name (Content-Disposition, else the URL) is compared with the
+  stored remote name, else with the file name without a `" (n)"` variant (`StripVariant`),
+  case-folded on Windows and macOS. A difference sets `LinkProof.NameDiffers`; it is not an error
+  of ProveLink (callers decide).
+- **P6. Bytes.** The part file is opened read-only and each answer is compared with `ReadAt` over
+  `[a, b]`; the first difference is `ErrLinkMismatch` ("bytes %d-%d differ"). Nothing is written.
+- **P7. Result.** A full proof matches when every run is equal **and** its runs that are not one
+  repeated byte value hold at least min(4,096, T) bytes (durable bytes that are all zeros, such
+  as an image's zeroed start, prove nothing). A sampled proof matches when every
+  window is equal **and** at least 4,096 compared bytes lie in windows that are not one repeated
+  byte value (a zero-filled hole proves nothing); otherwise `ErrLinkUnproven`, or Fresh with
+  `ProveOptions.RestartIfUnproven`. The proof keeps a stamp of the record it was made for (size,
+  validators, durable sum, segment count, state, `UpdatedAt`).
+- **P8. `Engine.Renew(ctx, id, proof, start)`**, under the same hold, re-reads the record and
+  refuses with `ErrLinkStale` when its stamp differs. Otherwise it stores the new request (GET, no
+  body), the new final URL and the new server's validators (always replaced: the old ETag sent as
+  `If-Range` to a new server would turn every range into a 200), clears the error and stores the
+  download queued (`start`) or paused, in one update; the segments, mode, size, name, remote name,
+  `ReplaceFile` and times are kept. A Fresh proof swaps the request, then does exactly Restart's
+  reset (§7.1; the record is stored before the part file is emptied).
+- **P9. Sentinels** (permanent, wrapped with `%w`): `ErrLinkMismatch`, `ErrLinkSize`,
+  `ErrLinkChanged`, `ErrLinkNoRanges`, `ErrLinkUnproven`, `ErrLinkStale`. downexd maps them to the
+  `renew_*` refusal codes (DAEMON-SPEC §6).
+- **Limits of the proof.** A full proof compares every durable byte. A sampled proof compares at most 256 KiB
+  (vouched) or 512 KiB of the durable data: another version of the same name and size that
+  differs only in bytes no window covered could pass, though the boundary, head and random windows
+  make an accidental match very unlikely and a server cannot predict the random ones; an
+  origin-equal validator change refuses. It is not a whole-file checksum (REQUIREMENTS N4 note).
+
+### 7.4 Adopting a partial file (rescue)
+A download another program (a browser) left unfinished is continued from the bytes it saved:
+`Engine.Rescue(ctx, RescueInput)` proves that the address serves the same file, then renames the
+partial file into a new ranged download's part file. Nothing on disk changes before the proof
+succeeds. Callers: downexd's `DownloadService.Rescue` (DAEMON-SPEC §3 "Rescue"), from the browser
+relay (BROWSER-SPEC §6), the window's "Rescue partial file…" (DESKTOP-SPEC §11) and
+`downex rescue`.
+- **V1. Request.** A plain GET of an http(s) address without body (else `ErrInvalidRequest`);
+  headers as for Add (DAEMON-SPEC §4). Every request is a bounded `Range: bytes=a-b` without
+  `If-Range` (a changed file must read as changed, not as "no ranges"), through one transport
+  slot of the engine's factory (proxy, logins, host rules, request caps), ≤ 10 s each
+  (`ProofRequestTimeout`), sequential. A transient failure is retried after the engine's
+  back-off (Retry-After honoured), at most 3 requests per window. Answers are classified by the
+  proof primitive `fetchWindow` (§7.3 P3): an expiry (§7.2 E1) is `ErrLinkExpired`; a 401 with a
+  challenge or a 407 `ErrAuthRequired`; a 200 or another range `ErrLinkNoRanges`; a range
+  answered with an unknown total (`bytes a-b/*`) `ErrSizeUnknown` (it also matches
+  `ErrLinkNoRanges`); a 416, a total other than the browser's, or one too short to hold the
+  window `ErrLinkSize`; any other status a `*StatusError`.
+- **V2. Trusted length L.** s = the partial's size (`Lstat`: a regular file, never a link, a
+  folder, a device or a Windows reparse point). L = s, or the browser's count of good bytes
+  (`Trusted`) when 0 < count < s: the bytes beyond it are discarded. A partial larger than the
+  browser's count may hold holes (a browser writing slices at several offsets counts only what
+  it received): its L is further cut to the start of its first 64 KiB-aligned block of 65,536
+  zero bytes. L = 0 is `ErrPartialEmpty`.
+- **V3. Windows.** L ≤ 1 MiB (`FullProofMaxBytes`): one window, every byte of [0, L) (a full
+  proof). Otherwise the sampled windows of `proofWindows` (§7.3 P2) over the one run [0, L): the
+  last 65,536 bytes before L first, then the first 65,536, then random windows (offsets from
+  `crypto/rand`, aligned down to 4,096), 8 in all; 4 when the first answer carries the strong
+  ETag the browser saw (§7.3 "vouched") and the partial may not hold holes. With the torn-tail
+  retry of V5 (a second proof) at most 16 windows, 1 MiB in all.
+- **V4. Validators.** The first answer fixes the server's total (it must equal the browser's
+  total when that is known, else `ErrLinkSize`) and its validators. A validator the browser saw
+  that the answer carries with another value (ETag compared opaquely, RFC 9110 weak comparison;
+  Last-Modified as a date) is `ErrLinkChanged`; a validator the answer omits is not a change.
+  Later answers must carry the first answer's validators (else `ErrLinkChanged`).
+- **V5. Bytes.** Each answer is compared with the partial's bytes (`ReadAt` from a read-only
+  handle); a difference is `ErrLinkMismatch` ("bytes a-b differ"). **Torn tail:** when only the
+  first window of a sampled proof differs, the last bytes the browser wrote may not have reached
+  its disk: the proof runs once more with L2 = ⌊(L − 4 MiB) / 4096⌋ · 4096 when L2 ≥ 65,536 (then
+  L = L2), else the mismatch stands.
+- **V6. Informative bytes.** As §7.3 P7: a sampled proof needs at least 4,096 compared bytes in
+  windows that are not one repeated byte value, a full proof min(4,096, L); otherwise
+  `ErrLinkUnproven` (zeros prove nothing).
+- **V7. Stability.** The partial's (size, mtime) are read before the first request and again
+  just before the rename: a change means another program still writes it, `ErrPartialLocked`.
+- **V8. Kept from the proof.** The first answer's validators (the server's own, used as
+  `If-Range` from then on), final URL, total, content type (`ServedType`) and name
+  (Content-Disposition, else the URL: `RemoteName`, so an expired link can be renewed later,
+  §7.3).
+- **A1. Folder.** The download is saved in the partial's own folder (same volume: the move is
+  a rename, never a copy). downexd checks the folder as Add's (DAEMON-SPEC §4). A partial that a
+  stored download names as its file or its part file (`<name>.dxpart`; names compared as the file
+  system does) is refused with `ErrInvalidRequest` before any request: adopting it would take the
+  file from under that download.
+- **A2. Name.** The requested name (sanitised), else the partial's base name without a
+  trailing `.crdownload` or `.part` (case-insensitive); a provisional `Unconfirmed N.crdownload`
+  (or a name empty without its suffix) gives way to the browser's final path's base name, else
+  the server's name. A name taken by another file gets the usual variant, `name (1).ext`.
+- **A3. Placeholder.** Firefox keeps a 0-byte file at the final path while it writes
+  `<name>.part`: when the caller names it (`Placeholder`, in the partial's folder), it is
+  removed before the name is reserved, only while it is still a regular file of 0 bytes.
+- **A4. Order of writes.** (a) reserve the name: `<name>.dxpart` created empty with `O_EXCL`;
+  (b) create the record (state PROBING, mode unknown, size −1) and hold its id like a run
+  (`ErrAlreadyRunning` for anything else, so a list that adopts records and a user's pause or
+  remove cannot act on it); (c) check V7, then rename the partial onto `<name>.dxpart` (Windows
+  `MoveFileEx` REPLACE_EXISTING|WRITE_THROUGH, retried for about 7 s on a sharing violation,
+  then `ErrPartialLocked`; POSIX `rename(2)`), and sync the folder; (d) cut the part file to L,
+  extend it to the server's size (`Preallocate` keeps [0, L) on every OS), sync; (e) commit in
+  one `SaveCheckpoint`: mode RANGED, the size, validators and final URL of V8, `RescuedBytes` =
+  L, state QUEUED (PAUSED when asked), one segment [0, size−1] with L durable bytes.
+- **A5. Rollback.** A failure after (a) removes the reserved part file, or, after (c), renames
+  it back to the partial's path (cut to L) when that path is free, and deletes the record; the
+  caller sees the cause (`ErrDiskFull` from (d) as `disk_full`).
+- **A6. Crash.** Between (b) and (e) a crash leaves a PROBING record: the next start downloads
+  it from byte 0 (the rescue is lost, never corrupted). (e) is the commit point.
+- **A7.** L = size is allowed: every byte is durable, and the first run completes at once.
+- **A8. Afterwards.** The rescued download is an ordinary ranged download: resume follows §7
+  (`If-Range` with the server's validators; a 200, a 416 or another size ⇒ `validator_changed`).
+  `RescuedBytes` is kept after completion and cleared by every reset of the remote state
+  (`resetRemote`: Restart, and a fresh start after a crash).
+- **Sentinels** (permanent): `ErrSizeUnknown`, `ErrPartialEmpty`, `ErrPartialLocked`, with the
+  proof's `ErrLinkMismatch`, `ErrLinkSize`, `ErrLinkChanged`, `ErrLinkNoRanges`,
+  `ErrLinkUnproven`; downexd maps them to the `rescue_*` codes (DAEMON-SPEC §6).
+- **Limits.** As §7.3's: a sampled proof compares at most 512 KiB of the partial, so another
+  version of the same name and size that differs only outside the windows could pass; strong
+  validators, the browser's total and every later range's `If-Range` narrow that further. A
+  server with unknown totals (`bytes a-b/*`) is refused: continuing a single-connection
+  ("chained", §2) download from an offset is not supported.
+
 ## 8. Speed limiting
 - Hierarchical token buckets: global → queue → download. Workers call `WaitN` for every read slice
   (16–64 KiB when capped, 64 KiB uncapped; burst ≥ slice). Waits are context-cancellable.
+- *Polite mode (POLITE-SPEC §5):* the daemon puts a polite level between global and queue
+  (global → polite → queue → download). The engine sees it only through `Limit()`, like any user
+  limit (capped slices, ramp-up stopping at 85 %); no engine behaviour changes. "Polite mode" is
+  not §10's politeness (the host penalty).
 
 ## 9. Timing & events
 - Speeds are recomputed every 100 ms; progress events are emitted at most 4 Hz; checkpoints
@@ -196,8 +394,19 @@ All sizes are bytes; ranges are inclusive `[start, end]`.
   **1 s** (under a speed cap: the gap its pacing explains, 2 capped slices per connection
   sharing it, if longer) and the recent gap is the longest gap between bytes, forgotten
   over 2 s. It shows 0 at once when the download stops (paused, failed or complete).
+- **Head** (`Progress.Head`, for the file check of DESKTOP-SPEC §9): the file's first
+  min(`HeadBytes` = 65,536, size) bytes (fewer only when a single-mode download of unknown size
+  completed shorter: then the whole file, read at completion). It is set in exactly one event per
+  run, the first after those bytes were **written** to the part file (not a durability claim:
+  the writer reads them back once its written spans cover [0, n)); a resumed run whose durable
+  segments already cover them reads them from the part file for its **first** event; a run that
+  stops before then has none. Every other event carries nil. The writer adds one comparison per
+  write and one read per run; the hand-over to the coordinator never blocks the writer.
 
 ## 10. Errors & politeness
+- *Glossary:* the per-host cap lowered below is the **host penalty** (`Engine.HostPenalized`
+  reports it by host name); it is unrelated to Polite mode (POLITE-SPEC), which sends no TCP
+  probes to a penalized host.
 - Typed sentinel errors (e.g. `ErrRangeIgnored`, `ErrValidatorChanged`, `ErrTLS`, `ErrDiskFull`).
   Partial progress is always preserved.
 - Honour `Retry-After` on 429/503; reduce the per-host cap on 429/503/421, and on a request
@@ -223,6 +432,11 @@ All sizes are bytes; ranges are inclusive `[start, end]`.
   counts a finished response 300 ms longer: 3.1 MiB/s, 4.7–4.8 MiB/s with the cap kept at
   3; the Mac saw the same descent against OVH's speed-test server, not re-measured since).
 - Never downgrade TLS or disable certificate verification.
+- `ErrSizeUnknown`, `ErrPartialEmpty` and `ErrPartialLocked` (§7.4) are permanent refusals of a
+  rescue; nothing on disk changed when they are returned.
+- `ErrLinkExpired` (§7.2) is permanent and is not a throttle: an expiry stops new requests but
+  lets the responses already streaming finish their ranges; a per-connection 403/410 therefore no
+  longer fails the download at once.
 
 ## 11. Conformance tests
 Table-driven tests assert the constants above (11,680 / 116,800 / 23,363 / 2·minChunk+3 /
@@ -236,4 +450,21 @@ twice the response's longest wait for bytes), else and in single mode 20 s / flu
 256 MiB)
 against a fake clock and an `httptest` range server with fault injection (slow, stalled,
 200-only, ETag change, 416, 429, a per-client connection limit answering 503 or 429 or closing
-the connection).
+the connection, signed links that expire: 403, 410, 401 without a challenge, a redirect to an
+HTML page).
+Expired links (§7.2-7.3): the classification table of E1 (`TestIsExpiry`); an expiry mid-download
+keeps the durable bytes, sends no request after the first refusal beyond those in flight and lets
+live streams finish; the proof constants 65,536 / 1 MiB / 8 runs / 4 or 8 windows / 4,096
+informative bytes / 10 s per request; the window rule (`TestProofWindows`); match on another
+origin, `ErrLinkChanged` on the same origin, `ErrLinkMismatch`, `ErrLinkSize`, `ErrLinkNoRanges`,
+`ErrLinkExpired`, `NameDiffers`, `ErrLinkUnproven` on flat data, Fresh without a part file,
+`ErrLinkStale`; an expire → renew → resume cycle byte-exact over 20 seeds.
+Rescue (§7.4): the last window first and no `If-Range` while proving; 65,536-byte windows, at
+most 8 (4 vouched), one torn-tail retry 4 MiB lower (4,096-aligned), a full proof up to 1 MiB;
+the browser's count and holes cut L; every refusal (another file, another ETag or date, no
+ranges, 416, unknown total, another total, a shorter file, an expiry, flat data) leaves the
+partial, the folder and the store as they were; the placeholder, a taken name and a provisional
+name; a partial written during the proof is `ErrPartialLocked`, also a Windows handle without
+`FILE_SHARE_DELETE`; the record is held during adoption; kill points (a PROBING record runs
+fresh, a failure after the rename renames back); a rescued run fetches nothing below L and is
+byte-exact; Restart clears `RescuedBytes`.

@@ -41,8 +41,11 @@ const fake = vi.hoisted(() => {
   const session = area();
   const local = area();
   const posted: (Record<string, unknown> & { id: string; type: string })[] = [];
-  /** While set, video requests wait in `held` (a daemon resolving the page). */
-  const flow = { hold: false, held: [] as (() => void)[], videoAnswer: undefined as Record<string, unknown> | undefined };
+  /**
+   * While `hold` is set, video requests wait in `held` (a daemon resolving the page). With `signIn`,
+   * a video request without a Cookie is answered auth_required (SITE-MEDIA-SPEC §6.3).
+   */
+  const flow = { hold: false, held: [] as (() => void)[], videoAnswer: undefined as Record<string, unknown> | undefined, signIn: false };
   const videoInfo = {
     type: 'videoInfo',
     site: 'YouTube',
@@ -64,12 +67,15 @@ const fake = vi.hoisted(() => {
       const msg = JSON.parse(JSON.stringify(m)) as Record<string, unknown> & { id: string; type: string };
       posted.push(msg);
       const reply = (r: Record<string, unknown>) => queueMicrotask(() => port.onMessage.emit({ id: msg.id, ...r }));
-      if (msg.type === 'hello') reply({ ok: true, type: 'welcome', protocol: 1, daemonVersion: '9.9.9', features: ['video'] });
+      if (msg.type === 'hello') reply({ ok: true, type: 'welcome', protocol: 1, daemonVersion: '9.9.9', features: ['video', 'items', 'signIn'] });
       else if (msg.type === 'status') reply({ ok: true, type: 'status', running: true, active: 0, queued: 0 });
       else if (msg.type === 'probeVideo' || msg.type === 'addVideo') {
+        const signedIn = (msg.headers as string[][] | undefined)?.some(([n]) => n === 'Cookie') === true;
         const answer =
-          flow.videoAnswer ??
-          (msg.type === 'probeVideo' ? { ok: true, ...videoInfo } : { ok: true, type: 'added', downloadId: 31, awaiting: true });
+          flow.signIn && !signedIn
+            ? { ok: false, error: { code: 'rejected', message: 'auth_required: the site wants a sign-in', reason: 'auth_required' } }
+            : (flow.videoAnswer ??
+              (msg.type === 'probeVideo' ? { ok: true, ...videoInfo } : { ok: true, type: 'added', downloadId: 31, awaiting: true }));
         if (flow.hold) flow.held.push(() => reply(answer));
         else reply(answer);
       } else if (msg.type === 'add') reply({ ok: true, type: 'added', downloadId: 5 });
@@ -96,7 +102,10 @@ const fake = vi.hoisted(() => {
     'webNavigation.getAllFrames': async ({ tabId }: { tabId: number }) => frames[tabId] ?? [],
     'cookies.getAll': async (q: unknown) => {
       cookieCalls.push(q);
-      return [{ name: 'SID', value: 'sign-in' }];
+      return [
+        { name: 'SID', value: 'sign-in', domain: '.youtube.com' },
+        { name: 'OTHER', value: 'never', domain: '.google.example' },
+      ];
     },
   };
   const node = (path: string): unknown =>
@@ -191,6 +200,20 @@ describe('background page videos', () => {
     // Asked again (the popup, another tab): the kept answer.
     await expect(send({ type: 'downex:page-video-probe', url: WATCH }, youtubeFrame(2))).resolves.toMatchObject({ ok: true });
     expect(posts('probeVideo')).toHaveLength(1);
+  });
+
+  it('asks for one video of a page with several apart, and adds that one (SITE-MEDIA-SPEC §3.12)', async () => {
+    const before = posts('probeVideo').length;
+    await expect(send({ type: 'downex:page-video-probe', url: WATCH, entryId: 'itemB' }, youtubeFrame(3))).resolves.toMatchObject({ ok: true });
+    expect(posts('probeVideo').slice(before)).toEqual([expect.objectContaining({ pageUrl: WATCH, entryId: 'itemB' })]);
+    // Kept apart from the page's default answer, and asked once.
+    await send({ type: 'downex:page-video-probe', url: WATCH, entryId: 'itemB' }, youtubeFrame(3));
+    expect(posts('probeVideo').length).toBe(before + 1);
+    const adds = posts('addVideo').length;
+    await expect(
+      send({ type: 'downex:page-video-add', url: WATCH, videoTrack: '', audioTrack: '', entryId: 'itemB' }, youtubeFrame(3)),
+    ).resolves.toMatchObject({ ok: true });
+    expect(posts('addVideo').slice(adds)).toEqual([expect.objectContaining({ pageUrl: WATCH, entryId: 'itemB' })]);
   });
 
   it('answers a content script only about its own frame', async () => {
@@ -335,17 +358,52 @@ describe('background page videos', () => {
     expect(posts('probeVideo').at(-1)).toEqual(expect.objectContaining({ pageUrl: page }));
   });
 
-  it('sends the page cookies with the sign-in option, asking again once it changed', async () => {
-    // The option was turned on in the previous test: the answer kept without it is not used.
-    const r = await send({ type: 'downex:page-video-probe', url: WATCH }, youtubeFrame(1));
-    expect(r).toMatchObject({ ok: true });
-    expect(posts('probeVideo').at(-1)).toMatchObject({ pageUrl: WATCH, headers: [['Cookie', 'SID=sign-in']] });
-    expect(fake.cookieCalls.at(-1)).toEqual({ url: WATCH });
-    // Turned off again: the answer got without the sign-in is used again.
-    await fake.local.set({ videoOptions: { videoButton: true, useSignInForVideos: false } });
-    const n = posts('probeVideo').length;
-    await expect(send({ type: 'downex:page-video-probe', url: WATCH }, youtubeFrame(1))).resolves.toMatchObject({ ok: true });
-    expect(posts('probeVideo')).toHaveLength(n);
+  it('asks once more with the site’s cookies only after auth_required, on the same click', async () => {
+    const page = 'https://www.youtube.com/watch?v=sssssssssss';
+    const frame = youtubeFrame(13, 0, page, { url: page });
+    fake.tabs[13] = { url: page };
+    await fake.local.set({ videoOptions: { videoButton: true, useSignInForVideos: true } });
+    // A public video: one request, no cookie read.
+    const calls = fake.cookieCalls.length;
+    await expect(send({ type: 'downex:page-video-probe', url: page }, frame)).resolves.toMatchObject({ ok: true });
+    expect(posts('probeVideo').at(-1)).toEqual(expect.not.objectContaining({ headers: expect.anything() }));
+    expect(fake.cookieCalls).toHaveLength(calls);
+
+    const age = 'https://www.youtube.com/watch?v=ttttttttttt';
+    const ageFrame = youtubeFrame(14, 0, age, { url: age });
+    fake.tabs[14] = { url: age };
+    fake.flow.signIn = true;
+    try {
+      const n = posts('probeVideo').length;
+      await expect(send({ type: 'downex:page-video-probe', url: age }, ageFrame)).resolves.toMatchObject({
+        ok: true,
+        value: { signedIn: 'youtube.com' },
+      });
+      const sent = posts('probeVideo').slice(n);
+      expect(sent).toHaveLength(2);
+      expect(sent[0]).not.toHaveProperty('headers');
+      expect(sent[1]).toMatchObject({ pageUrl: age, headers: [['Cookie', 'SID=sign-in']], cookieDomain: 'youtube.com' });
+      expect(fake.cookieCalls.at(-1)).toEqual({ url: age });
+      // The add carries the sign-in at once: one request.
+      const a = posts('addVideo').length;
+      await expect(send({ type: 'downex:page-video-add', url: age, videoTrack: '299', audioTrack: '140' }, ageFrame)).resolves.toMatchObject({
+        ok: true,
+        value: { signedIn: 'youtube.com' },
+      });
+      expect(posts('addVideo').slice(a)).toEqual([expect.objectContaining({ headers: [['Cookie', 'SID=sign-in']], cookieDomain: 'youtube.com' })]);
+      // Turned off: no cookie is read or sent, and the refusal says how to turn it on.
+      await fake.local.set({ videoOptions: { videoButton: true, useSignInForVideos: false } });
+      const off = 'https://www.youtube.com/watch?v=uuuuuuuuuuu';
+      fake.tabs[15] = { url: off };
+      const before = fake.cookieCalls.length;
+      await expect(send({ type: 'downex:page-video-probe', url: off }, youtubeFrame(15, 0, off, { url: off }))).resolves.toMatchObject({
+        ok: false,
+        error: { reason: 'auth_required', signIn: { domain: 'youtube.com', state: 'off' } },
+      });
+      expect(fake.cookieCalls).toHaveLength(before);
+    } finally {
+      fake.flow.signIn = false;
+    }
   });
 
   it('routes a video link of the context menu to addVideo, never to add', async () => {
@@ -362,6 +420,90 @@ describe('background page videos', () => {
       { id: 9, url: 'https://blog.example/links' },
     );
     await vi.waitFor(() => expect(posts('add').length).toBe(adds + 1));
+  });
+
+  it('saves the video of any link from "Download video from this link", never with cookies off the curated sites', async () => {
+    const onClicked = event('contextMenus.onClicked');
+    const cookies = fake.cookieCalls.length;
+    // Any page: a generic target, with the Referer the browser would send for the link.
+    onClicked.emit(
+      { menuItemId: 'downex-video-link', linkUrl: 'https://videos.example/clip/7?x=1#t=3', pageUrl: 'https://blog.example/links?q=1' },
+      { id: 9, url: 'https://blog.example/links?q=1' },
+    );
+    await vi.waitFor(() =>
+      expect(posts('addVideo').at(-1)).toMatchObject({ pageUrl: 'https://videos.example/clip/7?x=1', headers: [['Referer', 'https://blog.example/']] }),
+    );
+    expect(fake.cookieCalls).toHaveLength(cookies);
+    // A curated link: its site's canonical address, as "Download with Downex" sends it.
+    onClicked.emit(
+      { menuItemId: 'downex-video-link', linkUrl: 'https://vimeo.com/76979871', pageUrl: 'https://blog.example/links' },
+      { id: 9, url: 'https://blog.example/links' },
+    );
+    await vi.waitFor(() => expect(posts('addVideo').at(-1)).toMatchObject({ pageUrl: 'https://player.vimeo.com/video/76979871' }));
+    // A network site, a private window: nothing is sent, the popup's history says why.
+    const adds = posts('addVideo').length;
+    onClicked.emit(
+      { menuItemId: 'downex-video-link', linkUrl: 'https://www.threads.com/@someone/post/AbC12dEfGh', pageUrl: 'https://blog.example/links' },
+      { id: 9, url: 'https://blog.example/links' },
+    );
+    onClicked.emit(
+      { menuItemId: 'downex-download', linkUrl: 'https://www.snapchat.com/spotlight/AbCdEfGhIjKlMnOpQrStUv', pageUrl: 'https://blog.example/links' },
+      { id: 9, url: 'https://blog.example/links' },
+    );
+    onClicked.emit(
+      { menuItemId: 'downex-video-link', linkUrl: 'https://videos.example/clip/8', pageUrl: 'https://blog.example/links' },
+      { id: 9, url: 'https://blog.example/links', incognito: true },
+    );
+    const history = async () => (await ask<{ history: { url: string; ok: boolean; error?: { message: string } }[] }>({ type: 'downex:get-state' }))!.history;
+    await vi.waitFor(async () => expect((await history()).filter((h) => !h.ok)).toHaveLength(3));
+    const failed = (await history()).filter((h) => !h.ok);
+    expect(failed.map((h) => [h.url, h.error?.message])).toEqual(
+      expect.arrayContaining([
+        ['https://www.threads.com/@someone/post/AbC12dEfGh', 'Downex can’t read this site’s videos yet. Play the video, then try again.'],
+        ['https://www.snapchat.com/spotlight/AbCdEfGhIjKlMnOpQrStUv', 'Downex can’t read this site’s videos yet. Play the video, then try again.'],
+        ['https://videos.example/clip/8', 'Downloads from private windows stay in the browser.'],
+      ]),
+    );
+    expect(posts('addVideo')).toHaveLength(adds);
+  });
+
+  it('asks the right-clicked video’s frame to show its panel, and records when none can', async () => {
+    // The menu: the video items on links and on videos of http(s) pages (BROWSER-SPEC §4).
+    event('runtime.onInstalled').emit({ reason: 'update' });
+    const menus = () => fake.calls.filter((c) => c.path === 'contextMenus.create').map((c) => c.args[0] as Record<string, unknown>);
+    await vi.waitFor(() => expect(menus().map((m) => m.id)).toEqual(['downex-download', 'downex-video-link', 'downex-show-panel', 'downex-download-all']));
+    expect(menus()[1]).toMatchObject({ title: 'Download video from this link with Downex', contexts: ['link'], targetUrlPatterns: ['http://*/*', 'https://*/*'] });
+    expect(menus()[2]).toMatchObject({ title: 'Show Downex download panel', contexts: ['video'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
+    const onClicked = event('contextMenus.onClicked');
+    const sends = () => fake.calls.filter((c) => c.path === 'tabs.sendMessage');
+    const before = sends().length;
+    onClicked.emit(
+      { menuItemId: 'downex-show-panel', frameId: 4, srcUrl: 'blob:https://player.example/1', frameUrl: 'https://player.example/embed', pageUrl: 'https://blog.example/' },
+      { id: 12, url: 'https://blog.example/' },
+    );
+    await vi.waitFor(() => expect(sends()).toHaveLength(before + 1));
+    expect(sends().at(-1)?.args).toEqual([12, { type: 'downex:show-panel' }, { frameId: 4 }]);
+    // The fake frame answers nothing (no tracker there): the popup's history says so.
+    const history = async () => (await ask<{ history: { url: string; ok: boolean; error?: { message: string } }[] }>({ type: 'downex:get-state' }))!.history;
+    await vi.waitFor(async () =>
+      expect((await history()).find((h) => h.url === 'https://player.example/embed')?.error?.message).toBe(
+        'Downex can’t show its panel in this frame. Reload the page, then try again.',
+      ),
+    );
+    // Never in a private window.
+    onClicked.emit({ menuItemId: 'downex-show-panel', frameId: 0, pageUrl: 'https://blog.example/' }, { id: 13, url: 'https://blog.example/', incognito: true });
+    await vi.waitFor(async () => expect((await history()).find((h) => h.url === 'https://blog.example/')?.error?.message).toBe('Downloads from private windows stay in the browser.'));
+    expect(sends()).toHaveLength(before + 1);
+    // A YouTube player whose own button is not shown: no reload advice, which never helps there.
+    onClicked.emit(
+      { menuItemId: 'downex-show-panel', frameId: 2, frameUrl: `https://www.youtube.com/embed/${ID}`, pageUrl: 'https://news.example/' },
+      { id: 14, url: 'https://news.example/' },
+    );
+    await vi.waitFor(async () =>
+      expect((await history()).find((h) => h.url === `https://www.youtube.com/embed/${ID}`)?.error?.message).toBe(
+        'On YouTube, use the Downex toolbar menu to download this video.',
+      ),
+    );
   });
 
   it('badges page videos with the streams, without googlevideo manifests', async () => {

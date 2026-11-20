@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"downex/ui/core/pageurl"
 	"downex/ui/win/internal/com"
 )
 
@@ -134,6 +135,29 @@ func OpenExternal(ctx context.Context, url string) error {
 	verb, _ := windows.UTF16PtrFromString("open")
 	if err := windows.ShellExecute(0, verb, u, nil, nil, windows.SW_SHOWNORMAL); err != nil {
 		return fmt.Errorf("win: open %s: %w", url, err)
+	}
+	return nil
+}
+
+// OpenPage opens a download's page (docs/DESKTOP-SPEC.md §10, "Open page") in the system's
+// browser: an http or https address only (pageurl.Check), re-serialised before the shell's
+// "open" sees it, so that no path, file:, shell: or ms-settings: address is ever run. The
+// user always clicks for it.
+func OpenPage(ctx context.Context, raw string) error {
+	page, err := pageurl.Check(raw)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	u, err := windows.UTF16PtrFromString(page)
+	if err != nil {
+		return pageurl.ErrNotPage
+	}
+	verb, _ := windows.UTF16PtrFromString("open")
+	if err := windows.ShellExecute(0, verb, u, nil, nil, windows.SW_SHOWNORMAL); err != nil {
+		return fmt.Errorf("win: open the page: %w", err)
 	}
 	return nil
 }

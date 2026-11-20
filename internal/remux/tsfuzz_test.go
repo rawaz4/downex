@@ -216,7 +216,7 @@ func FuzzTSTwoPass(f *testing.F) {
 		var buf bytes.Buffer
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
-		err := assembleTS(context.Background(), []Input{in}, &buf)
+		err := assembleTS(context.Background(), []Input{in}, &buf, Window{}, new(Result))
 		runtime.ReadMemStats(&after)
 		if grew := after.TotalAlloc - before.TotalAlloc; grew > allocBound(len(data)) {
 			t.Fatalf("allocated %d bytes for %d bytes of input", grew, len(data))

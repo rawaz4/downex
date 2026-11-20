@@ -238,7 +238,11 @@ type Mock struct {
 	toolsLeftMs    float64
 	toolsCheckedAt float64
 	toolsChanged   bool
-	toolsWaiters   []toolsWaiter
+	// Polite mode (docs/POLITE-SPEC.md): the status the fixture pins (nil: it follows the
+	// setting, WATCHING while on), and whether it changed since the last batch.
+	politeFixed   *downexv1.PoliteStatus
+	politeChanged bool
+	toolsWaiters  []toolsWaiter
 
 	resolving    map[string]float64
 	resolveOrder []string
@@ -683,7 +687,20 @@ func (m *Mock) snapshotLocked() state.Batch {
 	for _, s := range m.list() {
 		out = append(out, &downexv1.Event{Kind: &downexv1.Event_Snapshot{Snapshot: s.d.clone()}})
 	}
-	return append(out, &downexv1.Event{Kind: &downexv1.Event_Tools{Tools: m.toolsStatus()}})
+	out = append(out, &downexv1.Event{Kind: &downexv1.Event_Tools{Tools: m.toolsStatus()}})
+	return append(out, &downexv1.Event{Kind: &downexv1.Event_Polite{Polite: m.politeStatusLocked()}})
+}
+
+// politeStatusLocked is the simulated Polite mode's status: the fixture's, else WATCHING with a
+// smooth line while the setting is on, OFF otherwise.
+func (m *Mock) politeStatusLocked() *downexv1.PoliteStatus {
+	if m.politeFixed != nil {
+		return proto.CloneOf(m.politeFixed)
+	}
+	if m.settings.GetPoliteMode() {
+		return &downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_WATCHING, DelayMs: 3, BaseMs: 18, Since: stamp(m.startedAt)}
+	}
+	return &downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_OFF, DelayMs: -1, BaseMs: -1, Since: stamp(m.startedAt)}
 }
 
 // OnConfirmRequest subscribes to the daemon's requests to show a confirmation dialog.
@@ -736,6 +753,10 @@ func (m *Mock) emitLocked() (state.Batch, []func(state.Batch)) {
 		events = append(events, &downexv1.Event{Kind: &downexv1.Event_Tools{Tools: m.toolsStatus()}})
 	}
 	m.toolsChanged = false
+	if m.politeChanged {
+		events = append(events, &downexv1.Event{Kind: &downexv1.Event_Polite{Polite: m.politeStatusLocked()}})
+	}
+	m.politeChanged = false
 	if len(events) == 0 {
 		return nil, nil
 	}

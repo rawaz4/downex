@@ -118,8 +118,11 @@ func runProduct(o options, args []string) error {
 			if n > 1 {
 				b.asked = time.Now()
 			}
-			if gw.View.IsProgress() {
+			switch {
+			case gw.View.IsProgress():
 				return openProgress(a, b, wo)
+			case gw.View.IsConfirm():
+				return openConfirm(a, b, wo)
 			}
 			return openMain(a, b, wo)
 		},
@@ -161,9 +164,12 @@ func runFixture(o options, args []string) error {
 	}
 	defer a.Close()
 	defer letGo() // the window's parts go before the App
-	if view.IsProgress() {
+	switch {
+	case view.IsProgress():
 		_, err = openProgress(a, b, o)
-	} else {
+	case view.IsConfirm():
+		_, err = openConfirm(a, b, o)
+	default:
 		_, err = openMain(a, b, o)
 	}
 	if err == nil {

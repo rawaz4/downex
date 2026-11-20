@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,6 +50,11 @@ func seedDownloads(t *testing.T, db string, recs ...storedRecord) {
 	for i, r := range recs {
 		if err := st.CreateDownload(ctx, r.d); err != nil {
 			t.Fatalf("%s: %v", r.name, err)
+		}
+		if r.d.FileCheck != nil { // written only by SetFileCheck
+			if err := st.SetFileCheck(ctx, r.d.ID, r.d.FileCheck); err != nil {
+				t.Fatalf("%s: %v", r.name, err)
+			}
 		}
 		if r.d.ID != model.DownloadID(i+1) {
 			t.Fatalf("%s: stored as download %d, want %d", r.name, r.d.ID, i+1)
@@ -348,6 +354,15 @@ func storedTable(dir string) []storedRecord {
 		{name: "file-completed", d: &model.Download{Request: model.Request{URL: "https://example.test/g.iso"}, Dir: dir,
 			Filename: "g.iso", Size: 100, State: model.StateCompleted, Mode: model.ModeRanged, Kind: model.KindFile,
 			CompletedAt: time.Date(2026, 10, 29, 1, 0, 0, 0, time.UTC)}},
+		// The file check (docs/DESKTOP-SPEC.md §9): a stored final result and a name stage.
+		{name: "file-disguised", d: &model.Download{Request: model.Request{URL: "https://example.test/m.mp4"}, Dir: dir,
+			Filename: "movie.mp4", Size: 100, State: model.StateCompleted, Mode: model.ModeRanged, Kind: model.KindFile,
+			CompletedAt: time.Date(2026, 10, 29, 1, 0, 0, 0, time.UTC), ServedType: "video/mp4",
+			FileCheck: &model.FileCheck{Level: model.FileCheckDanger, Stage: model.FileCheckStageFinal,
+				Reason: "program_disguised", Content: "pe", Claim: "mp4", Served: "video/mp4"}}},
+		{name: "file-double-extension", d: &model.Download{Request: model.Request{URL: "https://example.test/i"}, Dir: dir,
+			Filename: "invoice.pdf.exe", Size: 100, State: model.StatePaused, Mode: model.ModeRanged, Kind: model.KindFile},
+			segs: []model.Segment{{ID: 0, Start: 0, End: 99, Durable: 10}}},
 	}
 }
 
@@ -407,6 +422,9 @@ func TestLocalViewMatchesDaemon(t *testing.T) {
 			from string
 			v    downloadView
 		}{{"ls", local[id]}, {"info", info[id].downloadView}} {
+			if !reflect.DeepEqual(got.v.FileCheck, want.FileCheck) {
+				t.Errorf("%s: %s without downexd shows file check %+v; downexd: %+v", rec.name, got.from, got.v.FileCheck, want.FileCheck)
+			}
 			if got.v.Size != want.Size || got.v.SizeApprox != want.SizeApprox || got.v.Downloaded != want.Downloaded {
 				t.Errorf("%s: %s without downexd shows size %d (approx %v), downloaded %d; downexd: size %d (approx %v), downloaded %d",
 					rec.name, got.from, got.v.Size, got.v.SizeApprox, got.v.Downloaded, want.Size, want.SizeApprox, want.Downloaded)

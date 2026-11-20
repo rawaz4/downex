@@ -52,11 +52,14 @@ func StatusText(d *downexv1.Download) string {
 		return "Downloading"
 	case stateProbing:
 		// A web page's video: yt-dlp reads the page (SITE-MEDIA-SPEC §5.4).
-		if isMedia(d) && d.GetMedia().GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE {
+		if isSiteDownload(d) {
 			return "Getting video info"
 		}
 		return "Connecting"
 	case stateQueued:
+		if d.GetRenewCheck() { // held while downexd checks the link (DESKTOP-SPEC §10)
+			return "Checking link…"
+		}
 		if p := d.GetQueuePosition(); p > 0 {
 			return "Queued #" + format.Num(float64(p))
 		}
@@ -64,18 +67,91 @@ func StatusText(d *downexv1.Download) string {
 	case statePaused:
 		return "Paused"
 	case stateCompleted:
+		if FileCheckWarns(d) { // still in the Completed filter (DESKTOP-SPEC §9.7)
+			return "Check file"
+		}
 		return "Completed"
 	case stateFailed:
-		if d.GetErrorCode() == "validator_changed" {
+		switch d.GetErrorCode() {
+		case "validator_changed":
 			return "Needs restart"
+		case CodeLinkExpired:
+			return "Link expired"
 		}
 		return "Failed"
 	case stateCanceled:
 		return "Canceled"
 	case stateAwaiting:
+		if d.GetRenewCheck() {
+			return "Checking link…"
+		}
 		return "Waiting for confirmation"
 	}
 	return "Unknown"
+}
+
+// FileCheckTone is how a download's file check is shown (docs/DESKTOP-SPEC.md §9.7).
+type FileCheckTone int
+
+// The file check tones: nothing, the warn ink (CAUTION), the danger ink (DANGER).
+const (
+	FileCheckNone FileCheckTone = iota
+	FileCheckWarn
+	FileCheckFail
+)
+
+// ToneOfFileCheck is the tone of d's file check: DANGER fail, CAUTION warn, else none
+// (a NOTE shows only as the Contents fact).
+func ToneOfFileCheck(d *downexv1.Download) FileCheckTone {
+	switch d.GetFileCheck().GetLevel() {
+	case downexv1.FileCheckLevel_FILE_CHECK_LEVEL_DANGER:
+		return FileCheckFail
+	case downexv1.FileCheckLevel_FILE_CHECK_LEVEL_CAUTION:
+		return FileCheckWarn
+	}
+	return FileCheckNone
+}
+
+// FileCheckWarns reports a file check the window warns about (DANGER or CAUTION).
+func FileCheckWarns(d *downexv1.Download) bool { return ToneOfFileCheck(d) != FileCheckNone }
+
+// FileCheckHeading is the heading of a download's file check note: "This file is not what
+// its name says" (DANGER), "This may not be the file you wanted" (CAUTION), else "".
+func FileCheckHeading(d *downexv1.Download) string {
+	switch ToneOfFileCheck(d) {
+	case FileCheckFail:
+		return "This file is not what its name says"
+	case FileCheckWarn:
+		return "This may not be the file you wanted"
+	}
+	return ""
+}
+
+// ContentsText is the details' and complete view's "Contents" fact: "PNG image · named as
+// JPEG image" ("" when the check says nothing of the content).
+func ContentsText(d *downexv1.Download) string {
+	fc := d.GetFileCheck()
+	c := fc.GetContentLabel()
+	if c == "" {
+		return ""
+	}
+	if claim := fc.GetClaimLabel(); claim != "" && claim != c {
+		return c + " · named as " + claim
+	}
+	return c
+}
+
+// DisguiseText is the Open dialog's description for a download whose file check is DANGER:
+// the summary, a blank line and the detail ("" for any other download).
+func DisguiseText(d *downexv1.Download) string {
+	if !categories.Disguised(d) {
+		return ""
+	}
+	fc := d.GetFileCheck()
+	if fc.GetDetail() == "" {
+		return fc.GetSummary()
+	}
+	return fc.GetSummary() + "\n\n" + fc.GetDetail()
 }
 
 // SizeHint is the size to show before a download is probed: its size, else the requester's
@@ -117,10 +193,58 @@ var errorHints = map[string]string{
 	"encrypted":         "The stream is encrypted or DRM-protected. Downex does not download protected content.",
 	"live":              "The stream is live. Downex downloads only complete (on-demand) streams.",
 	"auth_required":     "The server asks for a user name and password. Add a site login for it, then retry.",
+	CodeLinkExpired: "The link stopped working: it expired, was revoked or now leads to a web page. The data received " +
+		"so far is kept. Give the download a new link, or open its page and download it again: Downex continues it when " +
+		"the new link serves the same file.",
 }
+
+// CodeLinkExpired is the error code of a download whose link stopped working
+// (docs/DESKTOP-SPEC.md §10).
+const CodeLinkExpired = "link_expired"
+
+// linkExpiredNothingKept is the link_expired hint of a download that received nothing.
+const linkExpiredNothingKept = "The link stopped working: it expired, was revoked or now leads to a web page. Give the " +
+	"download a new link, or open its page and download it again."
 
 // ErrorHint explains a failure code ("" for codes without a hint).
 func ErrorHint(code string) string { return errorHints[code] }
+
+// ErrorHintOf explains d's failure: ErrorHint, except that a download whose link expired
+// before it received anything has nothing to keep.
+func ErrorHintOf(d *downexv1.Download) string {
+	if d.GetErrorCode() == CodeLinkExpired && d.GetReceived() <= 0 {
+		return linkExpiredNothingKept
+	}
+	return ErrorHint(d.GetErrorCode())
+}
+
+// LinkExpired reports a failed download whose link stopped working.
+func LinkExpired(d *downexv1.Download) bool {
+	return d.GetState() == stateFailed && d.GetErrorCode() == CodeLinkExpired
+}
+
+// Renewable reports whether "New link…" applies to d (DESKTOP-SPEC §10): a file download
+// that is paused or failed.
+func Renewable(d *downexv1.Download) bool {
+	if d == nil || isMedia(d) {
+		return false
+	}
+	switch d.GetState() {
+	case statePaused, stateFailed:
+		return true
+	}
+	return false
+}
+
+// PageURL is the page d came from when "Open page" can open it: an http or https address
+// ("" otherwise).
+func PageURL(d *downexv1.Download) string {
+	p := d.GetPageUrl()
+	if l := strings.ToLower(p); strings.HasPrefix(l, "https://") || strings.HasPrefix(l, "http://") {
+		return p
+	}
+	return ""
+}
 
 // JoinPath joins a directory and file name with the separator the directory already uses, for
 // display: bidi control characters are made visible (see text.EscapeBidi).
@@ -219,7 +343,7 @@ func RowDescription(d *downexv1.Download, now float64) string {
 // else "Video"), a stream's format ("HLS", "DASH"), else "Media".
 func MediaBadge(d *downexv1.Download) string {
 	m := d.GetMedia()
-	if m.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE {
+	if isSiteInfo(m) {
 		if s := text.TrimJS(m.GetSite()); s != "" {
 			return s
 		}
@@ -256,7 +380,7 @@ func KindLabel(kind categories.FileKind) string {
 // page), else of the final address (else the first). "" when the address does not parse.
 func RowHost(d *downexv1.Download) string {
 	addr := ""
-	if isMedia(d) && d.GetMedia().GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE {
+	if isSiteDownload(d) {
 		addr = d.GetMedia().GetPageUrl()
 	}
 	if addr == "" {
@@ -581,19 +705,24 @@ func ProgressCellOf(d *downexv1.Download) ProgressCell {
 
 // Action is a row's inline action.
 type Action struct {
-	// ID is "resume" or "restart".
+	// ID is "resume", "restart" or "renew".
 	ID    string
 	Label string
 }
 
-// InlineAction is the inline action of a failed row: Retry, Restart… (the file changed), or
-// none (ok false) when retrying cannot help.
+// InlineAction is the inline action of a failed row: Retry, Restart… (the file changed),
+// New link… (the link expired), or none (ok false) when retrying cannot help.
 func InlineAction(d *downexv1.Download) (a Action, ok bool) {
-	if d.GetState() != stateFailed || cannotRetry(d.GetErrorCode()) {
+	if d.GetState() != stateFailed || cannotRetry(d) {
 		return Action{}, false
 	}
-	if d.GetErrorCode() == "validator_changed" {
+	switch d.GetErrorCode() {
+	case "validator_changed":
 		return Action{ID: "restart", Label: "Restart…"}, true
+	case CodeLinkExpired:
+		if !isMedia(d) {
+			return Action{ID: "renew", Label: "New link…"}, true
+		}
 	}
 	return Action{ID: "resume", Label: "Retry"}, true
 }

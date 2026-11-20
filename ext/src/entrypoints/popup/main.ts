@@ -12,15 +12,19 @@ import { mountBrandMarks } from '../../assets/brand';
 import { TRACE_STORAGE_KEY, parseTrace, type TraceEntry } from '../../lib/capture-trace';
 import { HISTORY_STORAGE_KEY, parseHistory, type HandoffRecord } from '../../lib/history';
 import { type FileRowView, MediaPanel, type MediaPanelView, type PopupGroup, type StreamRowInfo } from '../../lib/media-panel';
-import type { AddMediaMessage, PageVideoEntry } from '../../lib/messages';
+import { itemNoun, itemsLeftOutText } from '../../lib/item-strip';
+import type { AddMediaMessage, PageVideoEntry, TabVideoAddMessage } from '../../lib/messages';
+import { HIDE_TITLE, rescueRow, type FailedRow } from '../../lib/rescue';
 import { VIDEO_OPTIONS_KEY, parseVideoOptions, type VideoOptions } from '../../lib/options-form';
-import { errorMessage, type ConnectionStatus } from '../../lib/protocol';
+import { errorMessage, type ConnectionStatus, type PoliteState } from '../../lib/protocol';
 import { RULES_STORAGE_KEY, parseRules, siteHost as hostOfPage, type CaptureRules } from '../../lib/rules';
 import { ask } from '../../lib/runtime';
 import {
+  cleanSiteText,
   connectionLabel,
   daemonLabel,
   fileKind,
+  fileKindOfName,
   type Label,
   offerAddedText,
   recordName,
@@ -30,7 +34,7 @@ import {
   streamFailureText,
   videoFailureText,
 } from '../../lib/ui-format';
-import { VideoPanel, type VideoPanelView } from '../../lib/video-panel';
+import { MP4_NOTE, VideoPanel, type VideoPanelView } from '../../lib/video-panel';
 import {
   addedMark,
   daemonNote,
@@ -41,6 +45,7 @@ import {
   handoffTime,
   hostMissing,
   keepUnits,
+  listNoteExtra,
   offlineView,
   qualityOptions,
   rulesForSiteSwitch,
@@ -109,6 +114,8 @@ const captureEl = byId('capture', HTMLInputElement);
 const captureHintEl = byId('capture-hint', HTMLSpanElement);
 
 const historyEl = byId('history', HTMLOListElement);
+const failedSectionEl = byId('failed-section', HTMLElement);
+const failedEl = byId('failed', HTMLOListElement);
 const historyEmptyEl = byId('history-empty', HTMLParagraphElement);
 const historyScopeEl = byId('history-scope', HTMLSpanElement);
 const traceEl = byId('trace', HTMLOListElement);
@@ -244,9 +251,10 @@ function showCount(el: HTMLElement, n: number): void {
 /** The connection as last drawn (undefined: still checking), and whether it is a protocol mismatch. */
 let connectionNow: Label | undefined;
 let incompatibleNow = false;
-/** The daemon's status as last answered (undefined: being asked), and its active downloads. */
+/** The daemon's status as last answered (undefined: being asked), its active downloads and Polite mode's state. */
 let daemonNow: Label | undefined;
 let activeNow: number | undefined;
+let politeNow: PoliteState | undefined;
 /** A status request is running: "Check again" waits for it. */
 let checking = false;
 
@@ -266,7 +274,7 @@ function renderStatus(): void {
   statusChipEl.dataset.tone = chip.tone;
   // A live region: unchanged text is not written again (it would be read out again).
   if (statusTextEl.textContent !== chip.text) statusTextEl.textContent = chip.text;
-  statusChipEl.title = statusTooltip(connectionNow, daemonNow);
+  statusChipEl.title = statusTooltip(connectionNow, daemonNow, politeNow);
 
   const off = offlineView(state, connectionNow);
   // "Check again" found Downex: the focus goes to the tab instead of a button that is gone.
@@ -316,9 +324,11 @@ async function loadDaemonStatus(): Promise<void> {
     const o = await ask({ type: 'downex:query-status' });
     daemonNow = daemonLabel(o);
     activeNow = o.ok && o.value.running ? o.value.active : undefined;
+    politeNow = o.ok && o.value.running ? o.value.polite : undefined;
   } catch (e) {
     daemonNow = { text: `Daemon status unavailable: ${errorMessage(e)}`, tone: 'error' };
     activeNow = undefined;
+    politeNow = undefined;
   } finally {
     checking = false;
   }
@@ -350,7 +360,7 @@ copyCommandBtn.addEventListener('click', () => {
 });
 
 optionsBtn.addEventListener('click', () => {
-  void browser.runtime.openOptionsPage().then(() => window.close());
+  void browser.runtime.openOptionsPage().then(() => window.close(), () => undefined);
 });
 
 // --- Downloads tab: recent hand-offs and the capture log ---------------------------------------
@@ -387,6 +397,86 @@ function renderHistory(list: readonly HandoffRecord[]): void {
     }),
   );
 }
+
+// --- Downloads tab: downloads that failed in the browser (BROWSER-SPEC §6) -------------------
+
+/** The rows last shown; a row the user acted on shows its flow's state until the answer. */
+let failedRows: FailedRow[] = [];
+let failedTimer: ReturnType<typeof setTimeout> | undefined;
+
+function renderFailed(rows: readonly FailedRow[]): void {
+  failedRows = [...rows];
+  failedSectionEl.hidden = rows.length === 0;
+  failedEl.replaceChildren(
+    ...rows.map((row) => {
+      const view = rescueRow(row);
+      const li = document.createElement('li');
+      li.className = 'hrow';
+      const names = document.createElement('div');
+      names.className = 'names';
+      const name = span('fname clamp', row.name);
+      name.title = row.name;
+      const line = span(`hline tone-${view.tone}`, view.line);
+      line.setAttribute('role', 'status');
+      names.append(name, line);
+      const acts = span('hacts');
+      if (view.button) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn sm primary';
+        b.textContent = view.button;
+        b.disabled = view.busy || view.action === 'none';
+        b.addEventListener('click', () => void finishFailed(row, view.action === 'from-start'));
+        acts.append(b);
+      }
+      if (row.state?.phase !== 'checking' && row.state?.phase !== 'done') {
+        const hide = document.createElement('button');
+        hide.type = 'button';
+        hide.className = 'icon-btn sm';
+        hide.title = HIDE_TITLE;
+        hide.setAttribute('aria-label', `${HIDE_TITLE}: ${row.name}`);
+        hide.textContent = '×';
+        hide.addEventListener('click', () => {
+          void ask({ type: 'downex:hide-failed', downloadId: row.downloadId }).then(loadFailed, loadFailed);
+        });
+        acts.append(hide);
+      }
+      if (acts.childElementCount > 0) names.append(acts);
+      li.append(fileTile(tileKind(fileKindOfName(row.name))), names);
+      return li;
+    }),
+  );
+  // A finished row leaves the card after a few seconds.
+  if (failedTimer !== undefined) clearTimeout(failedTimer);
+  failedTimer = rows.some((r) => r.state?.phase === 'done') ? setTimeout(() => void loadFailed(), 5_500) : undefined;
+}
+
+async function loadFailed(): Promise<void> {
+  try {
+    const r = await ask({ type: 'downex:failed-downloads' });
+    renderFailed(r.available ? r.items : []);
+  } catch {
+    renderFailed([]);
+  }
+}
+
+async function finishFailed(row: FailedRow, fromStart: boolean): Promise<void> {
+  renderFailed(failedRows.map((r) => (r.downloadId === row.downloadId ? { ...r, state: { phase: 'checking' } } : r)));
+  try {
+    const r = await ask({ type: 'downex:finish-download', downloadId: row.downloadId, ...(fromStart ? { fromStart } : {}) });
+    if (r.row) renderFailed(failedRows.map((x) => (x.downloadId === row.downloadId ? r.row! : x)));
+  } catch {
+    // The background stopped mid-request: the reload below shows the row's real state.
+  } finally {
+    await loadFailed();
+  }
+}
+
+// The browser's own list changed (a download failed, resumed or was removed).
+browser.downloads?.onChanged.addListener((delta) => {
+  if (delta.state || delta.paused || delta.error) void loadFailed();
+});
+browser.downloads?.onErased.addListener(() => void loadFailed());
 
 /** A capture log step's time, to the second (diagnostics). */
 function traceTime(ts: number): string {
@@ -461,7 +551,6 @@ async function loadVideoOptions(): Promise<void> {
   } catch {
     videoOptions = parseVideoOptions(undefined);
   }
-  videoSignInAllowed = videoOptions.useSignInForVideos;
   renderSiteButtons();
   updateFind();
 }
@@ -582,7 +671,6 @@ browser.storage.onChanged.addListener((changes, area) => {
   const video = changes[VIDEO_OPTIONS_KEY];
   if (area === 'local' && video) {
     videoOptions = parseVideoOptions(video.newValue);
-    videoSignInAllowed = videoOptions.useSignInForVideos;
     renderSiteButtons();
     updateFind();
   }
@@ -624,6 +712,7 @@ findBtn.addEventListener('click', () => void findVideo());
 void loadActiveTab().then(() => Promise.all([loadRules(), loadTabPause(), loadVideoOptions(), loadMedia()]));
 void loadState().then(loadDaemonStatus);
 void loadTrace();
+void loadFailed();
 historyScopeEl.textContent = browser.storage.session ? 'This session' : '';
 
 // A page video is a card: a poster (never the page's own image), its title on two lines, the
@@ -643,6 +732,12 @@ interface VideoRowDom {
   quality: SelectMenu;
   audio: SelectMenu;
   audioRow: HTMLDivElement;
+  /** Cards only: the video of a page with several (SITE-MEDIA-SPEC §3.12) and the note on its other items. */
+  items?: SelectMenu;
+  itemsRow?: HTMLDivElement;
+  /** The items row's label: "Video", or "Track" on an audio page. */
+  itemsLabel?: HTMLElement;
+  itemsNote?: HTMLSpanElement;
   /** Streams only: "Choose quality" and the part it opens. */
   choose?: HTMLButtonElement;
   picker?: HTMLDivElement;
@@ -689,17 +784,6 @@ const videoRows = new Map<string, VideoRow>();
 /** … and stream rows by `stream:<url>`. */
 const streamRows = new Map<string, VideoRow>();
 let rowIds = 0;
-
-/** "Send my sign-in cookies when a video needs it", as stored (read when the popup opens). */
-let videoSignInAllowed = false;
-
-async function allowVideoSignIn(): Promise<void> {
-  const got = await browser.storage.local.get(VIDEO_OPTIONS_KEY);
-  await browser.storage.local.set({
-    [VIDEO_OPTIONS_KEY]: { ...parseVideoOptions(got[VIDEO_OPTIONS_KEY]), useSignInForVideos: true },
-  });
-  videoSignInAllowed = true;
-}
 
 /** The user asked for a row's qualities: Downex gets them now (VIDEO-DETECT-SPEC §6.1 4). */
 function requestQualities(rows: Map<string, VideoRow>, key: string): void {
@@ -785,32 +869,48 @@ function videoRowDom(key: string, rows: Map<string, VideoRow>, stream: boolean):
     const act = document.createElement('div');
     act.className = 'vact';
     act.append(quality.root, download);
-    li.append(poster, head, act, audioRow, status, action);
+    // A page with several videos: which one (VIDEO-DETECT-SPEC §5.2 "Several videos").
+    const items = new SelectMenu({
+      id: `row-${id}-item`,
+      ariaLabel: 'Video of this page',
+      ariaDescribedby: name.id,
+      className: 'grow sm-26',
+      onChange: (v) => rows.get(key)?.panel.chooseItem(v),
+    });
+    const itemsRow = document.createElement('div');
+    itemsRow.className = 'audio-row items-row';
+    itemsRow.hidden = true;
+    const itemsLabel = span('pick-label', 'Video');
+    itemsRow.append(itemsLabel, items.root);
+    const itemsNote = span('vsub items-note');
+    itemsNote.hidden = true;
+    li.append(poster, head, itemsRow, itemsNote, act, audioRow, status, action);
     dom.duration = duration;
+    Object.assign(dom, { items, itemsRow, itemsNote, itemsLabel });
   }
 
   download.addEventListener('click', () => void rows.get(key)?.panel.download());
-  action.addEventListener('click', () => {
-    const r = rows.get(key);
-    if (r?.view.action?.kind === 'allow-sign-in') void r.panel.allowSignIn();
-    else r?.panel.retry();
-  });
+  action.addEventListener('click', () => rows.get(key)?.panel.retry());
   return dom;
 }
 
 function drawStatus(row: VideoRow): void {
   const { dom, view, subject } = row;
   // The status shows what concerns the row: getting the info, sending, sent and refusals; the
-  // list's own note ("Every quality is saved as one MP4 file.") is said by the select.
+  // list's own note ("Every quality is saved as one MP4 file.") is said by the select, and what
+  // the site's answer adds to it (the sign-in used, the browser fetch) is shown as a note.
   const shown = row.expanded || !subject.stream || view.phase === 'sending' || view.phase === 'sent' || view.phase === 'error';
-  const status = shown && !(view.phase === 'list' && view.status?.tone === 'ok') ? view.status : undefined;
+  const listNote = view.phase === 'list' && view.status?.tone === 'ok';
+  const extra = listNote && view.status ? listNoteExtra(view.status.text, MP4_NOTE) : '';
+  const status = !shown ? undefined : extra ? { text: extra } : listNote ? undefined : view.status;
   dom.status.hidden = status === undefined;
   if (status) {
     // Work in progress spins (neutral); an accepted hand-off is marked as in the history
-    // (saved at once: mint tray; waiting for confirmation: blue clock).
-    let tone: string = status.tone;
-    let markKind: GlyphName | 'spinner';
-    if (view.phase === 'probing' || view.phase === 'sending') markKind = 'spinner';
+    // (saved at once: mint tray; waiting for confirmation: blue clock); a list's note has no mark.
+    let tone: string = 'tone' in status ? status.tone : 'info';
+    let markKind: GlyphName | 'spinner' | 'note';
+    if (!('tone' in status)) markKind = 'note';
+    else if (view.phase === 'probing' || view.phase === 'sending') markKind = 'spinner';
     else if (view.phase === 'sent' && status.tone === 'ok') ({ tone, glyph: markKind } = addedMark(status.text));
     else markKind = status.tone === 'ok' ? 'sent' : status.tone === 'warn' ? 'warn' : 'failed';
     dom.status.className = `result tone-${tone}`;
@@ -818,18 +918,19 @@ function drawStatus(row: VideoRow): void {
     // info…" are beside it, shown but not announced every second.
     if (dom.status.dataset.mark !== markKind || dom.status.firstChild === null) {
       dom.status.dataset.mark = markKind;
-      dom.status.replaceChildren(markKind === 'spinner' ? spinner() : glyph(markKind), dom.statusText, dom.statusElapsed);
+      const mark = markKind === 'note' ? [] : [markKind === 'spinner' ? spinner() : glyph(markKind)];
+      dom.status.replaceChildren(...mark, dom.statusText, dom.statusElapsed);
     }
     const text = sentence(status.text);
     if (dom.statusText.textContent !== text) dom.statusText.textContent = text;
-    const elapsed = status.elapsed ? ` ${status.elapsed}` : '';
+    const elapsed = 'elapsed' in status && status.elapsed ? ` ${status.elapsed}` : '';
     if (dom.statusElapsed.textContent !== elapsed) dom.statusElapsed.textContent = elapsed;
   }
   dom.action.hidden = view.action === undefined;
   const actionKey = view.action ? `${view.action.kind}\n${view.action.text}` : '';
   if (dom.action.dataset.key !== actionKey) {
     dom.action.dataset.key = actionKey;
-    dom.action.replaceChildren(...(view.action ? [glyph(view.action.kind === 'allow-sign-in' ? 'key' : 'refresh'), view.action.text] : []));
+    dom.action.replaceChildren(...(view.action ? [glyph('refresh'), view.action.text] : []));
   }
 }
 
@@ -871,11 +972,37 @@ function drawVideoRow(row: VideoRow): void {
     const facts = qualities > 0 ? [`${qualities} ${qualities === 1 ? 'quality' : 'qualities'}`, best ? `best ${best}` : ''] : [subject.host];
     dom.sub.textContent = ['Stream', ...facts].filter((p) => p !== '').join(' · ');
   } else {
-    const best = view.rows[0]?.quality ?? '';
-    dom.sub.textContent = videoSubline(subject.tag, subject.embedded, best);
+    const best = view.rows[0]?.audio ? '' : (view.rows[0]?.quality ?? '');
+    dom.sub.textContent = videoSubline(subject.tag, subject.embedded, best, view.fileType);
     const dur = durationText(row.panel.info?.durationMs ?? 0);
     dom.duration!.hidden = dur === '';
     dom.duration!.textContent = dur;
+  }
+
+  if (dom.items && dom.itemsRow && dom.itemsNote) {
+    const items = view.items;
+    dom.itemsRow.hidden = !items || items.options.length < 2;
+    if (items && items.options.length > 1) {
+      dom.items.setOptions(
+        items.options.map((it, i) => {
+          const o: { value: string; label: string; detail?: string; meta?: string; title?: string } = { value: it.id, label: `${i + 1} of ${items.options.length}` };
+          const t = cleanSiteText(it.title.trim());
+          if (t) {
+            o.detail = t;
+            o.title = t;
+          }
+          if (it.durationMs > 0) o.meta = durationText(it.durationMs);
+          return o;
+        }),
+        items.options[items.index]?.id ?? '',
+      );
+      dom.items.setDisabled(view.busy || view.phase === 'sent');
+    }
+    const note = items ? itemsLeftOutText(items.leftOut, items.audio) : '';
+    const noun = itemNoun(items?.audio);
+    if (dom.itemsLabel && dom.itemsLabel.textContent !== noun) dom.itemsLabel.textContent = noun;
+    dom.itemsNote.hidden = note === '';
+    if (dom.itemsNote.textContent !== note) dom.itemsNote.textContent = note;
   }
 
   if (subject.refusal) {
@@ -895,7 +1022,9 @@ function drawVideoRow(row: VideoRow): void {
 
   const listed = view.rows.length > 0;
   // The standard names, one per class ("4K (2160p)", then "AV1 · 1.9 GB"); the picture as tooltip.
-  dom.quality.setOptions(listed ? qualityOptions(view.rows) : [], listed ? view.pick.video : '');
+  // An audio page's rows are its audio tracks (SITE-MEDIA-SPEC §3.13): the pick's audio is the chosen row.
+  const chosen = view.rows[0]?.audio ? view.pick.audio : view.pick.video;
+  dom.quality.setOptions(listed ? qualityOptions(view.rows) : [], listed ? chosen : '');
   dom.quality.setBusy(view.phase === 'probing');
   dom.quality.setDisabled(view.phase === 'sending' || view.phase === 'sent');
   dom.audioRow.hidden = view.audio === undefined;
@@ -974,6 +1103,7 @@ function dropRow(rows: Map<string, VideoRow>, key: string, row: VideoRow): void 
   row.panel.close();
   row.dom.quality.destroy();
   row.dom.audio.destroy();
+  row.dom.items?.destroy();
   rows.delete(key);
 }
 
@@ -984,11 +1114,14 @@ function newVideoRow(tabId: number, entry: PageVideoEntry, found: boolean): Vide
     pageSubject(entry),
     (render) =>
       new VideoPanel({
-        probe: () => ask({ type: 'downex:tab-video-probe', tabId, key }),
-        add: (pick) => ask({ type: 'downex:tab-video-add', tabId, key, videoTrack: pick.video, audioTrack: pick.audio }),
-        allowSignIn: allowVideoSignIn,
-        signInAllowed: () => videoSignInAllowed,
+        probe: (entryId) => ask(entryId ? { type: 'downex:tab-video-probe', tabId, key, entryId } : { type: 'downex:tab-video-probe', tabId, key }),
+        add: (pick, entryId) => {
+          const msg: TabVideoAddMessage = { type: 'downex:tab-video-add', tabId, key, videoTrack: pick.video, audioTrack: pick.audio };
+          if (entryId) msg.entryId = entryId;
+          return ask(msg);
+        },
         render,
+        recommend: entry.site !== 'YouTube',
       }),
     found,
   );

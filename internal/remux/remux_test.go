@@ -718,3 +718,21 @@ func boolToFlag(b bool) uint32 {
 	}
 	return 0
 }
+
+// AV1 and VP9 video in fragmented MP4 (what some social sites' players fetch,
+// docs/SITE-MEDIA-SPEC.md §2.9) joins with AAC audio: the sample entries and their
+// configuration boxes are carried as they are. This is the gate that lets a played save
+// offer those files.
+func TestJoinAV1AndVP9(t *testing.T) {
+	for _, codec := range []string{"av01", "vp09"} {
+		video := &fxTrack{video: true, codec: codec, timescale: 90000, perFrag: 30, samples: videoSamples(90, 3000, 4)}
+		audio := &fxTrack{timescale: 48000, perFrag: 47, samples: audioSamples(141, 5)}
+		dir := t.TempDir()
+		out := mustAssemble(t, []Input{video.writeInput(t, dir, "v"), audio.writeInput(t, dir, "a")}, ContainerMP4)
+		f := checkProgressive(t, out, []expTrack{expect(t, video), expect(t, audio)})
+		stsd := f.Moov.Traks[0].Mdia.Minf.Stbl.Stsd
+		if len(stsd.Children) != 1 || stsd.Children[0].Type() != codec {
+			t.Fatalf("%s: sample entry %v", codec, stsd.Children)
+		}
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -230,8 +231,27 @@ func TestFetchServerWithoutRanges(t *testing.T) {
 	if resp.Validators.IfRange() != "" {
 		t.Errorf("IfRange() = %q, want none for a weak tag without Last-Modified", resp.Validators.IfRange())
 	}
-	if resp.Filename != "report.pdf" {
-		t.Errorf("Filename = %q", resp.Filename)
+	if resp.Filename != "report.pdf" || resp.FilenameControls {
+		t.Errorf("Filename = %q, controls %v", resp.Filename, resp.FilenameControls)
+	}
+}
+
+// TestFetchFilenameControls: a Content-Disposition name with a right-to-left override
+// is sanitised, and the response says the override was there (DESKTOP-SPEC §9.5 N1).
+func TestFetchFilenameControls(t *testing.T) {
+	ts := startServer(t, kindHTTP1, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename*=UTF-8''invoice%E2%80%AEfdp.exe`)
+		w.Header().Set("Content-Type", "Application/PDF; charset=binary")
+		_, _ = w.Write([]byte("x"))
+	}))
+	slot := newTestSlot(t, DefaultHTTPOptions(), ts)
+	resp, err := slot.Fetch(testCtx(t), RangeRequest{Request: model.Request{URL: ts.URL + "/dl"}, End: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBody(t, resp)
+	if resp.Filename != "invoicefdp.exe" || !resp.FilenameControls || resp.ContentType != "application/pdf" {
+		t.Fatalf("Filename %q controls %v type %q", resp.Filename, resp.FilenameControls, resp.ContentType)
 	}
 }
 
@@ -370,6 +390,9 @@ func TestFetchInvalidRequests(t *testing.T) {
 		{"header injection", RangeRequest{Request: model.Request{URL: ts.URL, Headers: http.Header{"Cookie": {"a=1\r\nX-Evil: 1"}}}, End: -1}},
 		{"bad header name", RangeRequest{Request: model.Request{URL: ts.URL, Headers: http.Header{"Bad Name": {"x"}}}, End: -1}},
 		{"garbage if-range", RangeRequest{Request: model.Request{URL: ts.URL}, End: -1, IfRange: "not-a-validator"}},
+		{"whole from an offset", RangeRequest{Request: model.Request{URL: ts.URL}, Start: 5, End: -1, Whole: true}},
+		{"whole and bounded", RangeRequest{Request: model.Request{URL: ts.URL}, End: 9, Whole: true}},
+		{"whole with if-range", RangeRequest{Request: model.Request{URL: ts.URL}, End: -1, Whole: true, IfRange: `"tag"`}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -386,6 +409,38 @@ func TestFetchInvalidRequests(t *testing.T) {
 	//nolint:staticcheck // a nil context is exactly what is being tested
 	if _, err := slot.Fetch(nil, RangeRequest{Request: model.Request{URL: ts.URL}, End: -1}); !errors.Is(err, ErrInvalidRequest) {
 		t.Errorf("nil context: err = %v", err)
+	}
+}
+
+// A Whole request carries no Range header, even one the caller set, and still asks for
+// identity; the response's Content-Encoding is reported as ContentCoding.
+func TestFetchWholeAndContentCoding(t *testing.T) {
+	for _, kind := range allKinds {
+		t.Run(kind, func(t *testing.T) {
+			var ranges, encodings []string
+			ts := startServer(t, kind, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ranges = append(ranges, r.Header.Get("Range"))
+				encodings = append(encodings, r.Header.Get("Accept-Encoding"))
+				w.Header().Add("Content-Encoding", "GZIP, identity")
+				w.Header().Add("Content-Encoding", "br")
+				_, _ = w.Write([]byte("coded"))
+			}))
+			slot := newTestSlot(t, DefaultHTTPOptions(), ts)
+			hdr := http.Header{"Range": {"bytes=1-2"}, "Accept-Encoding": {"gzip"}}
+			for _, whole := range []bool{true, false} {
+				resp, err := slot.Fetch(testCtx(t), RangeRequest{Request: model.Request{URL: ts.URL, Headers: hdr}, End: -1, Whole: whole})
+				if err != nil {
+					t.Fatal(err)
+				}
+				readBody(t, resp)
+				if !slices.Equal(resp.ContentCoding, []string{"gzip", "br"}) {
+					t.Errorf("ContentCoding = %q, want [gzip br]", resp.ContentCoding)
+				}
+			}
+			if !slices.Equal(ranges, []string{"", "bytes=0-"}) || !slices.Equal(encodings, []string{"identity", "identity"}) {
+				t.Errorf("server saw Range %q, Accept-Encoding %q", ranges, encodings)
+			}
+		})
 	}
 }
 

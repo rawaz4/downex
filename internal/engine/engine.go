@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -239,7 +240,9 @@ func (e *Engine) againName(ctx context.Context, d *model.Download, replace bool)
 
 func resetRemote(d *model.Download) {
 	d.Mode, d.Size, d.Validators, d.FinalURL, d.Error = model.ModeUnknown, -1, model.Validators{}, "", ""
-	d.CompletedAt = time.Time{}
+	d.CompletedAt, d.ServedType, d.RemoteName = time.Time{}, "", ""
+	// Bytes adopted from a partial file (§7.4) are gone once the download starts over.
+	d.RescuedBytes = 0
 }
 
 func (e *Engine) runOnce(ctx, sctx context.Context, d *model.Download, lim throttle, onProgress func(Progress)) error {
@@ -265,7 +268,7 @@ func (e *Engine) fresh(ctx, sctx context.Context, d *model.Download, lim throttl
 	// that worker's own context: cancelling the worker (stall) must abort its reads.
 	pctx, pcancel := context.WithCancel(ctx)
 	f := e.tf.NewSlot()
-	resp, err := e.probe(pctx, f, requestFor(d.Request))
+	resp, err := e.probe(pctx, f, requestFor(d.Request), isHTMLFile(d))
 	if err != nil {
 		pcancel()
 		f.Close()
@@ -282,12 +285,19 @@ func (e *Engine) fresh(ctx, sctx context.Context, d *model.Download, lim throttl
 	if err != nil {
 		return abort(err)
 	}
+	d.ServedType = servedType(resp.ContentType)
+	// The server's own name for the file, before any variant: a new link for this
+	// download is matched against it (§7.3).
+	remote, remoteControls := chooseName(resp, d.Request.URL)
+	d.RemoteName = remote
 	if d.Filename == "" {
-		name, err := e.reserve(ctx, d.Dir, chooseName(resp, d.Request.URL), d.ID, false)
+		chosen, controls := remote, remoteControls
+		name, err := e.reserve(ctx, d.Dir, chosen, d.ID, false)
 		if err != nil {
 			return abort(err)
 		}
 		d.Filename = name
+		d.NameControls = d.NameControls || controls
 	}
 	file, err := e.openPart(ctx, d)
 	if err != nil {
@@ -488,17 +498,25 @@ func preallocate(f partFile, size int64) error {
 	return nil
 }
 
+// servedType is a Content-Type's media type as the record stores it (ServedType): lower
+// case, without parameters.
+func servedType(ct string) string {
+	ct, _, _ = strings.Cut(ct, ";")
+	return strings.ToLower(strings.TrimSpace(ct))
+}
+
 // chooseName is the Content-Disposition filename, else the last segment of the final
-// URL, sanitised for Windows and Linux (§2.5).
-func chooseName(resp *transport.Response, requestURL string) string {
+// URL, sanitised for Windows and Linux (§2.5). controls reports that the name before
+// sanitising held hidden text-direction characters (docs/DESKTOP-SPEC.md §9.5 N1).
+func chooseName(resp *transport.Response, requestURL string) (name string, controls bool) {
 	if resp.Filename != "" {
-		return transport.SanitizeFilename(resp.Filename)
+		return transport.SanitizeFilename(resp.Filename), resp.FilenameControls
 	}
 	u := resp.FinalURL
 	if u == "" {
 		u = requestURL
 	}
-	return transport.FilenameFromURL(u)
+	return transport.FilenameFromURL(u), transport.HiddenControls(transport.RawFilenameFromURL(u))
 }
 
 // requestFor prepares the caller's request for range fetches: range-related and
@@ -550,6 +568,29 @@ func (e *Engine) penalizeHost(host string, limit int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.hosts[host] = hostPenalty{limit: max(limit, 1), until: e.clock.Now().Add(e.opts.HostPenaltyTTL)}
+}
+
+// HostPenalized reports whether a download host named hostname (lower case, without a
+// port) has an active connection penalty (§10: a cap lowered after 429/503/421 or
+// refused connections). Polite mode sends no TCP probes to its address then, which the
+// server would count as connections (docs/POLITE-SPEC.md rule 4).
+func (e *Engine) HostPenalized(hostname string) bool {
+	now := e.clock.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for host, p := range e.hosts {
+		if now.After(p.until) {
+			continue
+		}
+		name := host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			name = h
+		}
+		if strings.EqualFold(strings.Trim(name, "[]"), hostname) {
+			return true
+		}
+	}
+	return false
 }
 
 // hostLimit returns the current lowered limit for host, or 0 when there is none.

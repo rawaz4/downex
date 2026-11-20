@@ -220,6 +220,7 @@ func (a *app) report(ctx context.Context, st store.Store, id model.DownloadID, o
 		speed := int64(float64(fetched) / max(elapsed.Seconds(), 1e-3))
 		fmt.Fprintf(a.stdout, "Saved %s (%s in %s, %s/s)\n",
 			printable(filepath.Join(d.Dir, d.Filename)), formatBytes(d.Size), formatDuration(elapsed), formatBytes(speed))
+		a.checkCompleted(sctx, st, d, o.dbPath)
 		return nil
 
 	case interrupted(ctx, runErr):
@@ -248,6 +249,20 @@ func (a *app) report(ctx context.Context, st store.Store, id model.DownloadID, o
 		} else {
 			a.con.printf("To discard the saved data and download the file again from the beginning, run:\n  %s\n",
 				resumeCommand(id, o.dbFlag, "--restart", "--local"))
+		}
+		return silentError{runErr}
+
+	case errors.Is(runErr, engine.ErrLinkExpired):
+		a.con.printf("downex: error: download %d failed: %v\n", id, runErr)
+		a.con.printf("The link stopped working (it expired, was revoked or leads to a web page).")
+		if loadErr == nil && dlview.Received(d, segs) > 0 {
+			a.con.printf(" Its progress (%s) is kept.", keptText(d.Size, dlview.Received(d, segs)))
+		}
+		a.con.printf("\nGive it a new link with:\n  %s\n", idCommand("renew", id, o.dbFlag, "<new-url>", "--local"))
+		if loadErr == nil {
+			if p := dlview.PageURL(d); p != "" {
+				a.con.printf("The page it came from: %s\n", printable(p))
+			}
 		}
 		return silentError{runErr}
 
@@ -315,7 +330,13 @@ func describeTarget(d *model.Download, saved int64) string {
 
 // resumeCommand returns the command line that resumes id, repeating --db if it was set.
 func resumeCommand(id model.DownloadID, dbFlag string, extra ...string) string {
-	parts := append([]string{"downex", "resume", strconv.FormatInt(int64(id), 10)}, extra...)
+	return idCommand("resume", id, dbFlag, extra...)
+}
+
+// idCommand returns the command line "downex <verb> <id> extra...", repeating --db if it
+// was set.
+func idCommand(verb string, id model.DownloadID, dbFlag string, extra ...string) string {
+	parts := append([]string{"downex", verb, strconv.FormatInt(int64(id), 10)}, extra...)
 	if dbFlag != "" {
 		if abs, err := filepath.Abs(dbFlag); err == nil {
 			dbFlag = abs

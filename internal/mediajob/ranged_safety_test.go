@@ -170,8 +170,8 @@ func fullVolume() error {
 // A volume that fills while the tracks are joined fails the job with ErrDiskFull (the
 // daemon's disk_full), for RunRanged and Run alike, and leaves no output.
 func TestDiskFullWhileAssembling(t *testing.T) {
-	full := func(ctx context.Context, in []remux.Input, out string) (string, error) {
-		return "", fmt.Errorf("remux: write output: %w", &fs.PathError{Op: "write", Path: out, Err: fullVolume()})
+	full := func(ctx context.Context, in []remux.Input, out string, _ remux.Window) (remux.Result, error) {
+		return remux.Result{}, fmt.Errorf("remux: write output: %w", &fs.PathError{Op: "write", Path: out, Err: fullVolume()})
 	}
 	s := newSiteServer(t)
 	sel, _, _ := pairSelection(t, s, "/")

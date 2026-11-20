@@ -325,6 +325,34 @@ export interface HandoffTarget {
   /** Bytes; undefined, 0 or negative when unknown. */
   size?: number;
   startPaused?: boolean;
+  /**
+   * The page the link was found on (top page, not a frame); `referrer` stands in when
+   * missing. Sent as `pageUrl` (DESKTOP-SPEC §10) only when pageAddress accepts it.
+   */
+  pageUrl?: string;
+}
+
+/** Longest page address sent (the daemon's limit). */
+export const MAX_PAGE_URL_BYTES = 32 * 1024;
+
+/**
+ * A page address as `add` carries it: http or https, without user name, password or fragment,
+ * at most MAX_PAGE_URL_BYTES; undefined for anything else.
+ */
+export function pageAddress(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+  u.username = '';
+  u.password = '';
+  u.hash = '';
+  const href = u.href;
+  return new TextEncoder().encode(href).length <= MAX_PAGE_URL_BYTES ? href : undefined;
 }
 
 export interface CookieLike {
@@ -443,5 +471,7 @@ export async function buildAddFields(target: HandoffTarget, deps: BuildAddDeps):
   if (target.mime) fields.mime = target.mime;
   if (target.size !== undefined && Number.isSafeInteger(target.size) && target.size > 0) fields.size = target.size;
   if (target.startPaused) fields.startPaused = true;
+  const page = pageAddress(target.pageUrl) ?? pageAddress(target.referrer);
+  if (page) fields.pageUrl = page;
   return { ok: true, value: fields };
 }

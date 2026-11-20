@@ -117,6 +117,7 @@ func NewSession(o SessionOptions) *Session {
 	}
 	s.confirm = NewConfirmations(s.view, log)
 	s.confirm.Request(ConfirmArgs(o.Args))
+	s.confirm.RequestRenew(RenewArgs(o.Args))
 	return s
 }
 
@@ -166,9 +167,12 @@ func (s *Session) Start(emit func(*downexv1.WatchResponse)) {
 	}
 	b := &Bridge{Daemon: s.daemon, IDs: ids, Emit: emit, Log: s.log, Min: s.minBackoff, Max: s.maxBackoff}
 	s.stop = b.Start(s.ctx)
-	if s.view.IsProgress() {
+	switch {
+	case s.view.IsProgress():
 		s.log.Info("progress window started", "version", s.version, "download", s.view.Progress)
-	} else {
+	case s.view.IsConfirm():
+		s.log.Info("confirm window started", "version", s.version, "download", s.view.Confirm)
+	default:
 		s.log.Info("window started", "version", s.version)
 	}
 }

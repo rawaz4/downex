@@ -2,6 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BROWSER_FETCH_NOTE } from './ui-format';
 import { type AddedResult, failure, type Outcome, type VideoInfoResult, type VideoTrack } from './protocol';
 import {
   cleanSiteText,
@@ -57,14 +58,12 @@ function setup(probeAnswer: Outcome<VideoInfoResult> = { ok: true, value: INFO }
   const picks: TrackPick[] = [];
   let addAnswer: Outcome<AddedResult> = { ok: true, value: { type: 'added', downloadId: 4, awaiting: true } };
   const probe = vi.fn(async () => probeAnswer);
-  const allowSignIn = vi.fn(async () => undefined);
   const overlay = new VideoOverlay(document, {
     probe,
     add: async (pick) => {
       picks.push(pick);
       return addAnswer;
     },
-    allowSignIn,
     isTrusted: (e) => trusted.has(e),
     ...extra,
   });
@@ -78,7 +77,7 @@ function setup(probeAnswer: Outcome<VideoInfoResult> = { ok: true, value: INFO }
   const key = (el: Element, k: string) => el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, composed: true }));
   const rows = () => [...overlay.panelEl.querySelectorAll<HTMLButtonElement>('button.dx-row')];
   const status = () => overlay.panelEl.querySelector('.dx-status')?.textContent ?? '';
-  return { player, host, shadow, overlay, picks, probe, allowSignIn, click, key, rows, status, answerAdd: (o: Outcome<AddedResult>) => (addAnswer = o) };
+  return { player, host, shadow, overlay, picks, probe, click, key, rows, status, answerAdd: (o: Outcome<AddedResult>) => (addAnswer = o) };
 }
 
 beforeEach(() => {
@@ -244,6 +243,38 @@ describe('VideoOverlay', () => {
     expect(action.querySelector('svg')).not.toBeNull();
   });
 
+  it('keeps the whole panel inside a small embedded player, over its button', async () => {
+    const { overlay, click, shadow } = setup();
+    const rect = (top: number, h: number) => ({ width: 120, height: h, top, left: 280, right: 400, bottom: top + h, x: 280, y: top, toJSON: () => ({}) });
+    overlay.button.getBoundingClientRect = () => rect(56, 32);
+    const height = (h: number) => Object.defineProperty(window, 'innerHeight', { value: h, configurable: true });
+    const before = window.innerHeight;
+    try {
+      // 400×225: under the button only 113 px would be left, and nothing past the frame can be seen
+      // (the popover cannot draw outside it), so the panel goes over the button, to the frame's bottom.
+      height(225);
+      click(overlay.button);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(overlay.panelEl.style.top).toBe('8px');
+      expect(overlay.panelEl.style.maxHeight).toBe('209px');
+      expect(overlay.button.dataset.covered).toBe('true');
+      expect(OVERLAY_HOST_CSS).toContain(".dx-button[data-covered='true'] { visibility: hidden; }");
+      // Closed, the button is shown again before the focus returns to it.
+      overlay.close(true);
+      expect(overlay.button.dataset.covered).toBeUndefined();
+      expect(shadow.activeElement).toBe(overlay.button);
+      // A taller frame keeps it under the button, never past the frame's bottom.
+      height(720);
+      click(overlay.button);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(overlay.panelEl.style.top).toBe('96px');
+      expect(overlay.panelEl.style.maxHeight).toBe('616px');
+      expect(overlay.button.dataset.covered).toBeUndefined();
+    } finally {
+      height(before);
+    }
+  });
+
   it('moves between rows with Up and Down, and closes on Esc with the focus back on the button', async () => {
     const { overlay, click, key, rows, shadow } = setup();
     click(overlay.button);
@@ -346,32 +377,50 @@ describe('VideoOverlay', () => {
     expect(status.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('offers "Try again" after auth_required when the browser sign-in is already allowed', async () => {
-    const { overlay, click, allowSignIn, probe } = setup(failure('rejected', 'auth_required: the site asks to sign in', 'auth_required'), {
-      signInAllowed: () => true,
-    });
+  it('offers "Try again" after auth_required when the sign-in was used and the site still refused', async () => {
+    const refused = failure('rejected', 'auth_required: the site asks to sign in', 'auth_required');
+    refused.error.signIn = { domain: 'youtube.com', state: 'used' };
+    const { overlay, click, probe, status } = setup(refused);
     click(overlay.button);
     await vi.advanceTimersByTimeAsync(0);
+    expect(status()).toBe('Downex asked again with this browser’s cookies for youtube.com, but the site still refused. Sign in to youtube.com in this browser, then try again.');
     const action = overlay.panelEl.querySelector<HTMLButtonElement>('.dx-action')!;
     expect(action.textContent).toBe('Try again');
     click(action);
     await vi.advanceTimersByTimeAsync(0);
-    expect(allowSignIn).not.toHaveBeenCalled();
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
-  it('offers the browser sign-in after auth_required', async () => {
-    const { overlay, click, status, allowSignIn, probe } = setup(failure('rejected', 'auth_required: the site asks to sign in', 'auth_required'));
+  it('offers no button after auth_required while the sign-in option is off: no prompt', async () => {
+    const refused = failure('rejected', 'auth_required: the site asks to sign in', 'auth_required');
+    refused.error.signIn = { domain: 'youtube.com', state: 'off' };
+    const { overlay, click, status } = setup(refused);
     click(overlay.button);
     await vi.advanceTimersByTimeAsync(0);
-    expect(status()).toBe('The site wants you to sign in (age check, members-only or bot check).');
-    const action = overlay.panelEl.querySelector<HTMLButtonElement>('.dx-action')!;
-    expect(action.hidden).toBe(false);
-    expect(action.textContent).toBe('Allow Downex to use your browser sign-in for videos');
-    click(action);
+    expect(status()).toBe(
+      'This video needs a sign-in. To let Downex use yours, turn on “Use my sign-in for videos that need it” in Downex’s browser options.',
+    );
+    expect(overlay.panelEl.querySelector<HTMLButtonElement>('.dx-action')!.hidden).toBe(true);
+  });
+
+  it('says when the qualities needed the sign-in', async () => {
+    const { overlay, click, status } = setup({ ok: true, value: { ...INFO, signedIn: 'youtube.com' } });
+    click(overlay.button);
     await vi.advanceTimersByTimeAsync(0);
-    expect(allowSignIn).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledTimes(2);
+    expect(status()).toBe('Used your sign-in for youtube.com. Every quality is saved as one MP4 file.');
+    // Drawn under the title, not only announced.
+    expect(overlay.panelEl.querySelector('.dx-sub')!.textContent).toBe('Used your sign-in for youtube.com. Every quality is saved as one MP4 file.');
+  });
+
+  it('draws the browser fetch note under the title (SITE-MEDIA-SPEC §2.8)', async () => {
+    const { overlay, click, status } = setup({ ok: true, value: { ...INFO, browserFetch: true } });
+    click(overlay.button);
+    await vi.advanceTimersByTimeAsync(0);
+    const note = `Every quality is saved as one MP4 file. ${BROWSER_FETCH_NOTE}`;
+    expect(status()).toBe(note);
+    const sub = overlay.panelEl.querySelector<HTMLElement>('.dx-sub')!;
+    expect(sub.hidden).toBe(false);
+    expect(sub.textContent).toBe(note);
   });
 
   it('closes on another video, on fullscreen changes and when removed', async () => {
@@ -428,12 +477,12 @@ describe('youtubeButtonEnabled', () => {
 });
 
 describe('OVERLAY_CSS', () => {
-  it('changes only on purpose (VIDEO-DETECT-SPEC §5.1; the Glass restyle of 2026-10-25, its glows removed 2026-10-28)', () => {
+  it('changes only on purpose (VIDEO-DETECT-SPEC §5.1; the Glass restyle of 2026-10-25, its glows removed 2026-10-28, the Part row 2026-11, its fields and the covered button 2026-11-17, its timeline trimmer 2026-11-17 and its polish the same day, the Recommended badge 2026-11-19)', () => {
     // A pin, not a spec: update length and hash together with a deliberate change of the
     // overlay's look (the YouTube overlay and the layer over any video share these rules).
     expect(OVERLAY_CSS).toBe(OVERLAY_HOST_CSS + OVERLAY_SHARED_CSS);
-    expect(OVERLAY_CSS).toHaveLength(16721);
-    expect(createHash('sha256').update(OVERLAY_CSS).digest('hex')).toBe('d93df69fac78273fa1408fc981d261c9fe56ad13552f7b9652949eb804ef9054');
+    expect(OVERLAY_CSS).toHaveLength(32881);
+    expect(createHash('sha256').update(OVERLAY_CSS).digest('hex')).toBe('253d54ce52060f2758c059b3226b535544527b3173ab15e4cde0903ddfa9b46e');
     // The host rule is the only `:host` rule; the shared rules start with the tokens.
     expect(OVERLAY_HOST_CSS.trim().startsWith(':host {')).toBe(true);
     expect(OVERLAY_SHARED_CSS.startsWith('.dx {')).toBe(true);

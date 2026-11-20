@@ -349,6 +349,9 @@ func TestProbeMP4DescribesBareFMP4HEVC(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := info.Tracks[0]
+	if tr.Kind != media.KindVideo { // measured without sound: offered as such (amendment 2026-11-19)
+		t.Errorf("kind = %q, want video", tr.Kind)
+	}
 	if codec := hevc.CodecString("hvc1", sps); tr.Codecs != codec || tr.Width != 1280 || tr.Height != 720 ||
 		tr.FrameRate != 60 || tr.Name != "720p (HD) 60fps" || !tr.SizeApprox || tr.Size < b.total*4/5 || tr.Size > b.total*6/5 {
 		t.Errorf("track = %+v, want %s and about %d bytes", tr, codec, b.total)

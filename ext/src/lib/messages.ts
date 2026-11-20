@@ -1,8 +1,11 @@
 // Messages between extension contexts (content script / popup / options → background, and
 // background → content script: FrameMessage).
 
+import { isPlayedTrace, type PlayedTrace } from './played';
+import { isClipMs } from './clip';
 import type { AddedResult, ConnectionStatus, Outcome, StatusResult, VideoInfoResult } from './protocol';
 import type { HandoffRecord } from './history';
+import type { FailedRow } from './rescue';
 import type { LinksBatch, LinksSummary } from './page-links';
 import type { SiteVideoKind } from './site-video';
 import {
@@ -98,6 +101,8 @@ export interface MediaResultMessage {
 export interface PageVideoProbeMessage {
   type: 'downex:page-video-probe';
   url: string;
+  /** One video of a page with several, by its id (SITE-MEDIA-SPEC §3.12); missing: the page's default. */
+  entryId?: string;
 }
 
 /**
@@ -115,6 +120,11 @@ export interface PageVideoAddMessage {
   url: string;
   videoTrack: string;
   audioTrack: string;
+  /** As for `downex:page-video-probe`. */
+  entryId?: string;
+  /** A part of the video, ms (MEDIA-SPEC §8): a start, and an end (0 or missing = to the end). */
+  clipStartMs?: number;
+  clipEndMs?: number;
 }
 
 /** Popup → background: the qualities of a page video listed by `downex:tab-media`. */
@@ -122,6 +132,8 @@ export interface TabVideoProbeMessage {
   type: 'downex:tab-video-probe';
   tabId: number;
   key: string;
+  /** As for `downex:page-video-probe`. */
+  entryId?: string;
 }
 
 /** Popup → background: adds a listed page video ("" tracks: Downex's default pick). */
@@ -131,6 +143,8 @@ export interface TabVideoAddMessage {
   key: string;
   videoTrack: string;
   audioTrack: string;
+  /** As for `downex:page-video-probe`. */
+  entryId?: string;
 }
 
 /** Popup → background: "Find the video on this page" of any http(s) tab (user-initiated). */
@@ -162,6 +176,14 @@ export interface OverlayStateMessage {
 }
 
 /**
+ * YouTube overlay → background: what the connected Downex does with a page video; today whether
+ * it takes a part (`clips`, MEDIA-SPEC §8), so that the panel shows its Part row.
+ */
+export interface VideoFeaturesMessage {
+  type: 'downex:video-features';
+}
+
+/**
  * Overlay UI → background: what the clicked element's panel lists. `src` is the element's
  * `currentSrc` when http(s) (no fragment, ≤ 32 KiB), else ""; it is used only to match items.
  */
@@ -170,6 +192,17 @@ export interface FrameOffersMessage {
   src: string;
   /** The element plays a `blob:` URL (Media Source Extensions). */
   mse: boolean;
+  /**
+   * The clicked feed video's own address, from a link near it (VIDEO-DETECT-SPEC §5.1 "Feed
+   * videos"; http(s), no fragment): used only as a curated video on the frame's own origin.
+   */
+  post?: string;
+  /**
+   * What the clicked `blob:` video says of itself, for its Played source (SITE-MEDIA-SPEC §2.9):
+   * duration, picture, sound, the page's resource-timing media addresses, a name hint and the
+   * frame's address now (used in place of the sender's only on the same origin).
+   */
+  played?: PlayedTrace;
 }
 
 /** Overlay UI → background: the MP4 qualities of one of the frame's streams (`probeStream`). */
@@ -189,6 +222,11 @@ export interface OfferAddMessage {
   key: OfferKey;
   videoTrack?: string;
   audioTrack?: string;
+  /** A stream's part, as for `downex:page-video-add`. */
+  clipStartMs?: number;
+  clipEndMs?: number;
+  /** The Played source's key (`p1`): the clicked video's trace, which names its state (SITE-MEDIA-SPEC §2.9). */
+  played?: PlayedTrace;
 }
 
 /**
@@ -219,8 +257,32 @@ export interface AddFileMessage {
   url: string;
 }
 
+/** Popup → background: the card "Failed in the browser" (BROWSER-SPEC §6). */
+export interface FailedDownloadsMessage {
+  type: 'downex:failed-downloads';
+}
+
+/**
+ * Popup → background: "Finish with Downex" (or "Download from the start with Downex") for a
+ * browser download id; the background reads the download again and decides whether it is offered.
+ */
+export interface FinishDownloadMessage {
+  type: 'downex:finish-download';
+  downloadId: number;
+  fromStart?: boolean;
+}
+
+/** Popup → background: hides a row of the card for this browser session. */
+export interface HideFailedMessage {
+  type: 'downex:hide-failed';
+  downloadId: number;
+}
+
 export type ExtensionMessage =
   | ClickMessage
+  | FailedDownloadsMessage
+  | FinishDownloadMessage
+  | HideFailedMessage
   | GetStateMessage
   | QueryStatusMessage
   | LinksBatchMessage
@@ -239,6 +301,7 @@ export type ExtensionMessage =
   | FrameVideosMessage
   | VideoUiMessage
   | OverlayStateMessage
+  | VideoFeaturesMessage
   | FrameOffersMessage
   | StreamProbeMessage
   | OfferAddMessage
@@ -255,8 +318,26 @@ export interface FrameMediaSeenMessage {
   type: 'downex:frame-media-seen';
 }
 
+/**
+ * Background → a frame's content script: the user chose "Show Downex download panel" on a
+ * `<video>` of that frame (VIDEO-DETECT-SPEC §5.1 "Menu"). Answered with ShowPanelResponse.
+ */
+export interface ShowPanelMessage {
+  type: 'downex:show-panel';
+}
+
+/** The tracker's answer: whether it holds the right-clicked video and opens its panel. */
+export interface ShowPanelResponse {
+  shown: boolean;
+}
+
+/** Whether `v` is a ShowPanelResponse (it comes from a content script). */
+export function isShowPanelResponse(v: unknown): v is ShowPanelResponse {
+  return typeof v === 'object' && v !== null && typeof (v as { shown?: unknown }).shown === 'boolean';
+}
+
 /** Messages the background sends to content scripts (validated there with isFrameMessage). */
-export type FrameMessage = FrameMediaSeenMessage;
+export type FrameMessage = FrameMediaSeenMessage | ShowPanelMessage;
 
 export interface StateResponse {
   connection: ConnectionStatus;
@@ -264,6 +345,17 @@ export interface StateResponse {
 }
 
 export type QueryStatusResponse = Outcome<StatusResult>;
+
+/** The card's rows (never headers); `available`: the relay serves rescues (its welcome lists `rescue`). */
+export interface FailedDownloadsResponse {
+  available: boolean;
+  items: FailedRow[];
+}
+
+/** The row after the click's flow ended (undefined: the download is no longer listed). */
+export interface FinishDownloadResponse {
+  row?: FailedRow;
+}
 
 /** null when the batch expired or was already answered. */
 export type LinksBatchResponse = LinksBatch | null;
@@ -342,6 +434,11 @@ export interface OverlayStateResponse {
   host: string;
 }
 
+/** Whether the connected Downex takes a part of a video (its welcome lists `clips`); false while not connected. */
+export interface VideoFeaturesResponse {
+  clips: boolean;
+}
+
 /** Local code `expired`: the frame's items are gone (the frame navigated). */
 export type FrameOffersResponse = Outcome<FrameOffers>;
 
@@ -361,6 +458,9 @@ export interface SiteHiddenResponse {
 
 export interface ResponseFor {
   'downex:click': undefined;
+  'downex:failed-downloads': FailedDownloadsResponse;
+  'downex:finish-download': FinishDownloadResponse;
+  'downex:hide-failed': Record<string, never>;
   'downex:get-state': StateResponse;
   'downex:query-status': QueryStatusResponse;
   'downex:links-batch': LinksBatchResponse;
@@ -379,6 +479,7 @@ export interface ResponseFor {
   'downex:frame-videos': undefined;
   'downex:video-ui': VideoUiResponse;
   'downex:overlay-state': OverlayStateResponse;
+  'downex:video-features': VideoFeaturesResponse;
   'downex:frame-offers': FrameOffersResponse;
   'downex:stream-probe': StreamProbeResponse;
   'downex:offer-add': OfferAddResponse;
@@ -389,6 +490,9 @@ export interface ResponseFor {
 
 const TYPES: ReadonlySet<string> = new Set([
   'downex:click',
+  'downex:failed-downloads',
+  'downex:finish-download',
+  'downex:hide-failed',
   'downex:get-state',
   'downex:query-status',
   'downex:links-batch',
@@ -407,6 +511,7 @@ const TYPES: ReadonlySet<string> = new Set([
   'downex:frame-videos',
   'downex:video-ui',
   'downex:overlay-state',
+  'downex:video-features',
   'downex:frame-offers',
   'downex:stream-probe',
   'downex:offer-add',
@@ -443,6 +548,22 @@ function isTrack(v: unknown): v is string {
 
 function isOptionalTrack(v: unknown): v is string | undefined {
   return v === undefined || isTrack(v);
+}
+
+/**
+ * An optional item of a page with several videos (SITE-MEDIA-SPEC §3.12): at most 256 characters
+ * without control characters (Downex checks the bytes again).
+ */
+function isOptionalEntry(v: unknown): v is string | undefined {
+  // eslint-disable-next-line no-control-regex
+  return v === undefined || (typeof v === 'string' && v.length <= 256 && !/[\u0000-\u001f\u007f]/.test(v));
+}
+
+/** The optional part fields of an add: none, or a start with an optional end after it. */
+function isOptionalClip(m: Record<string, unknown>): boolean {
+  if (m.clipStartMs === undefined) return m.clipEndMs === undefined;
+  if (!isClipMs(m.clipStartMs)) return false;
+  return m.clipEndMs === undefined || (isClipMs(m.clipEndMs) && (m.clipEndMs === 0 || m.clipEndMs > m.clipStartMs));
 }
 
 /** "" or an absolute http(s) URL without fragment of at most 32 KiB. */
@@ -487,6 +608,11 @@ function isFrameVideos(v: unknown): v is FrameVideoMeta[] {
   return JSON.stringify(v).length <= MAX_FRAME_VIDEOS_BYTES;
 }
 
+/** A browser download id (downloads.DownloadItem.id). */
+function isBrowserDownloadId(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
 function isOfferKey(v: unknown): v is OfferKey {
   return typeof v === 'string' && OFFER_KEY_RE.test(v);
 }
@@ -509,19 +635,41 @@ export function isExtensionMessage(v: unknown): v is ExtensionMessage {
     return isTabId(m.tabId) && isText(m.url, MAX_MESSAGE_URL_LENGTH);
   }
   if (t === 'downex:frame-videos') return isFrameVideos(m.videos);
-  if (t === 'downex:frame-offers') return isElementSrc(m.src) && typeof m.mse === 'boolean';
-  if (t === 'downex:stream-probe') return isOfferKey(m.key) && m.key.startsWith('s');
-  if (t === 'downex:offer-add') return isOfferKey(m.key) && isOptionalTrack(m.videoTrack) && isOptionalTrack(m.audioTrack);
-  if (t === 'downex:set-site-hidden') return typeof m.hidden === 'boolean' && (m.tabId === undefined || isTabId(m.tabId));
-  if (t === 'downex:page-video-probe' || t === 'downex:page-video-prefetch') return isText(m.url, MAX_MESSAGE_URL_LENGTH);
-  if (t === 'downex:page-video-add') {
-    return isText(m.url, MAX_MESSAGE_URL_LENGTH) && isTrack(m.videoTrack) && isTrack(m.audioTrack);
+  if (t === 'downex:frame-offers') {
+    return (
+      isElementSrc(m.src) &&
+      typeof m.mse === 'boolean' &&
+      (m.post === undefined || (m.post !== '' && isElementSrc(m.post))) &&
+      (m.played === undefined || isPlayedTrace(m.played))
+    );
   }
-  if (t === 'downex:tab-video-probe') return isTabId(m.tabId) && isText(m.key, MAX_VIDEO_KEY_LENGTH);
+  if (t === 'downex:stream-probe') return isOfferKey(m.key) && m.key.startsWith('s');
+  if (t === 'downex:offer-add') {
+    return (
+      isOfferKey(m.key) &&
+      isOptionalTrack(m.videoTrack) &&
+      isOptionalTrack(m.audioTrack) &&
+      isOptionalClip(m) &&
+      (m.played === undefined || isPlayedTrace(m.played))
+    );
+  }
+  if (t === 'downex:set-site-hidden') return typeof m.hidden === 'boolean' && (m.tabId === undefined || isTabId(m.tabId));
+  if (t === 'downex:page-video-prefetch') return isText(m.url, MAX_MESSAGE_URL_LENGTH);
+  if (t === 'downex:page-video-probe') return isText(m.url, MAX_MESSAGE_URL_LENGTH) && isOptionalEntry(m.entryId);
+  if (t === 'downex:page-video-add') {
+    return (
+      isText(m.url, MAX_MESSAGE_URL_LENGTH) && isTrack(m.videoTrack) && isTrack(m.audioTrack) && isOptionalClip(m) && isOptionalEntry(m.entryId)
+    );
+  }
+  if (t === 'downex:tab-video-probe') return isTabId(m.tabId) && isText(m.key, MAX_VIDEO_KEY_LENGTH) && isOptionalEntry(m.entryId);
   if (t === 'downex:tab-video-add') {
-    return isTabId(m.tabId) && isText(m.key, MAX_VIDEO_KEY_LENGTH) && isTrack(m.videoTrack) && isTrack(m.audioTrack);
+    return (
+      isTabId(m.tabId) && isText(m.key, MAX_VIDEO_KEY_LENGTH) && isTrack(m.videoTrack) && isTrack(m.audioTrack) && isOptionalEntry(m.entryId)
+    );
   }
   if (t === 'downex:find-page-video') return isTabId(m.tabId);
+  if (t === 'downex:finish-download') return isBrowserDownloadId(m.downloadId) && (m.fromStart === undefined || typeof m.fromStart === 'boolean');
+  if (t === 'downex:hide-failed') return isBrowserDownloadId(m.downloadId);
   if (t !== 'downex:click') return true;
   return (
     typeof m.alt === 'boolean' &&
@@ -532,7 +680,7 @@ export function isExtensionMessage(v: unknown): v is ExtensionMessage {
   );
 }
 
-const FRAME_TYPES: ReadonlySet<string> = new Set(['downex:frame-media-seen']);
+const FRAME_TYPES: ReadonlySet<string> = new Set(['downex:frame-media-seen', 'downex:show-panel']);
 
 /** A message of the background to a content script (FrameMessage). */
 export function isFrameMessage(v: unknown): v is FrameMessage {

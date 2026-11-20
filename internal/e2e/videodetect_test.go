@@ -426,7 +426,7 @@ func TestStreamRelayProbeAndAdd(t *testing.T) {
 		t.Fatalf("addMedia answered %v\nrelay stderr: %s", a, p.stderr.String())
 	}
 	p.closeAndWait()
-	if call := inst.waitUICall(t); !slices.Equal(call.Args, []string{"--confirm", idArg(id)}) {
+	if call := inst.waitUICall(t); !slices.Equal(call.Args, []string{"--confirm", idArg(id), "--raise"}) {
 		t.Errorf("confirmation window started with %q", call.Args)
 	}
 	dl := h.get(id)
@@ -572,7 +572,7 @@ func TestDirectMP4HandOff(t *testing.T) {
 		t.Fatalf("add answered %v\nrelay stderr: %s", a, p.stderr.String())
 	}
 	p.closeAndWait()
-	if call := inst.waitUICall(t); !slices.Equal(call.Args, []string{"--confirm", idArg(id)}) {
+	if call := inst.waitUICall(t); !slices.Equal(call.Args, []string{"--confirm", idArg(id), "--raise"}) {
 		t.Errorf("confirmation window started with %q", call.Args)
 	}
 	if dl := h.get(id); dl.GetState() != downexv1.DownloadState_DOWNLOAD_STATE_AWAITING_CONFIRMATION ||

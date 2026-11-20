@@ -31,9 +31,14 @@ const (
 )
 
 // defaultFirefoxIDs are the Firefox add-on IDs allowed to connect unless --firefox-extension-id
-// names others: the add-on's permanent ID on addons.mozilla.org (FIREFOX_ID in ext/wxt.config.ts)
-// first, then the ID of the copies loaded by hand before the listing (FIREFOX_OLD_ID).
-var defaultFirefoxIDs = []string{"extension@downex.app", "browser@downex.local"}
+// names others: the add-on's permanent ID on addons.mozilla.org (FIREFOX_ID in ext/wxt.config.ts).
+var defaultFirefoxIDs = []string{"extension@downex.app"}
+
+// revokedFirefoxIDs were allowed by earlier versions and are no longer: browser@downex.local,
+// the ID of copies loaded by hand before the AMO listing, is a name in a domain Downex does not
+// own, which any add-on can claim (BROWSER-SPEC §1). register leaves them out of the manifests it
+// writes, --keep drops them from the manifests it keeps; only --firefox-extension-id brings one back.
+var revokedFirefoxIDs = []string{"browser@downex.local"}
 
 // allBrowsers are the supported browsers, in the order they are reported.
 var allBrowsers = []string{"chrome", "edge", "chromium", "brave", "firefox"}
@@ -120,15 +125,17 @@ func manifestFor(browser string, o regOptions) []byte {
 }
 
 // keptManifest is the manifest of browser for o.keep given the existing manifest cur, which is
-// one of this host's: cur's allowed IDs followed by those of o that it lacks, and the path of o.
+// one of this host's: cur's allowed IDs (without revokedFirefoxIDs) followed by those of o that
+// it lacks, and the path of o.
 // same reports that cur already names o.exe (samePath) and allows every ID of o.
 func keptManifest(browser string, o regOptions, cur []byte, samePath func(a, b string) bool) (data []byte, same bool) {
 	var m manifest
 	_ = json.Unmarshal(cur, &m) // ourManifest parsed it
 	k := o
 	if browser == "firefox" {
-		k.firefoxIDs = union(m.AllowedExtensions, o.firefoxIDs)
-		same = len(k.firefoxIDs) == len(m.AllowedExtensions)
+		kept := slices.DeleteFunc(slices.Clone(m.AllowedExtensions), func(id string) bool { return slices.Contains(revokedFirefoxIDs, id) })
+		k.firefoxIDs = union(kept, o.firefoxIDs)
+		same = slices.Equal(k.firefoxIDs, m.AllowedExtensions)
 	} else {
 		var ids []string
 		for _, origin := range m.AllowedOrigins {
@@ -473,7 +480,7 @@ func runRegister(args []string, stdout, stderr io.Writer) int {
 	var firefoxIDs listFlag
 	fs.Var(&firefoxIDs, "firefox-extension-id", "Firefox add-on `ID` allowed to connect (repeatable or comma-separated; default: "+
 		strings.Join(defaultFirefoxIDs, ", ")+")")
-	keep := fs.Bool("keep", false, "keep what the existing manifests of this host allow: add the missing extension IDs to them, "+
+	keep := fs.Bool("keep", false, "keep what the existing manifests of this host allow: add the missing extension IDs to them (dropping IDs earlier versions allowed and no longer do), "+
 		"rewrite only those that are missing, name another path or lack an ID, and never replace a .bak that is there")
 	allowUserWritable := fs.Bool("allow-user-writable", false, "with --system: register even when users other than "+
 		"administrators (root) could replace downex-nmhost, downexd or a directory above them")

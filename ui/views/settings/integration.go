@@ -19,13 +19,13 @@ const argsHint = "[File] is replaced by the downloaded file; no shell runs it."
 
 // integrationPage is Settings → Integration: the browser (whether its downloads wait for a
 // confirmation, where the extension that came with Downex is, and registering Downex with the
-// browsers again), the clipboard, and the safety of downloaded files (marking, virus scan).
-// Its sections go in two balanced columns.
+// browsers again), the clipboard, and the safety of downloaded files (the file check,
+// marking, virus scan). Its sections go in two balanced columns.
 type integrationPage struct {
 	page
 	cols                *columns
 	confirm, clip, mark *widgets.SwitchRow
-	scan                *widgets.SwitchRow
+	check, scan         *widgets.SwitchRow
 	command, args       *field
 	browse              *widgets.Button
 
@@ -40,6 +40,12 @@ type integrationPage struct {
 	// folderNote is why the extension folders cannot be used as they are ("": they can)
 	folderNote string
 }
+
+// The Safety card's first row: the file check (docs/DESKTOP-SPEC.md §9.9).
+const (
+	checkFilesLabel = "Warn when a file is not what its name says"
+	checkFilesHint  = "Downex compares the start of each downloaded file, and the list of files inside archives, with its name, and asks before opening one that pretends to be another type. It never changes or deletes files."
+)
 
 func (p *integrationPage) markHint() string {
 	switch p.d.platform() {
@@ -96,7 +102,7 @@ func newIntegrationPage(d *Dialog) *integrationPage {
 	p.init(d)
 	t := &d.toggles
 	f := &d.integration
-	var confirmRow, clipRow, markRow, scanRow *surface
+	var confirmRow, clipRow, checkRow, markRow, scanRow *surface
 	confirmRow, p.confirm = switchRow("Ask before saving downloads from the browser",
 		"Each download the extension hands over waits until you confirm its folder and name.", t.confirmBrowserDownloads,
 		func(on bool) { t.confirmBrowserDownloads = on; d.changed() })
@@ -156,6 +162,8 @@ func newIntegrationPage(d *Dialog) *integrationPage {
 		"When you copy the address of a file (a video, an archive, a program…), Downex asks whether to download it. Text that other apps mark as private, such as passwords, is ignored.",
 		f.ClipboardMonitor, func(on bool) { f.ClipboardMonitor = on; d.changed() })
 
+	checkRow, p.check = switchRow(checkFilesLabel, checkFilesHint, f.CheckDownloadedFiles,
+		func(on bool) { f.CheckDownloadedFiles = on; d.changed() })
 	markRow, p.mark = switchRow("Mark downloaded files as coming from the internet", p.markHint(), f.MarkDownloadedFiles,
 		func(on bool) { f.MarkDownloadedFiles = on; d.changed() })
 	scanRow, p.scan = switchRow("Scan each finished download with a virus scanner",
@@ -202,7 +210,7 @@ func newIntegrationPage(d *Dialog) *integrationPage {
 	p.cols = newColumns(
 		sSection(sHead("Browser"), browser),
 		sSection(sHead("Clipboard"), sCard(clipRow)),
-		sSection(sHead("Safety"), sCard(markRow, scanRow, sStack(p.command, p.args))),
+		sSection(sHead("Safety"), sCard(checkRow, markRow, scanRow, sStack(p.command, p.args))),
 	)
 	p.Style.Display = kit.DisplayBlock
 	p.Style.RowGap = kit.Length{}
@@ -225,11 +233,13 @@ func (p *integrationPage) sync() {
 	d := p.d
 	errs := d.errors()
 	dis := d.loading
-	for _, s := range []*widgets.SwitchRow{p.confirm, p.clip, p.mark, p.scan} {
+	rows := []*widgets.SwitchRow{p.confirm, p.clip, p.check, p.mark, p.scan}
+	for _, s := range rows {
 		s.SetDisabled(dis)
 	}
-	on := []bool{d.toggles.confirmBrowserDownloads, d.integration.ClipboardMonitor, d.integration.MarkDownloadedFiles, d.integration.AVScanEnabled}
-	for i, s := range []*widgets.SwitchRow{p.confirm, p.clip, p.mark, p.scan} {
+	on := []bool{d.toggles.confirmBrowserDownloads, d.integration.ClipboardMonitor, d.integration.CheckDownloadedFiles,
+		d.integration.MarkDownloadedFiles, d.integration.AVScanEnabled}
+	for i, s := range rows {
 		if s.Switch.On != on[i] {
 			s.Switch.SetOn(on[i])
 		}

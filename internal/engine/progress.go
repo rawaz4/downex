@@ -34,4 +34,24 @@ type Progress struct {
 	// in 4 s", RetryAt the time of the next attempt), the reason after a failure, the
 	// step while connecting.
 	Workers []model.WorkerView
+	// Head is the file's first min(HeadBytes, Size) bytes (fewer only when a single-mode
+	// download of unknown size completed shorter), for the file check of
+	// docs/DESKTOP-SPEC.md §9. It is set in exactly one event per run, the first after
+	// those bytes were written to the part file (written, not necessarily durable; a
+	// resumed run whose durable bytes already cover them reads them from disk for its
+	// first event), and is nil in every other event. A run that stops before then has
+	// none.
+	Head []byte
+}
+
+// HeadBytes is the length of Progress.Head: the file check's head (filecheck.HeadBytes).
+const HeadBytes = 64 << 10
+
+// headNeed is how many bytes from offset 0 Progress.Head carries for a download of
+// size bytes (-1 = unknown).
+func headNeed(size int64) int64 {
+	if size < 0 {
+		return HeadBytes
+	}
+	return min(size, HeadBytes)
 }

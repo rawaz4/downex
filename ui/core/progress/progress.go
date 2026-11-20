@@ -180,6 +180,12 @@ func Status(d *downexv1.Download) string {
 	case stateCompleted:
 		return "Completed"
 	case stateFailed:
+		if d.GetErrorCode() == "link_expired" { // docs/DESKTOP-SPEC.md §10
+			return "Failed: Link expired"
+		}
+		if r, ok := siteRefusal(d); ok { // SITE-MEDIA-SPEC §5.5
+			return "Failed: " + r.Reason
+		}
 		if e := d.GetError(); e != "" {
 			return "Failed: " + e
 		}
@@ -503,4 +509,4 @@ func MediaFormatText(d *downexv1.Download) string {
 
 // IsRefused reports a failure that resuming cannot help with: Downex never downloads
 // protected or live streams, and a page without an MP4 video (or the chosen quality) stays so.
-func IsRefused(d *downexv1.Download) bool { return cannotRetry(d.GetErrorCode()) }
+func IsRefused(d *downexv1.Download) bool { return cannotRetry(d) }

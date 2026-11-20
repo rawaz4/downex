@@ -4,10 +4,12 @@
 // lists no other (§3.11), and each pick is saved as one .mp4. Qualities are listed one per
 // class under their standard names ("4K (2160p)"; lib/quality.ts). Pure.
 
+import type { ClipRange } from './clip';
 import type { VideoInfoResult, VideoTrack } from './protocol';
 import { onePerClass, pictureText, trackQuality } from './quality';
 
-export type PickerInfo = Pick<VideoInfoResult, 'tracks' | 'selectedVideo' | 'selectedAudio' | 'durationMs'>;
+export type PickerInfo = Pick<VideoInfoResult, 'tracks' | 'selectedVideo' | 'selectedAudio' | 'durationMs'> &
+  Partial<Pick<VideoInfoResult, 'container'>>;
 
 /** A choice of tracks: audio "" = none (a muxed video carries its own). */
 export interface TrackPick {
@@ -18,6 +20,21 @@ export interface TrackPick {
 /** Tracks that carry video: video-only ones (paired with an audio track) and muxed ones. */
 export function isVideoTrack(t: Pick<VideoTrack, 'kind'>): boolean {
   return t.kind === 'video' || t.kind === 'muxed';
+}
+
+/**
+ * An audio page's answer (SITE-MEDIA-SPEC §3.13): audio tracks only (container `m4a` or `mp3`).
+ * Its rows are the audio tracks, a pick sends one as its audio (no video), and no Part row shows.
+ * Any list without a video track counts, so an answer without a container is read the same way.
+ */
+export function audioOnlyList(info: Pick<VideoInfoResult, 'tracks'>): boolean {
+  return info.tracks.length > 0 && !info.tracks.some(isVideoTrack) && info.tracks.some((t) => t.kind === 'audio');
+}
+
+/** The file type an answer is saved as: "MP4", or an audio page's "M4A" or "MP3" (SITE-MEDIA-SPEC §3.13). */
+export function fileTypeLabel(info: Partial<Pick<VideoInfoResult, 'container'>> | undefined): string {
+  const c = info?.container?.toLowerCase();
+  return c === 'm4a' || c === 'mp3' ? c.toUpperCase() : 'MP4';
 }
 
 /**
@@ -59,10 +76,35 @@ export function defaultAudio(info: Pick<VideoInfoResult, 'tracks' | 'selectedAud
  */
 export function defaultPick(info: PickerInfo | undefined): TrackPick {
   if (!info) return { video: '', audio: '' };
+  if (audioOnlyList(info)) return { video: '', audio: defaultAudio(info) };
   const selected = trackById(info, info.selectedVideo);
   const video = selected && isVideoTrack(selected) ? selected : videoTracks(info)[0];
   if (!video || video.kind === 'muxed') return { video: video?.id ?? '', audio: '' };
   return { video: video.id, audio: defaultAudio(info) };
+}
+
+/** The badge of the quality a panel recommends and preselects (VIDEO-DETECT-SPEC §5.2, amended 2026-11-19). */
+export const RECOMMENDED_TEXT = 'Recommended';
+
+/**
+ * The highest quality with sound (VIDEO-DETECT-SPEC §5.2 "Recommended", amended 2026-11-19): of
+ * `tracks` (video or muxed), the one of the largest picture (width × height, else height) that has
+ * sound (muxed, or a video paired with an audio track: `paired`), the first of equals; without
+ * one with sound, the largest. Undefined for no track.
+ */
+export function highestWithSound<T extends Pick<VideoTrack, 'kind' | 'width' | 'height'>>(tracks: readonly T[], paired: (t: T) => boolean): T | undefined {
+  const area = (t: T) => (t.width > 0 && t.height > 0 ? t.width * t.height : t.height * t.height);
+  const best = (list: readonly T[]) => list.reduce<T | undefined>((b, t) => (!b || area(t) > area(b) ? t : b), undefined);
+  return best(tracks.filter((t) => t.kind === 'muxed' || paired(t))) ?? best(tracks);
+}
+
+/** The pick a panel that recommends starts with: the highest quality with sound (highestWithSound). */
+export function recommendedPick(info: PickerInfo | undefined): TrackPick {
+  const pick = defaultPick(info);
+  if (!info || audioOnlyList(info)) return pick;
+  const sound = audioTracks(info).length > 0;
+  const best = highestWithSound(videoTracks(info), () => sound);
+  return best ? withVideo(info, pick, best.id) : pick;
 }
 
 /** Whether a pick needs an audio track of its own (its video is not muxed). */
@@ -70,13 +112,20 @@ export function needsAudio(info: Pick<VideoInfoResult, 'tracks'>, video: string)
   return trackById(info, video)?.kind !== 'muxed' && info.tracks.some((t) => t.kind === 'audio');
 }
 
-/** Whether the audio select is shown: a video-only pick and several MP4 audio tracks. */
+/**
+ * Whether the audio select is shown: a video-only pick and several MP4 audio tracks. Never for an
+ * audio page, whose rows are its audio tracks.
+ */
 export function showsAudioChoice(info: Pick<VideoInfoResult, 'tracks'>, pick: TrackPick): boolean {
-  return needsAudio(info, pick.video) && audioTracks(info).length > 1;
+  return !audioOnlyList(info) && needsAudio(info, pick.video) && audioTracks(info).length > 1;
 }
 
-/** `pick` with another video; an audio track is chosen when the new one needs it. */
+/**
+ * `pick` with another video; an audio track is chosen when the new one needs it. On an audio page
+ * (audioOnlyList) a row's id is an audio track: the pick is that audio, without video.
+ */
 export function withVideo(info: Pick<VideoInfoResult, 'tracks' | 'selectedAudio'>, pick: TrackPick, video: string): TrackPick {
+  if (audioOnlyList(info) && trackById(info, video)?.kind === 'audio') return { video: '', audio: video };
   const keep = trackById(info, pick.audio)?.kind === 'audio';
   return { video, audio: needsAudio(info, video) && !keep ? defaultAudio(info) : pick.audio };
 }
@@ -98,6 +147,14 @@ export interface PickSize {
  */
 export function pickSize(info: PickerInfo, pick: TrackPick): PickSize | undefined {
   const video = trackById(info, pick.video);
+  if (!video && audioOnlyList(info)) {
+    // An audio page's pick: the audio alone (SITE-MEDIA-SPEC §3.13).
+    const audio = trackById(info, pick.audio);
+    if (!audio) return undefined;
+    if (audio.size > 0) return { bytes: audio.size, approx: audio.sizeApprox };
+    if (!(info.durationMs > 0) || !(audio.bandwidth > 0)) return undefined;
+    return { bytes: Math.round((audio.bandwidth * info.durationMs) / 8000), approx: true };
+  }
   if (!video) return undefined;
   const audio = trackById(info, pickedAudio(info, pick));
   const chosen = audio ? [video, audio] : [video];
@@ -107,6 +164,19 @@ export function pickSize(info: PickerInfo, pick: TrackPick): PickSize | undefine
   if (!(info.durationMs > 0) || !(video.bandwidth > 0)) return undefined;
   const bits = video.bandwidth + (audio?.bandwidth ?? 0);
   return { bytes: Math.round((bits * info.durationMs) / 8000), approx: true };
+}
+
+/**
+ * A pick's size for a part of the video (MEDIA-SPEC §8; the desktop's `ClipSize`, SITE-MEDIA-SPEC
+ * §5.3): the size × (To − From + 5 s, rounded up to a second) ÷ the duration, always an estimate
+ * ("~"). The whole video, an unknown size or an unknown duration keep the size as it is.
+ */
+export function clipSize(size: PickSize | undefined, clip: ClipRange | undefined, durationMs: number): PickSize | undefined {
+  if (!size || !clip || !(size.bytes > 0) || !(durationMs > 0)) return size;
+  const end = clip.endMs <= 0 || clip.endMs > durationMs ? durationMs : clip.endMs;
+  const span = Math.floor((end - clip.startMs + 5000 + 999) / 1000) * 1000;
+  if (span >= durationMs || span <= 0) return size;
+  return { bytes: Math.max(Math.round((size.bytes * span) / durationMs), 1), approx: true };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -125,6 +195,7 @@ const CODEC_NAMES: Readonly<Record<string, string>> = {
   opus: 'Opus',
   'ac-3': 'AC-3',
   'ec-3': 'E-AC-3',
+  mp3: 'MP3',
 };
 
 /** "avc1.640028" → "H.264"; an unknown codec keeps its four-character code. */
@@ -239,6 +310,9 @@ export function audioLabel(t: VideoTrack): string {
   return [title, codecsLabel(t), formatBitrate(t.bandwidth)].filter((p) => p !== '').join(' · ');
 }
 
+/** What a quality row says of a video that has no sound (SITE-MEDIA-SPEC §5.3, 2026-11-18). */
+export const NO_SOUND = 'No sound';
+
 /** One quality of the list: a video with the audio it would be paired with. */
 export interface QualityRow {
   /** The video track. */
@@ -247,26 +321,45 @@ export interface QualityRow {
   label: string;
   /** "4K (2160p)", "1080p (Full HD) 60fps". */
   quality: string;
-  /** "H.264", "AV1", "H.264 + AAC"; "" when unknown. */
+  /**
+   * "H.264", "AV1", "H.264 + AAC"; "" when unknown. A video without sound (a video-only track of a
+   * list without audio: a silent page, SITE-MEDIA-SPEC §5.3) adds "No sound": "H.264 · No sound".
+   */
   codecs: string;
   /** "" when unknown. */
   size: string;
   /** The picture, "3840×1634" (a tooltip, never the name); "" when unknown. */
   picture: string;
+  /** An audio page's row (SITE-MEDIA-SPEC §3.13): `id` is an audio track, sent as the pick's audio. */
+  audio?: boolean;
 }
+
+/** What an audio page's row is named when its track has no note (SITE-MEDIA-SPEC §3.13). */
+export const AUDIO_QUALITY = 'Audio';
 
 /**
  * The qualities as the panels list them, one per class, best first, each with `audio` (or the
  * default audio) for its size: "4K (2160p) · AV1 · 1.9 GB", "1080p (Full HD) 60fps · H.264 ·
- * ~412 MB". Every quality is saved as one MP4, so the rows do not repeat it. A muxed quality
+ * ~412 MB"; with `clip`, the part's estimate (clipSize, always "~"). Every quality is saved as one MP4, so the rows do not repeat it. A muxed quality
  * names its audio codec too ("H.264 + AAC"), as the desktop does.
  */
-export function qualityRows(info: PickerInfo, audio: string): QualityRow[] {
+export function qualityRows(info: PickerInfo, audio: string, clip?: ClipRange): QualityRow[] {
+  if (audioOnlyList(info)) {
+    // An audio page (SITE-MEDIA-SPEC §3.13): "Audio · AAC · 96 kbit/s · 1.7 MB", no part.
+    return audioTracks(info).map((t) => {
+      const quality = t.name.trim() || AUDIO_QUALITY;
+      const codecs = [codecsLabel(t), formatBitrate(t.bandwidth)].filter((p) => p !== '').join(' · ');
+      const size = sizeLabel(pickSize(info, { video: '', audio: t.id }));
+      const label = [quality, codecs, size].filter((p) => p !== '').join(' · ');
+      return { id: t.id, label, quality, codecs, size, picture: '', audio: true };
+    });
+  }
+  const silent = audioTracks(info).length === 0;
   return videoTracks(info).map((t) => {
     const pick = withVideo(info, { video: '', audio }, t.id);
-    const size = sizeLabel(pickSize(info, pick));
+    const size = sizeLabel(clipSize(pickSize(info, pick), clip, info.durationMs));
     const quality = qualityName(t);
-    const codecs = codecsLabel(t);
+    const codecs = [codecsLabel(t), silent && t.kind === 'video' ? NO_SOUND : ''].filter((p) => p !== '').join(' · ');
     const label = [quality, codecs, size].filter((p) => p !== '').join(' · ');
     return { id: t.id, label, quality, codecs, size, picture: pictureText(t) };
   });

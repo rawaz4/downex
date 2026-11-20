@@ -3,6 +3,7 @@ package settings
 import (
 	"strconv"
 
+	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
 	"downex/ui/core/confirm"
 	"downex/ui/core/format"
@@ -98,6 +99,10 @@ type downloadsPage struct {
 	browse      *widgets.Button
 	ownFolders  *widgets.SwitchRow
 	ownBox      *kit.Element
+	expired     *field
+	renewSel    *widgets.Select
+	polite      *widgets.SwitchRow // Polite mode (docs/POLITE-SPEC.md §8)
+	politeBox   *kit.Element
 
 	catHead  *kit.Element
 	count    *views.Text
@@ -198,11 +203,25 @@ func newDownloadsPage(d *Dialog) *downloadsPage {
 		})
 	p.ownFolders.Switch.SetStyle(curSkin.switchStyle()) // the skin's switch, as switchRow gives the others
 	p.ownBox = el(kit.Style{Display: kit.DisplayBlock, MinWidth: kit.Px(0)}, p.ownFolders)
+	p.polite = widgets.NewSwitchRow("Polite mode", politeDescription, d.toggles.politeMode, func(on bool) {
+		d.toggles.politeMode = on
+		d.changed()
+	})
+	p.polite.Switch.SetStyle(curSkin.switchStyle())
+	p.politeBox = el(kit.Style{Display: kit.DisplayBlock, MinWidth: kit.Px(0)}, p.polite)
+
+	// Expired links (docs/DESKTOP-SPEC.md §10).
+	p.renewSel = widgets.NewSelect(renewOptions(), renewValue(d.renewLinks),
+		widgets.SelectOptions{AriaLabel: expiredLabel, Disabled: dis}, func(v string) {
+			d.renewLinks = renewLinksOf(v)
+			d.changed()
+		})
+	p.expired = newField(expiredLabel, p.renewSel, nil, p.hint(expiredHint))
 
 	p.limits = newGrid(repeatFr(6), kit.Px(20), kit.Px(14))
 	p.limits.alignItems = kit.AlignStart
 	p.limits.Style.Padding = kit.Edges{Top: kit.Px(12), Start: kit.Px(14), End: kit.Px(14), Bottom: kit.Px(14)}
-	p.limits.Add(p.concurrent, p.connections, p.speed, p.dir, p.ownBox)
+	p.limits.Add(p.concurrent, p.connections, p.speed, p.dir, p.ownBox, p.expired, p.politeBox)
 	p.limits.respond = p.respondLimits
 	limitsCard := sCard(p.limits)
 
@@ -230,6 +249,44 @@ func newDownloadsPage(d *Dialog) *downloadsPage {
 
 func (p *downloadsPage) hint(s string) *views.Text { return views.NewHint(s) }
 
+// The "Expired links" row (docs/DESKTOP-SPEC.md §10).
+const (
+	expiredLabel = "Expired links"
+	expiredHint  = "Downex checks that the new link serves the same bytes before it continues a download."
+)
+
+// renewOptions are the choices of "Expired links".
+func renewOptions() []widgets.SelectOption {
+	return []widgets.SelectOption{
+		{Value: "auto", Label: "Continue with a matching new link"},
+		{Value: "ask", Label: "Ask before continuing"},
+		{Value: "off", Label: "Don't look for new links"},
+	}
+}
+
+func renewValue(v downexv1.RenewLinks) string {
+	switch v {
+	case downexv1.RenewLinks_RENEW_LINKS_ASK:
+		return "ask"
+	case downexv1.RenewLinks_RENEW_LINKS_OFF:
+		return "off"
+	}
+	return "auto"
+}
+
+func renewLinksOf(v string) downexv1.RenewLinks {
+	switch v {
+	case "ask":
+		return downexv1.RenewLinks_RENEW_LINKS_ASK
+	case "off":
+		return downexv1.RenewLinks_RENEW_LINKS_OFF
+	}
+	return downexv1.RenewLinks_RENEW_LINKS_AUTO
+}
+
+// politeDescription is Polite mode's switch's description (docs/POLITE-SPEC.md §8).
+const politeDescription = "Slow down when downloads make calls, games or streaming lag; speed back up when the line is quiet."
+
 // unitOptions are the rate units (RATE_UNITS).
 func unitOptions() []widgets.SelectOption {
 	var out []widgets.SelectOption
@@ -255,6 +312,8 @@ func (p *downloadsPage) respondLimits() {
 	}
 	p.limits.setPlace(p.dir, place{col: -1, span: wide, row: -1, rowSpan: 1})
 	p.limits.setPlace(p.ownBox, place{col: -1, span: own, row: -1, rowSpan: 1, align: kit.AlignEnd})
+	p.limits.setPlace(p.expired, place{col: -1, span: wide, row: -1, rowSpan: 1})
+	p.limits.setPlace(p.politeBox, place{col: -1, span: own, row: -1, rowSpan: 1, align: kit.AlignEnd})
 	wrap := d.paneAtMost(44)
 	if p.catHead.Style.Wrap != wrap {
 		p.catHead.Style.Wrap = wrap
@@ -530,6 +589,10 @@ func (p *downloadsPage) sync() {
 	p.ownFolders.SetDisabled(dis)
 	if p.ownFolders.Switch.On != d.toggles.useCategoryFolders {
 		p.ownFolders.Switch.SetOn(d.toggles.useCategoryFolders)
+	}
+	p.polite.SetDisabled(dis)
+	if p.polite.Switch.On != d.toggles.politeMode {
+		p.polite.Switch.SetOn(d.toggles.politeMode)
 	}
 	setError(p.concurrent.input, p.concurrent.err, p.concurrent.hint.Text(), errs.MaxConcurrent)
 	setError(p.connections.input, p.connections.err, p.connections.hint.Text(), errs.DefaultConnections)

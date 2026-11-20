@@ -68,6 +68,11 @@ type track struct {
 
 	stco *mp4.StcoBox
 	co64 *mp4.Co64Box
+
+	// A window (applyWindow): lo is the number of the track's first samples cut away
+	// (chunk.first counts from the uncut track), edit forces an edit list.
+	lo   uint64
+	edit bool
 }
 
 // chunk is a run of contiguous samples of one track in one source file.
@@ -78,6 +83,9 @@ type chunk struct {
 	n    uint32
 	sdi  uint32
 	time uint64 // output decode time of the first sample
+	// first is the 0-based number of the chunk's first sample in the track before a
+	// window cut it (applyWindow); transport stream replay skips up to it.
+	first uint64
 }
 
 type muxer struct {
@@ -87,6 +95,9 @@ type muxer struct {
 	fileIdx      map[string]int
 	progressive  bool
 	totalSamples uint64
+	// origin is the source time of output presentation 0 (movie timescale) of
+	// fragmented MP4 inputs (finish): the offset of an OriginMedia window.
+	origin uint64
 }
 
 // chunkSource writes the sample data of progressive chunks, which writeProgressive
@@ -133,7 +144,7 @@ func (s *scanRuns) writeRun(ctx context.Context, r *fragRun, w io.Writer) error 
 
 func (s *scanRuns) close() { s.s.close() }
 
-func assembleMP4(ctx context.Context, inputs []Input, w io.Writer) error {
+func assembleMP4(ctx context.Context, inputs []Input, w io.Writer, win Window, res *Result) error {
 	m := &muxer{inits: make([]*initInfo, len(inputs)), fileIdx: map[string]int{}, progressive: true}
 	for i, in := range inputs {
 		if err := m.collectInput(ctx, newScanner(m, i, in)); err != nil {
@@ -142,6 +153,17 @@ func assembleMP4(ctx context.Context, inputs []Input, w io.Writer) error {
 	}
 	if err := m.finish(); err != nil {
 		return err
+	}
+	if !win.IsZero() {
+		offset := m.firstInputOffset()
+		if win.Origin == OriginMedia {
+			offset = movieDuration(m.origin)
+		}
+		r, err := m.applyWindow(win, offset)
+		if err != nil {
+			return err
+		}
+		*res = r
 	}
 	fc := newFileCache()
 	defer fc.close()
@@ -213,12 +235,12 @@ func (m *muxer) collect(r *fragRun) error {
 			}
 		}
 		limit := uint64(t.src.timescale) * chunkSeconds
-		c := chunk{file: r.file, off: r.offset, sdi: r.sdi, time: r.outTime}
+		c := chunk{file: r.file, off: r.offset, sdi: r.sdi, time: r.outTime, first: t.nSamples}
 		var cdur uint64
 		for i, s := range r.samples {
 			if c.n > 0 && cdur+uint64(s.dur) > limit {
 				t.chunks = append(t.chunks, c)
-				c = chunk{file: r.file, off: c.off + c.size, sdi: r.sdi, time: c.time + cdur}
+				c = chunk{file: r.file, off: c.off + c.size, sdi: r.sdi, time: c.time + cdur, first: t.nSamples + uint64(i)}
 				cdur = 0
 			}
 			num := uint32(t.nSamples) + uint32(i) + 1
@@ -265,6 +287,7 @@ func (m *muxer) finish() error {
 		starts[i] = satAdd(scaleTime(t.firstSrc, movieTimescale, ts), scaleTime(t.src.emptyEdit, movieTimescale, srcMovie))
 		origin = min(origin, starts[i])
 	}
+	m.origin = origin
 	for i, t := range m.tracks {
 		ts := t.src.timescale
 		t.empty = starts[i] - origin
@@ -294,6 +317,9 @@ func (m *muxer) finish() error {
 // hasEdit reports whether the track needs an edit list. Fragmented output aligns
 // the tracks through their decode times instead of empty edits.
 func (t *track) hasEdit(progressive bool) bool {
+	if t.edit {
+		return true
+	}
 	if progressive {
 		return t.empty > 0 || t.mediaTime+t.shift != 0
 	}

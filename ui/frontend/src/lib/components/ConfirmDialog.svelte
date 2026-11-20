@@ -6,11 +6,13 @@
   import { formatBytes } from '../format';
   import { kindOf } from '../categories';
   import {
+    audioPage,
     defaultPick,
     isSite,
     pickSize,
     pickSizeText,
     pickedAudio,
+    siteFileType,
     trackById,
     videoPictureText,
     videoTracks,
@@ -219,7 +221,9 @@
 
 <Dialog
   title="Confirm download"
-  description={site
+  description={site && audioPage(media)
+    ? 'Audio from the browser is waiting. Choose its quality and where it is saved, then start it.'
+    : site
     ? 'A video from the browser is waiting. Choose its quality and where it is saved, then start it.'
     : media
       ? 'A stream from the browser is waiting. Choose its quality and where it is saved, then start it.'
@@ -280,7 +284,7 @@
       <div class="field">
         <div class="label-row">
           <label for="{uid}-name">File name</label>
-          <span class="hint tnum" id="{uid}-size">Size: {sizeLabel}{site ? ' · saved as MP4' : ''}</span>
+          <span class="hint tnum" id="{uid}-size">Size: {sizeLabel}{site ? ` · saved as ${siteFileType(media)}` : ''}</span>
         </div>
         <input
           id="{uid}-name"

@@ -12,7 +12,13 @@ resumable downloads, browser capture, media grabbing and scheduling.
 - F3. Automatic single-connection fallback when the server does not support ranges.
 - F4. Pause/resume across restarts and crashes; resume validates the remote file
   (`If-Range` with strong ETag, else Last-Modified) and restarts when it changed.
-- F5. Speed limits: global, per queue, per download.
+- F4a. Expired links: a download whose link stops working keeps its data; a new link (pasted, or the
+  next matching browser, clipboard or Add dialog link) continues it only after a byte-for-byte check
+  (`ENGINE-SPEC.md` §7.2-7.3, `DESKTOP-SPEC.md` §10).
+- F5. Speed limits: global, per queue, per download (and Polite mode's level between global and
+  queue, POLITE-SPEC §5).
+- F5a. Polite mode: an automatic, delay-based slowdown of every download together while the line
+  is laggy, off by default (`POLITE-SPEC.md`).
 - F6. Retries with backoff; honours `Retry-After` on 429/503 and lowers per-host concurrency.
 - F7. Proxies: HTTP (CONNECT), SOCKS5, SOCKS4/4a, system proxy (Windows WinHTTP incl. WPAD, macOS
   `scutil --proxy`, Linux environment), PAC (M6, `M6-SPEC.md` §2).
@@ -32,6 +38,10 @@ resumable downloads, browser capture, media grabbing and scheduling.
   download if Downex declines, is not running, or times out. Firefox: blocking `onHeadersReceived`.
 - B5. Context menu: "Download with Downex", "Download all links".
 - B6. Transport: native messaging to `downex-nmhost` (stateless relay). No kernel drivers, no injection.
+- B7. Rescue: a download that fails or is interrupted in the browser can be finished by Downex from
+  the bytes the browser saved, after proving the server file is the same (`BROWSER-SPEC.md` §6,
+  `ENGINE-SPEC.md` §7.4); the desktop app and the CLI rescue a chosen partial file
+  (`DESKTOP-SPEC.md` §11).
 
 ### 1.3 Media
 - M1. Detect unencrypted HLS and DASH streams; quality picker.
@@ -51,7 +61,8 @@ resumable downloads, browser capture, media grabbing and scheduling.
 - U4. Clipboard URL monitoring (where the OS allows it).
 - U5. Tray icon, notifications, single running instance, CLI (`downex add/ls/pause/resume/rm`).
 - U6. Mark-of-the-Web (Windows) / `com.apple.quarantine` (macOS) / origin xattrs (Linux); optional
-  antivirus scan hook.
+  antivirus scan hook; a file check that warns when a file is not what its name says (DESKTOP-SPEC §9;
+  not yet run over a corpus of real files, see §9's "Not verified").
 - U7. Signed auto-update (where the install channel allows it).
 
 ## 2. Non-functional requirements
@@ -64,7 +75,9 @@ resumable downloads, browser capture, media grabbing and scheduling.
 - N2. Footprint: resident daemon < 30 MB RSS and ~0% CPU when idle; UI is a separate on-demand process.
 - N3. Throughput: at least on par with aria2c/curl on the benchmark matrix.
 - N4. Integrity: zero corrupted files across 1,000 kill -9 / power-cut cycles; progress is committed
-  only after data is flushed to disk.
+  only after data is flushed to disk. A renewed link (F4a) splices only after its proof: exact up to
+  1 MiB of kept data, sampled beyond (`ENGINE-SPEC.md` §7.3 "Limits of the proof"); a rescued
+  partial file (B7) likewise (`ENGINE-SPEC.md` §7.4 "Limits").
 - N5. Security: TLS always validated (no downgrade, no InsecureSkipVerify); IPC endpoints restricted to
   the current user; all untrusted parsers fuzzed.
 - N6. Per-user install without admin rights by default.
@@ -93,6 +106,7 @@ resumable downloads, browser capture, media grabbing and scheduling.
 | M6 Power features (`M6-SPEC.md`) | queues, scheduler, post-actions (U2, U3), proxies/PAC, auth, host rules, secrets (F7, F8), clipboard monitor, file marks, antivirus hook (U4, U6), signed updater (U7) | Done on Windows (0.4.0; review fixes in 0.4.1: credentials only for the challenging origin or the forwarding proxy, PAC scripts in a memory-limited helper process, no user information in proxy URLs or clipboard links, keychain secrets over stdin, queues finished only by completions, overdue countdowns cancelled, schedules after clock changes, nested limits, keep-awake while a queue with a post action or schedule works): unit, package and real-process end-to-end tests pass with `-race` (`internal/e2e/m6_test.go`, `m6_net_test.go`: two queues with their own caps under the global cap, a stopped queue holding its downloads, a scheduled start on an accelerated test clock, a post-queue sleep performed once after the countdown by a recording stand-in, a cancelled shutdown, the quit action; downloads through an HTTP CONNECT proxy and a SOCKS5 proxy; Digest with a site login whose password is stored with `SetSecret`, `auth_required` without or with a wrong one; a host rule capping connections at 1; `Zone.Identifier` on a completed file; an update check against a signed test feed, a tampered manifest refused). Not verified: real sleep/hibernate/shutdown and wake timers (never performed by tests), the keep-awake request's effect on real idle sleep, SSPI NTLM/Negotiate against a domain server, WPAD networks, a real Setup update (release builds carry the update key and the built-in feed, which is published after the first release), macOS (compile-checked only; `MACOS-TESTING.md` §12a–12d), Linux power actions (stubs) and clipboard (none) |
 | Site media (`SITE-MEDIA-SPEC.md`) | video pages (YouTube first) resolved with yt-dlp and Deno, which Downex downloads, verifies and updates on first use; one `.mp4` per video, every MP4 quality listed for the user to choose; segmented, resumable ranged downloads with URL refresh; overlay button and popup entries in the extension, page mode in the Add dialog, `downex media --site`, `downex tools`, Settings → Video sites | Done on Windows against stand-ins (2026-10-22, `SITE-MEDIA-SPEC.md` §10): MP4 only, every MP4 quality listed for the user to choose; unit, package, fuzz and real-process end-to-end tests (`internal/e2e/site_test.go`: stand-in yt-dlp/Deno on PATH or installed from a TLS release server with a test OpenPGP key, 1 MiB/2-connection host rule, one progressive MP4, kill + resume without refetching stored chunks, 403 renewal, refusals, the browser hand-off with `downex confirm --video`) pass with `-race`. The embedded yt-dlp signing key is upstream's `public.key`, pinned by its fingerprint (`internal/tools/ytdlp_key.asc`). Not verified: real YouTube/googlevideo, real GitHub installs, real browsers, real players, proxies; macOS and Linux compile only |
 | Video detection on every site (`VIDEO-DETECT-SPEC.md`) | a Download button over every visible, meaningful `<video>` in any frame (never DRM or live; per-site and global off); direct MP4 files, HLS and DASH manifests detected from the browser's own traffic per tab and frame, with qualities and sizes in the button's panel and the popup; yt-dlp qualities merged in (look-ahead on curated video sites, a click elsewhere); MP4 only everywhere: pure-Go TS→MP4 remuxer (H.264, HEVC, AAC), so M5 HLS-TS downloads produce `.mp4` too; direct files handed off as ordinary segmented downloads | Done on Windows against local servers and stand-ins (2026-10-23, `VIDEO-DETECT-SPEC.md` §10): unit, package and fuzz tests (remuxer: muxed and separate TS, B-frames, 2³³ wrap, discontinuities, HEVC, refusals, bounds; extension: classification, frames and documents, keys, hand-offs, curated table, tracker, overlay, panel and popup in happy-dom and a fake browser) and real-process end-to-end tests (`internal/e2e/videodetect_test.go`, `media_test.go`, `nmhost_test.go`: TS → MP4 through the CLI with separate audio, discontinuities, early refusals, legacy `.ts` records, pause + kill + resume; the relay's `probeStream` and `addMedia` tracks with confirmation; a direct MP4 handed off with `add` over several ranged connections with the cookie kept from the CDN; MP4-only manifests; a site with TS-only HLS through the stand-in yt-dlp) pass with `-race`. Not verified: a real browser (Chrome, Edge, Firefox), the curated sites, signed CDN files, playback of converted MP4s in real players, macOS and Linux at run time |
+| Polite mode (`POLITE-SPEC.md`), Part A | global switch and target, delay-based controller with ICMP/TCP probes to the servers in use, polite level in the limiter chain, status in the window, tray, CLI and extension popup | Implemented 2026-11-17 on Windows (not committed): unit, simulation, monitor (synctest), daemon, CLI, relay, extension and window tests; an end-to-end test with a real downexd whose probes answer from a file (`internal/e2e/polite_test.go`); Windows ICMP and TCP probes against loopback. Not verified: a real laggy line, real CDNs, macOS and Linux probes at run time (POLITE-SPEC §10). Part B (per-queue `ignore_polite`) not built |
 | M7 Hardening → 1.0 | benchmarks, fuzzing, security review, packaging for all channels | Planned |
 
 M2 is specified in `DAEMON-SPEC.md`, M3 in `BROWSER-SPEC.md`, M4.5 in `DESKTOP-SPEC.md`, M5 in

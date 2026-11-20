@@ -17,7 +17,8 @@ type Pick struct {
 	// 0: the caller applies §2.4 with the format's Format.ChunkSize
 	// (mediajob.ChunkSize).
 	Tracks []media.RangedTrack
-	// Output is OutputRemux or OutputCopy; Container is always ContainerMP4.
+	// Output is OutputRemux or OutputCopy; Container is ContainerMP4, or the offer's
+	// ContainerM4A or ContainerMP3 for an audio page (docs/SITE-MEDIA-SPEC.md §3.13).
 	Output, Container string
 	// NotBefore is the latest available_at of the chosen formats: no request before it.
 	NotBefore time.Time
@@ -29,7 +30,8 @@ type Pick struct {
 // probe); neither selects the default. Both also find a usable MP4 video that the
 // one-per-class rule left out (a key of an earlier offer whose class now offers another
 // format, or an ID the user typed); Listed then shows it. A video-only track is paired
-// with the chosen audio, else with the best one; a muxed track takes no audio.
+// with the chosen audio, else with the best one; a muxed track takes no audio, and
+// neither does the video of a silent page (Info.Silent), saved alone.
 //
 // A track or key the offer no longer has, and an offer that is not FormatHTTP (the
 // page now offers only a manifest), are media.ErrNotFound: the caller resolves once
@@ -41,6 +43,8 @@ func Select(info *Info, off *Offer, video, audio, videoKey, audioKey string) (*P
 		return nil, fmt.Errorf("%w: no offer to select from", media.ErrMalformed)
 	case off.Format != FormatHTTP:
 		return nil, fmt.Errorf("%w: the page now offers a stream manifest instead of the chosen formats", media.ErrNotFound)
+	case off.Audio:
+		return selectAudio(info, off, video, audio, videoKey, audioKey)
 	}
 	v, err := find(off, video, videoKey, false)
 	if err != nil {
@@ -62,6 +66,10 @@ func Select(info *Info, off *Offer, video, audio, videoKey, audioKey string) (*P
 		return nil, fmt.Errorf("%w: an audio track cannot be added to a muxed video track", media.ErrMalformed)
 	case v.Kind == media.KindMuxed:
 		pick.Output = OutputCopy
+	case a == nil && bestAudio(off) == nil && info.Silent:
+		// A silent page's video alone (docs/SITE-MEDIA-SPEC.md §3.11, amendment
+		// 2026-11-18): joined when fragmented (below), else saved as it is.
+		pick.Output = OutputCopy
 	default:
 		if a == nil {
 			a = bestAudio(off)
@@ -77,26 +85,32 @@ func Select(info *Info, off *Offer, video, audio, videoKey, audioKey string) (*P
 		if f == nil || f.Key != t.Key {
 			return nil, fmt.Errorf("%w: format %s is no longer offered", media.ErrNotFound, t.ID)
 		}
-		if f.Kind == media.KindMuxed && f.fragmented() {
+		if f.Kind != media.KindAudio && f.fragmented() {
 			pick.Output = OutputRemux
 		}
-		pick.Tracks = append(pick.Tracks, media.RangedTrack{
-			ID:       f.ID,
-			Key:      f.Key,
-			Kind:     f.Kind,
-			Ext:      f.Ext,
-			URL:      f.URL,
-			Headers:  f.Headers.Clone(),
-			Size:     f.Size,
-			Expires:  f.Expires,
-			Network:  f.Network,
-			Unranged: f.Unranged,
-		})
+		pick.Tracks = append(pick.Tracks, rangedTrack(f))
 		if f.AvailableAt.After(pick.NotBefore) {
 			pick.NotBefore = f.AvailableAt
 		}
 	}
 	return pick, nil
+}
+
+// rangedTrack is the ranged track of a chosen direct format, with a clone of its
+// headers.
+func rangedTrack(f *Format) media.RangedTrack {
+	return media.RangedTrack{
+		ID:       f.ID,
+		Key:      f.Key,
+		Kind:     f.Kind,
+		Ext:      f.Ext,
+		URL:      f.URL,
+		Headers:  f.Headers.Clone(),
+		Size:     f.Size,
+		Expires:  f.Expires,
+		Network:  f.Network,
+		Unranged: f.Unranged,
+	}
 }
 
 // find returns the track that key (else id) names among the offered tracks and the
@@ -150,9 +164,12 @@ func trackBy(off *Offer, match func(*media.Track) bool) *media.Track {
 
 // Listed is the tracks a probe of off lists when p was picked from it: off.Tracks, and
 // when p's video is one the class rule left out (Select found it by key or ID), that
-// video in place of the offered video of its class (a video without a picture that the
-// cap left out: in place of the last offered video), so that the pick is among the
-// tracks shown and the list still has one video per class. off.Tracks is not changed.
+// video in place of the offered video of its class, so that the pick is among the tracks
+// shown and the list still has one video per class. A video without a picture (one that
+// names nothing, or that the cap left out) goes in place of the last offered video only
+// when that one has no picture either, else after the offered videos: it never takes a
+// known quality's row. A list that would then pass MaxOffered loses its last audio that
+// p did not pick. off.Tracks is not changed.
 func (off *Offer) Listed(p *Pick) []media.Track {
 	if p == nil || len(p.Tracks) == 0 || slices.ContainsFunc(off.Tracks, func(t media.Track) bool { return t.ID == p.Tracks[0].ID }) {
 		return off.Tracks
@@ -169,6 +186,9 @@ func (off *Offer) Listed(p *Pick) []media.Track {
 		if at < -1 {
 			at = len(off.Tracks) - 1
 		}
+		if at >= 0 && off.class[off.Tracks[at].ID] > 0 {
+			return insertListed(off.Tracks, at+1, off.more[i], p)
+		}
 	}
 	out := slices.Clone(off.Tracks)
 	if at < 0 {
@@ -181,6 +201,21 @@ func (off *Offer) Listed(p *Pick) []media.Track {
 		return slices.Insert(out, at, off.more[i])
 	}
 	out[at] = off.more[i]
+	return out
+}
+
+// insertListed returns tracks with v inserted at i, at most MaxOffered: past it the last
+// audio that p did not pick goes.
+func insertListed(tracks []media.Track, i int, v media.Track, p *Pick) []media.Track {
+	out := slices.Insert(slices.Clone(tracks), i, v)
+	if len(out) <= MaxOffered {
+		return out
+	}
+	for j := len(out) - 1; j > i; j-- {
+		if out[j].Kind == media.KindAudio && (len(p.Tracks) < 2 || out[j].ID != p.Tracks[1].ID) {
+			return slices.Delete(out, j, j+1)
+		}
+	}
 	return out
 }
 

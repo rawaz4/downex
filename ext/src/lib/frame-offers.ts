@@ -9,7 +9,7 @@
 
 import { fileName } from './file-handoff';
 import { type FrameReport, SHORT_CLIP_MS, allLive, allProtected, isMp4Path, protectedOrLive } from './frame-media';
-import { type FrameRef, type MediaItem, isStream, itemKey, toMediaEntry } from './media';
+import { directoryOf, type FrameRef, type MediaItem, isStream, itemKey, toMediaEntry } from './media';
 import type { MediaSendState } from './media-handoff';
 import type { VideoTaskState } from './messages';
 import {
@@ -19,6 +19,7 @@ import {
   type FrameVideoMeta,
   OFFER_KEY_RE,
   type OfferKey,
+  type PlayedOffer,
   type SiteOffer,
   type StreamEntry,
   type StreamOffer,
@@ -85,6 +86,27 @@ function shortClip(v: FrameVideoMeta | undefined): boolean {
   return v !== undefined && v.durationMs >= 0 && v.durationMs < SHORT_CLIP_MS;
 }
 
+/**
+ * The group of a stream's playlist (StreamOffer.group): a hash of its origin, directory and file name
+ * up to the first "_" or "." ("" for an address that does not parse). Playlists of one video named alike
+ * (`<name>.m3u8`, `<name>_720w.m3u8`, `<name>_audio.m3u8`) share it; one directory per video too.
+ */
+export function streamGroup(url: string): string {
+  try {
+    const u = new URL(url);
+    const slash = u.pathname.lastIndexOf('/');
+    const name = u.pathname.slice(slash + 1);
+    const stem = /^[^_.]*/.exec(name)?.[0] ?? name;
+    // A hash: the panel compares groups, it never needs (or shows) the directory.
+    const text = `${u.origin}${u.pathname.slice(0, slash + 1)}${stem}`;
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
+    return h.toString(36);
+  } catch {
+    return '';
+  }
+}
+
 /** What a page's panel shows of an address: host and last path segment, never the query. */
 export function displayOf(url: string): string {
   try {
@@ -123,7 +145,14 @@ export interface FrameOffersInput {
   /** The tab's element reports. */
   reports: readonly FrameReport[];
   site?: SiteOffer;
-  features: { streams: boolean; video: boolean };
+  /** The clicked `blob:` video's Played source (SITE-MEDIA-SPEC §2.9). */
+  played?: PlayedOffer;
+  /**
+   * The directories of the segments the frame's page fetched last (its resource timing, read at the
+   * click): the stream playing now is there. Without them, the frame's recorded segment files say.
+   */
+  playingDirs?: readonly string[];
+  features: { streams: boolean; video: boolean; clips?: boolean };
   /** The stream probe cache's state of a stream. */
   streamProbe: (item: MediaItem) => VideoTaskState<VideoInfoResult> | undefined;
   /** The stream was refused: it is not offered. */
@@ -162,14 +191,53 @@ function fileOffer(item: MediaItem, input: FrameOffersInput, reports: ReadonlyMa
   return offer;
 }
 
-function streamOffer(item: MediaItem, input: FrameOffersInput): StreamOffer {
+/** Segments fetched within this long of the frame's newest one are of the video playing now. */
+export const PLAYING_SEGMENTS_MS = 10_000;
+
+/**
+ * The directories of the segments a frame fetched last (within PLAYING_SEGMENTS_MS of its newest):
+ * those of the stream the video playing now plays (VIDEO-DETECT-SPEC §2.6). Empty without segments.
+ */
+export function playingSegmentDirs(items: readonly MediaItem[]): Set<string> {
+  const segs = items.filter((i) => !isStream(i) && i.segment);
+  const newest = Math.max(...segs.map((i) => i.lastSeen));
+  const dirs = new Set<string>();
+  for (const s of segs) {
+    if (s.lastSeen < newest - PLAYING_SEGMENTS_MS) continue;
+    const d = directoryOf(s.url);
+    if (d) dirs.add(d);
+  }
+  return dirs;
+}
+
+/**
+ * Whether a stream's playlist is of the segments in `dirs`: in the same directory, or a directory
+ * above them at least two levels deep (a master playlist above its variants' folders).
+ */
+export function streamOfSegments(url: string, dirs: ReadonlySet<string>): boolean {
+  const own = directoryOf(url);
+  if (!own) return false;
+  if (dirs.has(own)) return true;
+  let deep = false;
+  try {
+    deep = new URL(own).pathname.split('/').filter((s) => s !== '').length >= 2;
+  } catch {
+    deep = false;
+  }
+  return deep && [...dirs].some((d) => d.startsWith(own));
+}
+
+function streamOffer(item: MediaItem, input: FrameOffersInput, playing?: ReadonlySet<string>): StreamOffer {
   const same = item.frameId === input.sender.frameId;
   const offer: StreamOffer = {
     key: itemKey(item),
     format: item.format === 'dash' ? 'dash' : 'hls',
     display: displayOf(item.url),
+    group: streamGroup(item.url),
     frame: same ? 'this' : 'other',
-    matched: same && input.mse,
+    // Several streams in the frame (a grid of previews): only the one whose segments are being
+    // fetched is the clicked video's (measured 2026-11-18: 48 playlists of a grid all marked).
+    matched: same && input.mse && (playing === undefined || streamOfSegments(item.url, playing)),
   };
   const probe = input.streamProbe(item);
   if (probe) offer.probe = probe;
@@ -231,10 +299,18 @@ export function buildFrameOffers(input: FrameOffersInput): FrameOffers {
     const p = input.streamProbe(i);
     return p !== undefined && 'result' in p && !p.result.ok && p.result.error.code === 'rejected' && daemonCode(p.result.error) === 'live';
   };
-  const streams = frameStreams
-    .filter((i) => !input.refused(i))
+  const offered = frameStreams.filter((i) => !input.refused(i));
+  // The streams of the segments fetched last, when that names some of several (else every stream
+  // of the frame is the clicked video's, as before).
+  const ownStreams = offered.filter((i) => i.frameId === sender.frameId);
+  const dirs =
+    input.playingDirs && input.playingDirs.length > 0
+      ? new Set(input.playingDirs)
+      : playingSegmentDirs(input.items.filter((i) => i.frameId === sender.frameId && sameDocument(i.documentId, sender.documentId)));
+  const playing = ownStreams.length > 1 && dirs.size > 0 && ownStreams.some((i) => streamOfSegments(i.url, dirs)) ? dirs : undefined;
+  const streams = offered
     .sort((a, b) => Number(b.frameId === sender.frameId) - Number(a.frameId === sender.frameId) || b.lastSeen - a.lastSeen)
-    .map((i) => streamOffer(i, input));
+    .map((i) => streamOffer(i, input, playing));
   const clicked = own?.videos.filter((v) => (src !== '' ? sameUrl(v.src, src) : input.mse && v.mse)) ?? [];
   const offers: FrameOffers = {
     title: input.title,
@@ -248,6 +324,7 @@ export function buildFrameOffers(input: FrameOffersInput): FrameOffers {
       (src === '' && input.mse && frameStreams.length > 0 && frameStreams.every(refusedLive)),
   };
   if (input.site) offers.site = input.site;
+  if (input.played) offers.played = input.played;
   return offers;
 }
 

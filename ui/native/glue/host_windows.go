@@ -52,6 +52,7 @@ type Window struct {
 
 	h        *Host
 	instance *win.Instance // a progress window's own lock (old builds' starts find it)
+	hooks    confirmHooks  // the main window's (SetConfirmHooks)
 	win      *win.Window   // from the moment Open makes it (Host.windowMade)
 	prefs    *prefs.File   // OpenPrefs' (flushed at the end of the session)
 	defers   []func()
@@ -115,7 +116,9 @@ func (h *Host) Run(o RunOptions) error {
 // Request shows what args ask for (a later start's, or a window's own request): no
 // "--progress" is the main window (opened when it is not, else restored and brought to the
 // front, its "--confirm <id>" requests shown), "--progress <id>" that download's progress
-// window (one per download). For the UI thread, while Run runs.
+// window (one per download), "--confirm <id> --raise" the standalone Confirm download window
+// (one, which takes later ids in turn; the main window is not shown). For the UI thread,
+// while Run runs.
 func (h *Host) Request(args []string) {
 	if err := h.request(args); err != nil {
 		h.Log.Warn("cannot open the window", "progress", host.ViewOf(args).Progress, "error", err)
@@ -129,7 +132,7 @@ func (h *Host) request(args []string) (err error) {
 	v := host.ViewOf(args)
 	if v.IsProgress() {
 		if w := h.progress[v.Progress]; w != nil {
-			w.front()
+			w.frontFor(args)
 			return nil
 		}
 		return h.openProgress(v, args)
@@ -137,8 +140,17 @@ func (h *Host) request(args []string) (err error) {
 	if h.Legacy {
 		return nil // a legacy host shows its one progress window (nothing else reaches it)
 	}
+	if v.IsConfirm() {
+		// A download the user just started in the browser: its own Confirm download window,
+		// and the main window is left as it is (hidden, minimised or wherever it is).
+		if w := h.confirm; w != nil {
+			w.Session.SecondInstance(args, func() { w.frontFor(args) })
+			return nil
+		}
+		return h.open(h.newWindow(v, args, nil))
+	}
 	if w := h.main; w != nil {
-		w.Session.SecondInstance(args, w.front)
+		w.Session.SecondInstance(args, func() { w.frontFor(args) })
 		return nil
 	}
 	return h.open(h.newWindow(v, args, nil))
@@ -192,9 +204,13 @@ func (h *Host) newWindow(v host.View, args []string, inst *win.Instance) *Window
 		}),
 	}
 	h.windows = append(h.windows, w)
-	if v.IsProgress() {
+	switch {
+	case v.IsProgress():
 		h.progress[v.Progress] = w
-	} else {
+	case v.IsConfirm():
+		h.confirm = w
+		h.confirmChanged()
+	default:
 		h.main = w
 	}
 	return w
@@ -225,6 +241,11 @@ func (h *Host) open(w *Window) (err error) {
 		return err
 	}
 	w.win = ww
+	if !h.noActivate && host.RaiseArg(w.Args) {
+		// The window of a download the user just started in the browser: over the browser,
+		// even without the foreground (never for a §8 complete dialog or a clipboard add).
+		ww.Raise()
+	}
 	return nil
 }
 
@@ -321,6 +342,18 @@ func (w *Window) front() {
 	w.win.BringToFront()
 }
 
+// frontFor brings w to the front for a later start with args: one with "--raise" (a
+// download the user just started in the browser) puts it above the browser even when the
+// foreground is not granted.
+func (w *Window) frontFor(args []string) {
+	if w.win == nil || w.h.noActivate {
+		return
+	}
+	if !w.win.BringToFront() && host.RaiseArg(args) {
+		w.win.Raise()
+	}
+}
+
 func (w *Window) command(c kit.WindowCommand) {
 	if w.win != nil {
 		w.win.Command(c)
@@ -350,6 +383,10 @@ func (w *Window) end() {
 	}
 	if h.progress[w.View.Progress] == w {
 		delete(h.progress, w.View.Progress)
+	}
+	if h.confirm == w {
+		h.confirm = nil
+		h.confirmChanged()
 	}
 }
 

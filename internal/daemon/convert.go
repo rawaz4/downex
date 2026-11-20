@@ -12,6 +12,7 @@ import (
 
 	"downex/internal/dlview"
 	"downex/internal/engine"
+	"downex/internal/filecheck"
 	"downex/internal/model"
 	downexv1 "downex/internal/rpc/downex/v1"
 )
@@ -187,9 +188,34 @@ type downloadView struct {
 	queue         model.QueueID
 	errCode       string
 	running       bool
-	progress      *engine.Progress // latest live progress, nil before the first event
-	mprogress     *MediaProgress   // latest live progress of a media download
-	queuePosition int              // 1-based among queued downloads, 0 otherwise
+	progress      *engine.Progress     // latest live progress, nil before the first event
+	mprogress     *MediaProgress       // latest live progress of a media download
+	queuePosition int                  // 1-based among queued downloads, 0 otherwise
+	check         *model.FileCheck     // the file check shown (filecheck.Shown); nil = none or off
+	renewCheck    bool                 // a held add whose link is being checked (renew.go)
+	renewOffer    *downexv1.RenewOffer // an awaiting add's offer to continue a stopped download
+}
+
+// protoFileCheck renders a file check of the file named name with its texts
+// (docs/DESKTOP-SPEC.md §9.6); nil and NONE are omitted.
+func protoFileCheck(fc *model.FileCheck, name string) *downexv1.FileCheck {
+	if fc == nil || fc.Level == model.FileCheckNone {
+		return nil
+	}
+	return &downexv1.FileCheck{
+		Level:             downexv1.FileCheckLevel(fc.Level),
+		Stage:             downexv1.FileCheckStage(fc.Stage + 1),
+		Reason:            fc.Reason,
+		Content:           fc.Content,
+		ContentLabel:      filecheck.ContentLabel(fc),
+		ClaimLabel:        filecheck.ClaimLabel(fc),
+		ServedType:        fc.Served,
+		Member:            fc.Member,
+		ProgramMembers:    clampInt32(fc.ProgramMembers),
+		ListingIncomplete: fc.ListingIncomplete,
+		Summary:           filecheck.Summary(fc, name),
+		Detail:            filecheck.Detail(fc),
+	}
 }
 
 // toProto renders v. Live fields are only set while the download runs; error and
@@ -227,7 +253,12 @@ func (v downloadView) toProto() *downexv1.Download {
 		ActiveMs:         max(d.ActiveMS, 0),
 		StartedAt:        protoTime(d.StartedAt),
 		QueueId:          int64(v.queue),
+		FileCheck:        protoFileCheck(v.check, d.Filename),
+		RenewCheck:       v.renewCheck,
+		RenewOffer:       v.renewOffer,
+		RescuedBytes:     d.RescuedBytes,
 	}
+	pd.PageUrl = dlview.PageURL(d)
 	if pd.QueueId == 0 {
 		pd.QueueId = int64(model.MainQueueID)
 	}
@@ -326,6 +357,7 @@ func protoSettingsWith(s Settings, hasSecret func(kind, id string) bool) *downex
 	s.Desktop.toProto(p)
 	s.Update.setProto(p)
 	s.Media.toProto(p)
+	s.Polite.toProto(p)
 	return p
 }
 
@@ -354,6 +386,7 @@ func settingsFromProto(p *downexv1.Settings) Settings {
 		Desktop:                 desktopFromProto(p),
 		Update:                  updateSettingsFromProto(p),
 		Media:                   mediaSettingsFromProto(p),
+		Polite:                  politeSettingsFromProto(p),
 	}
 }
 

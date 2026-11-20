@@ -76,9 +76,16 @@ type session struct {
 
 func startSession(t *testing.T, be backend) *session {
 	t.Helper()
+	return startSessionFor(t, be, testTimeout)
+}
+
+// startSessionFor is startSession whose relay ends after timeout (a request's context
+// deadline is never later than the relay's).
+func startSessionFor(t *testing.T, be backend, timeout time.Duration) *session {
+	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	s := &session{t: t, in: inW, out: outR, done: make(chan error, 1), cancel: cancel}
 	r := &relay{be: be, log: testLogger(t)}
 	go func() {
@@ -194,19 +201,53 @@ type fakeBackend struct {
 	media     []*downexv1.AddMediaRequest
 	mediaErr  error
 	state     downexv1.DownloadState // of the downloads add and addMedia return
+	renew     bool                   // add's downloads are held for a renewal check (renew_check)
+	rescues   []*downexv1.RescueRequest
+	resumes   []int64
+	rescueErr error // answer of rescue and resume
+	takes     []*downexv1.TakeBrowserFetchRequest
+	puts      []*downexv1.PutBrowserFetchRequest
+	takeResp  *downexv1.TakeBrowserFetchResponse
+	putStop   bool
+	fetchErr  error
 }
 
-func (f *fakeBackend) addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, error) {
+func (f *fakeBackend) addMedia(ctx context.Context, req *downexv1.AddMediaRequest) (*downexv1.Download, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.media = append(f.media, req)
 	dl, _ := ctx.Deadline()
 	f.deadlines = append(f.deadlines, dl)
 	if f.mediaErr != nil {
-		return nil, f.mediaErr
+		return nil, "", f.mediaErr
 	}
 	f.nextID++
-	return &downexv1.Download{Id: f.nextID, Url: req.GetManifestUrl(), Kind: downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA, State: f.state}, nil
+	return &downexv1.Download{Id: f.nextID, Url: req.GetManifestUrl(), Kind: downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA, State: f.state}, "", nil
+}
+
+// takeFetch and putFetch record the browser fetches (docs/SITE-MEDIA-SPEC.md §2.8) and
+// answer what takeResp/putStop say.
+func (f *fakeBackend) takeFetch(ctx context.Context, req *downexv1.TakeBrowserFetchRequest) (*downexv1.TakeBrowserFetchResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.takes = append(f.takes, req)
+	if f.fetchErr != nil {
+		return nil, f.fetchErr
+	}
+	if f.takeResp == nil {
+		return &downexv1.TakeBrowserFetchResponse{}, nil
+	}
+	return f.takeResp, nil
+}
+
+func (f *fakeBackend) putFetch(ctx context.Context, req *downexv1.PutBrowserFetchRequest) (*downexv1.PutBrowserFetchResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.puts = append(f.puts, req)
+	if f.fetchErr != nil {
+		return nil, f.fetchErr
+	}
+	return &downexv1.PutBrowserFetchResponse{Stop: f.putStop}, nil
 }
 
 func (f *fakeBackend) warm(context.Context) error {
@@ -243,7 +284,7 @@ func (f *fakeBackend) add(ctx context.Context, req *downexv1.AddRequest) (*downe
 	}
 	f.nextID++
 	f.ids[req.GetUrl()] = f.nextID
-	return &downexv1.Download{Id: f.nextID, Url: req.GetUrl(), State: f.state}, nil
+	return &downexv1.Download{Id: f.nextID, Url: req.GetUrl(), State: f.state, RenewCheck: f.renew}, nil
 }
 
 func (f *fakeBackend) status(ctx context.Context) (*downexv1.StatusResponse, error) {
@@ -257,4 +298,30 @@ func (f *fakeBackend) status(ctx context.Context) (*downexv1.StatusResponse, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.st, f.stErr
+}
+
+// rescue records the request and answers from rescueErr, else with a paused download
+// that kept half of the browser's count.
+func (f *fakeBackend) rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.Download, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rescues = append(f.rescues, req)
+	dl, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, dl)
+	if f.rescueErr != nil {
+		return nil, 0, f.rescueErr
+	}
+	f.nextID++
+	return &downexv1.Download{Id: f.nextID, Url: req.GetUrl(), State: downexv1.DownloadState_DOWNLOAD_STATE_PAUSED},
+		req.GetBytesReceived() / 2, nil
+}
+
+func (f *fakeBackend) resume(ctx context.Context, id int64) (*downexv1.Download, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumes = append(f.resumes, id)
+	if f.rescueErr != nil {
+		return nil, f.rescueErr
+	}
+	return &downexv1.Download{Id: id, State: downexv1.DownloadState_DOWNLOAD_STATE_QUEUED}, nil
 }

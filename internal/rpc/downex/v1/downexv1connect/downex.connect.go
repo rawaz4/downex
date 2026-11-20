@@ -72,6 +72,17 @@ const (
 	// DownloadServiceSetDownloadOptionsProcedure is the fully-qualified name of the DownloadService's
 	// SetDownloadOptions RPC.
 	DownloadServiceSetDownloadOptionsProcedure = "/downex.v1.DownloadService/SetDownloadOptions"
+	// DownloadServiceRenewLinkProcedure is the fully-qualified name of the DownloadService's RenewLink
+	// RPC.
+	DownloadServiceRenewLinkProcedure = "/downex.v1.DownloadService/RenewLink"
+	// DownloadServiceRescueProcedure is the fully-qualified name of the DownloadService's Rescue RPC.
+	DownloadServiceRescueProcedure = "/downex.v1.DownloadService/Rescue"
+	// DownloadServiceTakeBrowserFetchProcedure is the fully-qualified name of the DownloadService's
+	// TakeBrowserFetch RPC.
+	DownloadServiceTakeBrowserFetchProcedure = "/downex.v1.DownloadService/TakeBrowserFetch"
+	// DownloadServicePutBrowserFetchProcedure is the fully-qualified name of the DownloadService's
+	// PutBrowserFetch RPC.
+	DownloadServicePutBrowserFetchProcedure = "/downex.v1.DownloadService/PutBrowserFetch"
 	// DaemonServiceStatusProcedure is the fully-qualified name of the DaemonService's Status RPC.
 	DaemonServiceStatusProcedure = "/downex.v1.DaemonService/Status"
 	// DaemonServiceGetSettingsProcedure is the fully-qualified name of the DaemonService's GetSettings
@@ -138,6 +149,24 @@ type DownloadServiceClient interface {
 	// SetDownloadOptions changes a download's limits; a running download applies the speed limit
 	// at once and the connection limit as soon as the engine can (§7).
 	SetDownloadOptions(context.Context, *connect.Request[v1.SetDownloadOptionsRequest]) (*connect.Response[v1.SetDownloadOptionsResponse], error)
+	// RenewLink gives a stopped file download a new link once the new link proves to serve
+	// the same bytes (docs/ENGINE-SPEC.md §7.3, docs/DAEMON-SPEC.md §3). Refusals are
+	// FailedPrecondition with a "<code>: " message prefix and Downex-Error-Code metadata
+	// (renew_mismatch, renew_size, renew_changed, renew_no_ranges, renew_unproven,
+	// renew_name, link_expired, auth_required, ...).
+	RenewLink(context.Context, *connect.Request[v1.RenewLinkRequest]) (*connect.Response[v1.RenewLinkResponse], error)
+	// Rescue adopts a partial file a browser (or another program) left unfinished and
+	// continues it from its last trusted byte, once the server proves to serve the same file
+	// (docs/ENGINE-SPEC.md §7.4, docs/DAEMON-SPEC.md §3). Refusals carry a "<code>: "
+	// message prefix and Downex-Error-Code metadata (rescue_no_ranges, rescue_size_unknown,
+	// rescue_changed, rescue_unproven, rescue_not_found, rescue_ambiguous, rescue_locked,
+	// rescue_no_access, rescue_empty, link_expired, auth_required, ...).
+	Rescue(context.Context, *connect.Request[v1.RescueRequest]) (*connect.Response[v1.RescueResponse], error)
+	// TakeBrowserFetch and PutBrowserFetch move a download's requests to the user's browser and its
+	// bytes back (browser-fetched saves, docs/SITE-MEDIA-SPEC.md §2.8). Only the holder of a download's
+	// fetch ticket reaches its requests.
+	TakeBrowserFetch(context.Context, *connect.Request[v1.TakeBrowserFetchRequest]) (*connect.Response[v1.TakeBrowserFetchResponse], error)
+	PutBrowserFetch(context.Context, *connect.Request[v1.PutBrowserFetchRequest]) (*connect.Response[v1.PutBrowserFetchResponse], error)
 }
 
 // NewDownloadServiceClient constructs a client for the downex.v1.DownloadService service. By
@@ -229,6 +258,30 @@ func NewDownloadServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(downloadServiceMethods.ByName("SetDownloadOptions")),
 			connect.WithClientOptions(opts...),
 		),
+		renewLink: connect.NewClient[v1.RenewLinkRequest, v1.RenewLinkResponse](
+			httpClient,
+			baseURL+DownloadServiceRenewLinkProcedure,
+			connect.WithSchema(downloadServiceMethods.ByName("RenewLink")),
+			connect.WithClientOptions(opts...),
+		),
+		rescue: connect.NewClient[v1.RescueRequest, v1.RescueResponse](
+			httpClient,
+			baseURL+DownloadServiceRescueProcedure,
+			connect.WithSchema(downloadServiceMethods.ByName("Rescue")),
+			connect.WithClientOptions(opts...),
+		),
+		takeBrowserFetch: connect.NewClient[v1.TakeBrowserFetchRequest, v1.TakeBrowserFetchResponse](
+			httpClient,
+			baseURL+DownloadServiceTakeBrowserFetchProcedure,
+			connect.WithSchema(downloadServiceMethods.ByName("TakeBrowserFetch")),
+			connect.WithClientOptions(opts...),
+		),
+		putBrowserFetch: connect.NewClient[v1.PutBrowserFetchRequest, v1.PutBrowserFetchResponse](
+			httpClient,
+			baseURL+DownloadServicePutBrowserFetchProcedure,
+			connect.WithSchema(downloadServiceMethods.ByName("PutBrowserFetch")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -247,6 +300,10 @@ type downloadServiceClient struct {
 	addMedia           *connect.Client[v1.AddMediaRequest, v1.AddMediaResponse]
 	probeMedia         *connect.Client[v1.ProbeMediaRequest, v1.ProbeMediaResponse]
 	setDownloadOptions *connect.Client[v1.SetDownloadOptionsRequest, v1.SetDownloadOptionsResponse]
+	renewLink          *connect.Client[v1.RenewLinkRequest, v1.RenewLinkResponse]
+	rescue             *connect.Client[v1.RescueRequest, v1.RescueResponse]
+	takeBrowserFetch   *connect.Client[v1.TakeBrowserFetchRequest, v1.TakeBrowserFetchResponse]
+	putBrowserFetch    *connect.Client[v1.PutBrowserFetchRequest, v1.PutBrowserFetchResponse]
 }
 
 // Add calls downex.v1.DownloadService.Add.
@@ -314,6 +371,26 @@ func (c *downloadServiceClient) SetDownloadOptions(ctx context.Context, req *con
 	return c.setDownloadOptions.CallUnary(ctx, req)
 }
 
+// RenewLink calls downex.v1.DownloadService.RenewLink.
+func (c *downloadServiceClient) RenewLink(ctx context.Context, req *connect.Request[v1.RenewLinkRequest]) (*connect.Response[v1.RenewLinkResponse], error) {
+	return c.renewLink.CallUnary(ctx, req)
+}
+
+// Rescue calls downex.v1.DownloadService.Rescue.
+func (c *downloadServiceClient) Rescue(ctx context.Context, req *connect.Request[v1.RescueRequest]) (*connect.Response[v1.RescueResponse], error) {
+	return c.rescue.CallUnary(ctx, req)
+}
+
+// TakeBrowserFetch calls downex.v1.DownloadService.TakeBrowserFetch.
+func (c *downloadServiceClient) TakeBrowserFetch(ctx context.Context, req *connect.Request[v1.TakeBrowserFetchRequest]) (*connect.Response[v1.TakeBrowserFetchResponse], error) {
+	return c.takeBrowserFetch.CallUnary(ctx, req)
+}
+
+// PutBrowserFetch calls downex.v1.DownloadService.PutBrowserFetch.
+func (c *downloadServiceClient) PutBrowserFetch(ctx context.Context, req *connect.Request[v1.PutBrowserFetchRequest]) (*connect.Response[v1.PutBrowserFetchResponse], error) {
+	return c.putBrowserFetch.CallUnary(ctx, req)
+}
+
 // DownloadServiceHandler is an implementation of the downex.v1.DownloadService service.
 type DownloadServiceHandler interface {
 	Add(context.Context, *connect.Request[v1.AddRequest]) (*connect.Response[v1.AddResponse], error)
@@ -331,6 +408,24 @@ type DownloadServiceHandler interface {
 	// SetDownloadOptions changes a download's limits; a running download applies the speed limit
 	// at once and the connection limit as soon as the engine can (§7).
 	SetDownloadOptions(context.Context, *connect.Request[v1.SetDownloadOptionsRequest]) (*connect.Response[v1.SetDownloadOptionsResponse], error)
+	// RenewLink gives a stopped file download a new link once the new link proves to serve
+	// the same bytes (docs/ENGINE-SPEC.md §7.3, docs/DAEMON-SPEC.md §3). Refusals are
+	// FailedPrecondition with a "<code>: " message prefix and Downex-Error-Code metadata
+	// (renew_mismatch, renew_size, renew_changed, renew_no_ranges, renew_unproven,
+	// renew_name, link_expired, auth_required, ...).
+	RenewLink(context.Context, *connect.Request[v1.RenewLinkRequest]) (*connect.Response[v1.RenewLinkResponse], error)
+	// Rescue adopts a partial file a browser (or another program) left unfinished and
+	// continues it from its last trusted byte, once the server proves to serve the same file
+	// (docs/ENGINE-SPEC.md §7.4, docs/DAEMON-SPEC.md §3). Refusals carry a "<code>: "
+	// message prefix and Downex-Error-Code metadata (rescue_no_ranges, rescue_size_unknown,
+	// rescue_changed, rescue_unproven, rescue_not_found, rescue_ambiguous, rescue_locked,
+	// rescue_no_access, rescue_empty, link_expired, auth_required, ...).
+	Rescue(context.Context, *connect.Request[v1.RescueRequest]) (*connect.Response[v1.RescueResponse], error)
+	// TakeBrowserFetch and PutBrowserFetch move a download's requests to the user's browser and its
+	// bytes back (browser-fetched saves, docs/SITE-MEDIA-SPEC.md §2.8). Only the holder of a download's
+	// fetch ticket reaches its requests.
+	TakeBrowserFetch(context.Context, *connect.Request[v1.TakeBrowserFetchRequest]) (*connect.Response[v1.TakeBrowserFetchResponse], error)
+	PutBrowserFetch(context.Context, *connect.Request[v1.PutBrowserFetchRequest]) (*connect.Response[v1.PutBrowserFetchResponse], error)
 }
 
 // NewDownloadServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -418,6 +513,30 @@ func NewDownloadServiceHandler(svc DownloadServiceHandler, opts ...connect.Handl
 		connect.WithSchema(downloadServiceMethods.ByName("SetDownloadOptions")),
 		connect.WithHandlerOptions(opts...),
 	)
+	downloadServiceRenewLinkHandler := connect.NewUnaryHandler(
+		DownloadServiceRenewLinkProcedure,
+		svc.RenewLink,
+		connect.WithSchema(downloadServiceMethods.ByName("RenewLink")),
+		connect.WithHandlerOptions(opts...),
+	)
+	downloadServiceRescueHandler := connect.NewUnaryHandler(
+		DownloadServiceRescueProcedure,
+		svc.Rescue,
+		connect.WithSchema(downloadServiceMethods.ByName("Rescue")),
+		connect.WithHandlerOptions(opts...),
+	)
+	downloadServiceTakeBrowserFetchHandler := connect.NewUnaryHandler(
+		DownloadServiceTakeBrowserFetchProcedure,
+		svc.TakeBrowserFetch,
+		connect.WithSchema(downloadServiceMethods.ByName("TakeBrowserFetch")),
+		connect.WithHandlerOptions(opts...),
+	)
+	downloadServicePutBrowserFetchHandler := connect.NewUnaryHandler(
+		DownloadServicePutBrowserFetchProcedure,
+		svc.PutBrowserFetch,
+		connect.WithSchema(downloadServiceMethods.ByName("PutBrowserFetch")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/downex.v1.DownloadService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case DownloadServiceAddProcedure:
@@ -446,6 +565,14 @@ func NewDownloadServiceHandler(svc DownloadServiceHandler, opts ...connect.Handl
 			downloadServiceProbeMediaHandler.ServeHTTP(w, r)
 		case DownloadServiceSetDownloadOptionsProcedure:
 			downloadServiceSetDownloadOptionsHandler.ServeHTTP(w, r)
+		case DownloadServiceRenewLinkProcedure:
+			downloadServiceRenewLinkHandler.ServeHTTP(w, r)
+		case DownloadServiceRescueProcedure:
+			downloadServiceRescueHandler.ServeHTTP(w, r)
+		case DownloadServiceTakeBrowserFetchProcedure:
+			downloadServiceTakeBrowserFetchHandler.ServeHTTP(w, r)
+		case DownloadServicePutBrowserFetchProcedure:
+			downloadServicePutBrowserFetchHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -505,6 +632,22 @@ func (UnimplementedDownloadServiceHandler) ProbeMedia(context.Context, *connect.
 
 func (UnimplementedDownloadServiceHandler) SetDownloadOptions(context.Context, *connect.Request[v1.SetDownloadOptionsRequest]) (*connect.Response[v1.SetDownloadOptionsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("downex.v1.DownloadService.SetDownloadOptions is not implemented"))
+}
+
+func (UnimplementedDownloadServiceHandler) RenewLink(context.Context, *connect.Request[v1.RenewLinkRequest]) (*connect.Response[v1.RenewLinkResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("downex.v1.DownloadService.RenewLink is not implemented"))
+}
+
+func (UnimplementedDownloadServiceHandler) Rescue(context.Context, *connect.Request[v1.RescueRequest]) (*connect.Response[v1.RescueResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("downex.v1.DownloadService.Rescue is not implemented"))
+}
+
+func (UnimplementedDownloadServiceHandler) TakeBrowserFetch(context.Context, *connect.Request[v1.TakeBrowserFetchRequest]) (*connect.Response[v1.TakeBrowserFetchResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("downex.v1.DownloadService.TakeBrowserFetch is not implemented"))
+}
+
+func (UnimplementedDownloadServiceHandler) PutBrowserFetch(context.Context, *connect.Request[v1.PutBrowserFetchRequest]) (*connect.Response[v1.PutBrowserFetchResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("downex.v1.DownloadService.PutBrowserFetch is not implemented"))
 }
 
 // DaemonServiceClient is a client for the downex.v1.DaemonService service.

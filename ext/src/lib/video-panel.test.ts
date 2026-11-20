@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AddedResult, failure, type Outcome, type VideoInfoResult, type VideoTrack } from './protocol';
 import { VIDEO_RETRY_LIMIT_MS, VIDEO_RETRY_MS } from './video-handoff';
-import { ALLOW_SIGN_IN_TEXT, MP4_NOTE, VideoPanel, type VideoPanelView } from './video-panel';
+import { MP4_NOTE, VideoPanel, type VideoPanelView } from './video-panel';
 import type { TrackPick } from './video-picker';
 
 const MB = 1_000_000;
@@ -35,21 +35,18 @@ function setup(answers: Outcome<VideoInfoResult>[] = [{ ok: true, value: INFO }]
   const queue = [...answers];
   const probe = vi.fn(async () => queue.shift() ?? ({ ok: true, value: INFO } as Outcome<VideoInfoResult>));
   let addAnswer: Outcome<AddedResult> = { ok: true, value: { type: 'added', downloadId: 1, awaiting: true } };
-  const allowSignIn = vi.fn(async () => undefined);
   const panel = new VideoPanel({
     probe,
     add: async (pick) => {
       picks.push(pick);
       return addAnswer;
     },
-    allowSignIn,
     render: (v) => views.push(v),
   });
   return {
     panel,
     probe,
     picks,
-    allowSignIn,
     last: () => views[views.length - 1]!,
     answerAdd: (o: Outcome<AddedResult>) => (addAnswer = o),
     queue,
@@ -64,6 +61,24 @@ afterEach(() => {
 });
 
 describe('VideoPanel', () => {
+  it('starts from the highest quality with sound and badges it when it recommends (§5.2)', async () => {
+    const render = vi.fn();
+    const panel = new VideoPanel({
+      probe: async () => ({ ok: true, value: { ...INFO, site: 'Instagram' } }),
+      add: async () => ({ ok: true, value: { type: 'added', downloadId: 1, awaiting: true } }),
+      render,
+      recommend: true,
+    });
+    panel.open();
+    await vi.advanceTimersByTimeAsync(0);
+    const v = panel.view();
+    expect(v.pick).toEqual({ video: '401', audio: '140' });
+    expect(v.rows.map((r) => [r.id, r.selected, r.recommended])).toEqual([
+      ['401', true, true],
+      ['299', false, undefined],
+    ]);
+  });
+
   it('gets the qualities when opened and starts from the daemon pick', async () => {
     const { panel, probe, last } = setup();
     panel.open();
@@ -139,48 +154,48 @@ describe('VideoPanel', () => {
     expect(queue).toHaveLength(0);
   });
 
-  it('offers the browser sign-in after auth_required and asks again with it', async () => {
-    const { panel, probe, last, allowSignIn } = setup([refused('auth_required', 'the site asks to sign in')]);
-    panel.open();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(last()).toMatchObject({
-      phase: 'error',
-      status: { text: 'The site wants you to sign in (age check, members-only or bot check).', tone: 'warn' },
-      action: { kind: 'allow-sign-in', text: ALLOW_SIGN_IN_TEXT },
-    });
-    // Reopening does not ask again before the user allows it.
-    panel.close();
-    panel.open();
-    expect(probe).toHaveBeenCalledTimes(1);
-    await panel.allowSignIn();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(allowSignIn).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledTimes(2);
-    expect(last().phase).toBe('list');
+  it('says what became of the sign-in after auth_required, with "Try again" only when signing in can help', async () => {
+    const withNote = (state: 'used' | 'none' | 'off' | 'too-large') => {
+      const o = refused('auth_required', 'the site asks to sign in');
+      if (!o.ok) o.error.signIn = { domain: 'instagram.com', state };
+      return o;
+    };
+    const cases = [
+      { o: refused('auth_required', 'the site asks to sign in'), text: 'The site wants you to sign in (age check, members-only or bot check).', retry: false },
+      { o: withNote('used'), text: 'Downex asked again with this browser’s cookies for instagram.com, but the site still refused. Sign in to instagram.com in this browser, then try again.', retry: true },
+      { o: withNote('none'), text: 'This video needs a sign-in. Sign in to instagram.com in this browser, then try again.', retry: true },
+      {
+        o: withNote('off'),
+        text: 'This video needs a sign-in. To let Downex use yours, turn on “Use my sign-in for videos that need it” in Downex’s browser options.',
+        retry: false,
+      },
+      { o: withNote('too-large'), text: 'This video needs a sign-in, but your sign-in for instagram.com is too large for Downex to use.', retry: false },
+    ];
+    for (const c of cases) {
+      const { panel, probe, last } = setup([c.o]);
+      panel.open();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(last()).toMatchObject({ phase: 'error', status: { text: c.text, tone: 'warn' } });
+      expect(last().action).toEqual(c.retry ? { kind: 'retry', text: 'Try again' } : undefined);
+      // Reopening the panel asks again (the user may have signed in on the site meanwhile).
+      panel.close();
+      panel.open();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(last().phase).toBe('list');
+    }
   });
 
-  it('offers "Try again" after auth_required when the sign-in is already allowed', async () => {
-    const views: VideoPanelView[] = [];
-    const probe = vi
-      .fn<() => Promise<Outcome<VideoInfoResult>>>()
-      .mockResolvedValueOnce(refused('auth_required', 'the site asks to sign in'))
-      .mockResolvedValue({ ok: true, value: INFO });
-    const allowSignIn = vi.fn(async () => undefined);
-    const panel = new VideoPanel({
-      probe,
-      add: async () => failure('x', 'x'),
-      allowSignIn,
-      signInAllowed: () => true,
-      render: (v) => views.push(v),
-    });
+  it('says when the answer and the add needed the sign-in', async () => {
+    const { panel, last, answerAdd } = setup([{ ok: true, value: { ...INFO, signedIn: 'instagram.com' } }]);
     panel.open();
     await vi.advanceTimersByTimeAsync(0);
-    expect(views.at(-1)).toMatchObject({ phase: 'error', action: { kind: 'retry', text: 'Try again' } });
-    panel.retry();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(probe).toHaveBeenCalledTimes(2);
-    expect(allowSignIn).not.toHaveBeenCalled();
-    expect(views.at(-1)?.phase).toBe('list');
+    expect(last()).toMatchObject({ phase: 'list', status: { text: `Used your sign-in for instagram.com. ${MP4_NOTE}`, tone: 'ok' } });
+    answerAdd({ ok: true, value: { type: 'added', downloadId: 4, awaiting: false, signedIn: 'instagram.com' } });
+    await panel.download();
+    expect(last()).toMatchObject({ phase: 'sent', status: { text: 'Downloading in Downex. Used your sign-in for instagram.com.', tone: 'ok' } });
+    panel.clearSent();
+    expect(panel.view().status?.text).toBe(`Used your sign-in for instagram.com. ${MP4_NOTE}`);
   });
 
   it('asks again 2 s after the start of a call, at once after a call that took that long', async () => {

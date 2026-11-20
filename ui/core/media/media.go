@@ -18,20 +18,59 @@ func IsMedia(d *downexv1.Download) bool {
 	return d.GetKind() == downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA
 }
 
-// IsSite reports a web page's video (yt-dlp), not an HLS/DASH manifest.
+// IsSite reports a web page's video (yt-dlp, or the files the browser played for it,
+// SITE-MEDIA-SPEC §2.9), not an HLS/DASH manifest.
 func IsSite(info *downexv1.MediaInfo) bool {
-	return info.GetOrigin() == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE
+	o := info.GetOrigin()
+	return o == downexv1.MediaOrigin_MEDIA_ORIGIN_SITE || o == downexv1.MediaOrigin_MEDIA_ORIGIN_PLAYED
 }
 
 // IsSiteDownload reports a media download of a web page's video.
 func IsSiteDownload(d *downexv1.Download) bool { return IsMedia(d) && IsSite(d.GetMedia()) }
 
-// SiteVideoLabel is "YouTube video"; "Video" when the site has no name.
+// SiteVideoLabel is "YouTube video"; "Video" when the site has no name. An audio page's is
+// "SoundCloud audio" ("Audio"; SITE-MEDIA-SPEC §3.13).
 func SiteVideoLabel(info *downexv1.MediaInfo) string {
-	if site := jsTrim(info.GetSite()); site != "" {
-		return site + " video"
+	kind, bare := " video", "Video"
+	if AudioPage(info) {
+		kind, bare = " audio", "Audio"
 	}
-	return "Video"
+	if site := jsTrim(info.GetSite()); site != "" {
+		return site + kind
+	}
+	return bare
+}
+
+// AudioPage reports a web page without video whose audio downexd offers (SITE-MEDIA-SPEC
+// §3.13): its container is m4a or mp3 and its tracks are audio tracks. Its picker lists the
+// audio tracks only, its name ends in the container's extension, and it has no Part section.
+func AudioPage(info *downexv1.MediaInfo) bool {
+	if !IsSite(info) {
+		return false
+	}
+	c := jsLower(jsTrim(info.GetContainer()))
+	return c == "m4a" || c == "mp3"
+}
+
+// SiteExtension is the extension of a web page's file: ".mp4", or an audio page's ".m4a" or
+// ".mp3".
+func SiteExtension(info *downexv1.MediaInfo) string {
+	if AudioPage(info) {
+		return "." + jsLower(jsTrim(info.GetContainer()))
+	}
+	return ".mp4"
+}
+
+// SiteFileType is the file type of a web page's file for display: "MP4", or an audio page's
+// "M4A" or "MP3" (SiteExtension).
+func SiteFileType(info *downexv1.MediaInfo) string {
+	return strings.ToUpper(strings.TrimPrefix(SiteExtension(info), "."))
+}
+
+// AudioPageHint is what the dialogs say of an audio page (SITE-MEDIA-SPEC §3.13): "This page
+// has no video: its audio is saved as .m4a."
+func AudioPageHint(info *downexv1.MediaInfo) string {
+	return "This page has no video: its audio is saved as " + SiteExtension(info) + "."
 }
 
 // FormatLabel is "HLS", "DASH"; another format in capitals; "" when unknown.
@@ -65,6 +104,7 @@ var codecNames = map[string]string{
 	"opus": "Opus",
 	"ac-3": "AC-3",
 	"ec-3": "E-AC-3",
+	"mp3":  "MP3",
 }
 
 // CodecName names a codec: "avc1.640028" → "H.264", "mp4a.40.2" → "AAC"; another codec as it
@@ -210,19 +250,24 @@ func VideoPictureText(t *downexv1.MediaTrack, site bool) string {
 // one: "1080p (Full HD) 60fps · H.264 · 412 MB", "360p · H.264 + AAC · ~12 MB". The picture is
 // not part of it (VideoPictureText).
 func VideoTrackLabel(t *downexv1.MediaTrack, site bool) string {
+	return videoTrackLabel(t, site, TrackSizeText)
+}
+
+// videoTrackLabel is VideoTrackLabel with a site's size from size.
+func videoTrackLabel(t *downexv1.MediaTrack, site bool, size func(*downexv1.MediaTrack) string) string {
 	parts := []string{shownName(t)}
 	if codecs := CodecNames(t.GetCodecs()); codecs != "" {
 		parts = append(parts, codecs)
 	}
-	size := ""
+	sz := ""
 	if site {
-		size = TrackSizeText(t)
+		sz = size(t)
 	}
-	if size == "" {
-		size = formatBitrate(float64(t.GetBandwidth()))
+	if sz == "" {
+		sz = formatBitrate(float64(t.GetBandwidth()))
 	}
-	if size != "" {
-		parts = append(parts, size)
+	if sz != "" {
+		parts = append(parts, sz)
 	}
 	return strings.Join(parts, " · ")
 }
@@ -236,6 +281,9 @@ func SiteQualityLabel(info *downexv1.MediaInfo, pick TrackPick, t *downexv1.Medi
 	if codecs := CodecNames(t.GetCodecs()); codecs != "" {
 		parts = append(parts, codecs)
 	}
+	if NoSound(info, t) {
+		parts = append(parts, NoSoundText)
+	}
 	size := PickSizeText(PickSizeOf(info, WithVideo(info, pick, t.GetId())))
 	if size == "" {
 		size = formatBitrate(float64(t.GetBandwidth()))
@@ -244,6 +292,25 @@ func SiteQualityLabel(info *downexv1.MediaInfo, pick TrackPick, t *downexv1.Medi
 		parts = append(parts, size)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// NoSoundText is what the pickers say of a video without sound (SITE-MEDIA-SPEC §5.3,
+// amendment 2026-11-18).
+const NoSoundText = "No sound"
+
+// NoSound reports a video-only track listed without any audio track: downexd lists one alone
+// only when the page or stream has no sound (SITE-MEDIA-SPEC §3.11, VIDEO-DETECT-SPEC §3.3), so
+// its file has none.
+func NoSound(info *downexv1.MediaInfo, t *downexv1.MediaTrack) bool {
+	if t.GetKind() != "video" {
+		return false
+	}
+	for _, a := range info.GetTracks() {
+		if a.GetKind() == "audio" {
+			return false
+		}
+	}
+	return true
 }
 
 // isAudioNoteWord is yt-dlp's quality words in a page's audio format note ("medium", "low,
@@ -297,6 +364,11 @@ func AudioTrackTitle(t *downexv1.MediaTrack, site bool) string {
 // AudioTrackLabel is "Commentary (English) · 128 kbit/s · mp4a.40.2". A web page's (site) names
 // its codec and adds its size: "English · AAC · 129 kbit/s · 9.3 MB".
 func AudioTrackLabel(t *downexv1.MediaTrack, site bool) string {
+	return audioTrackLabel(t, site, TrackSizeText)
+}
+
+// audioTrackLabel is AudioTrackLabel with a site's size from size.
+func audioTrackLabel(t *downexv1.MediaTrack, site bool, size func(*downexv1.MediaTrack) string) string {
 	parts := []string{AudioTrackTitle(t, site)}
 	if site && t.GetCodecs() != "" {
 		parts = append(parts, CodecNames(t.GetCodecs()))
@@ -305,8 +377,8 @@ func AudioTrackLabel(t *downexv1.MediaTrack, site bool) string {
 		parts = append(parts, rate)
 	}
 	if site {
-		if size := TrackSizeText(t); size != "" {
-			parts = append(parts, size)
+		if sz := size(t); sz != "" {
+			parts = append(parts, sz)
 		}
 	} else if t.GetCodecs() != "" {
 		parts = append(parts, t.GetCodecs())
@@ -500,20 +572,23 @@ func PickSizeText(size PickSize) string {
 }
 
 // ChosenTracks labels the tracks a media download uses, for its details: the video's with its
-// picture ("4K (2160p) · AV1 · 860 MB · 3840×1634").
+// picture ("4K (2160p) · AV1 · 860 MB · 3840×1634"). A web page's sizes are the part's when it
+// saves one (ClipTrackSizeText, "~").
 func ChosenTracks(info *downexv1.MediaInfo) (video, audio string) {
 	site := IsSite(info)
 	v := TrackByID(info, info.GetSelectedVideo())
 	a := TrackByID(info, info.GetSelectedAudio())
+	clip, dur := InfoClip(info), info.GetDurationMs()
+	size := func(t *downexv1.MediaTrack) string { return ClipTrackSizeText(t, clip, dur) }
 	if v != nil {
-		video = VideoTrackLabel(v, site)
+		video = videoTrackLabel(v, site, size)
 		if picture := VideoPictureText(v, site); picture != "" {
 			video += " · " + picture
 		}
 	}
 	switch {
 	case a != nil:
-		audio = AudioTrackLabel(a, site)
+		audio = audioTrackLabel(a, site, size)
 	case v.GetKind() == "muxed":
 		audio = "In the video track"
 	}

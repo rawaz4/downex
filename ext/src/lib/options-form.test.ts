@@ -187,26 +187,23 @@ describe('mergeExcludedHosts', () => {
 describe('video options', () => {
   it('reads missing or malformed fields as their defaults', () => {
     // Preparing the qualities while the user watches is on by default, also for options stored
-    // before it existed; options stored before the hidden sites existed hide none.
-    expect(parseVideoOptions(undefined)).toEqual({ videoButton: true, useSignInForVideos: false, videoPrefetch: true, hiddenSites: [] });
-    expect(parseVideoOptions({ videoButton: false, useSignInForVideos: 'yes', videoPrefetch: 0, hiddenSites: 'a.example' })).toEqual({
+    // before it existed; options stored before the hidden sites existed hide none. The sign-in is off
+    // by default and for YouTube only (SITE-MEDIA-SPEC §6.3, second amendment 2026-11-18); watching
+    // what plays is on (§2.9).
+    const defaults = { videoButton: true, useSignInForVideos: false, watchPlayed: true, videoPrefetch: true, hiddenSites: [] };
+    expect(parseVideoOptions(undefined)).toEqual(defaults);
+    expect(parseVideoOptions({ videoButton: false, useSignInForVideos: 'yes', videoPrefetch: 0, watchPlayed: 'no', hiddenSites: 'a.example' })).toEqual({
+      ...defaults,
       videoButton: false,
-      useSignInForVideos: false,
-      videoPrefetch: true,
-      hiddenSites: [],
     });
-    expect(parseVideoOptions({ useSignInForVideos: true, extra: 1 })).toEqual({
-      videoButton: true,
-      useSignInForVideos: true,
-      videoPrefetch: true,
-      hiddenSites: [],
-    });
-    expect(parseVideoOptions({ videoPrefetch: false })).toEqual({
-      videoButton: true,
-      useSignInForVideos: false,
-      videoPrefetch: false,
-      hiddenSites: [],
-    });
+    expect(parseVideoOptions({ useSignInForVideos: true, extra: 1 })).toEqual({ ...defaults, useSignInForVideos: true });
+    expect(parseVideoOptions({ videoPrefetch: false })).toEqual({ ...defaults, videoPrefetch: false });
+    expect(parseVideoOptions({ watchPlayed: false })).toEqual({ ...defaults, watchPlayed: false });
+    // A stored value is kept either way: an earlier explicit on stays on (no migration).
+    expect(parseVideoOptions({ videoButton: true, useSignInForVideos: true, watchPlayed: true, videoPrefetch: true, hiddenSites: [] }).useSignInForVideos).toBe(true);
+    expect(parseVideoOptions({ videoButton: true, useSignInForVideos: false, watchPlayed: true, videoPrefetch: true, hiddenSites: [] }).useSignInForVideos).toBe(false);
+    expect(DEFAULT_VIDEO_OPTIONS.useSignInForVideos).toBe(false);
+    expect(DEFAULT_VIDEO_OPTIONS.watchPlayed).toBe(true);
     expect(parseVideoOptions('x')).toEqual(DEFAULT_VIDEO_OPTIONS);
     expect(DEFAULT_VIDEO_OPTIONS.hiddenSites).toEqual([]);
     expect(Object.isFrozen(DEFAULT_VIDEO_OPTIONS.hiddenSites)).toBe(true);
@@ -238,6 +235,7 @@ describe('buttonAllowed', () => {
   const options = (videoButton: boolean, ...hiddenSites: string[]): VideoOptions => ({
     videoButton,
     useSignInForVideos: false,
+    watchPlayed: true,
     videoPrefetch: true,
     hiddenSites,
   });
@@ -262,6 +260,7 @@ describe('the site toggle of the hidden sites', () => {
   const stored: VideoOptions = {
     videoButton: true,
     useSignInForVideos: true,
+    watchPlayed: true,
     videoPrefetch: false,
     hiddenSites: ['a.example', '*.b.example'],
   };

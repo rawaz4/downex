@@ -10,6 +10,9 @@
 //     repeats a URL's path or query.
 //   - A download awaiting confirmation that the window could not be opened for
 //     produces "Confirm download" with its name.
+//   - A failure because the link expired reads "Link expired" with a hint to give it a
+//     new link; a download that continues with a new link found for it reads "Download
+//     continues" (notify_on_complete) (docs/DESKTOP-SPEC.md §10).
 //   - Bursts are coalesced: more than three notifications within five seconds become
 //     one "N downloads completed" message.
 //   - The tooltip reads "Downex — N active, X/s".
@@ -41,6 +44,9 @@ const (
 	KindFailed
 	// KindConfirm reports downloads waiting for the user's confirmation.
 	KindConfirm
+	// KindRenewed reports a download whose link expired that continues with a new link
+	// (docs/DESKTOP-SPEC.md §10). It is never coalesced.
+	KindRenewed
 )
 
 // Notification is one message for the user.
@@ -71,4 +77,6 @@ func PolicyFromSettings(s *downexv1.Settings) Policy {
 type Summary struct {
 	Active int     // downloads probing or downloading
 	Speed  float64 // their total speed, bytes/s
+	// PoliteSlowed: Polite mode holds the downloads back (docs/POLITE-SPEC.md §8).
+	PoliteSlowed bool
 }

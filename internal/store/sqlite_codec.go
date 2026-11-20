@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime"
+	"sync"
 	"time"
 
 	"downex/internal/model"
@@ -13,25 +15,29 @@ import (
 // This file owns the mapping between model.Download / model.Segment and the
 // columns created by migrations/0001_init.sql, 0002_desktop.sql, 0003_media.sql, 0004_completion.sql
 // the downloads columns of 0005_queues.sql (sqlite_queues.go owns the queues table) and
-// 0007_replace.sql. Named parameters tie every
+// 0007_replace.sql, 0008_filecheck.sql, 0009_renew.sql and 0010_rescue.sql. Named parameters tie every
 // value to its column, so the column order of a statement cannot drift.
 
 // downloadSelect lists the columns scanned by scanDownload, in order.
 const downloadSelect = `id, url, method, headers, body IS NOT NULL, body, final_url, dir, filename,
 	size, mode, state, etag, etag_strong, last_modified, max_connections, speed_limit, error,
 	created_at, updated_at, completed_at, source, expected_size, mime, category, kind, media, media_checkpoint,
-	completion_dialog, started_at, active_ms, queue_id, replace_file`
+	completion_dialog, started_at, active_ms, queue_id, replace_file, served_type, name_controls, file_check,
+	page_url, remote_name, rescued_bytes`
 
 const (
+	// file_check is inserted as NULL and never updated here: only SetFileCheck writes it.
 	insertDownloadSQL = `INSERT INTO downloads (url, method, headers, body, final_url, dir, filename,
 	size, mode, state, etag, etag_strong, last_modified, max_connections, speed_limit, error,
 	created_at, updated_at, completed_at, source, expected_size, mime, category, kind, media, media_checkpoint,
-	completion_dialog, started_at, active_ms, queue_id, queue_pos, replace_file)
+	completion_dialog, started_at, active_ms, queue_id, queue_pos, replace_file, served_type, name_controls,
+	file_check, page_url, remote_name, rescued_bytes)
 VALUES (:url, :method, :headers, :body, :final_url, :dir, :filename,
 	:size, :mode, :state, :etag, :etag_strong, :last_modified, :max_connections, :speed_limit, :error,
 	:created_at, :updated_at, :completed_at, :source, :expected_size, :mime, :category, :kind, :media,
 	:media_checkpoint, :completion_dialog, :started_at, :active_ms, :queue_id,
-	(SELECT COALESCE(MAX(queue_pos), 0) + 1 FROM downloads WHERE queue_id = :queue_id), :replace_file)`
+	(SELECT COALESCE(MAX(queue_pos), 0) + 1 FROM downloads WHERE queue_id = :queue_id), :replace_file,
+	:served_type, :name_controls, NULL, :page_url, :remote_name, :rescued_bytes)`
 
 	updateDownloadSQL = `UPDATE downloads SET url = :url, method = :method, headers = :headers,
 	body = :body, final_url = :final_url, dir = :dir, filename = :filename, size = :size,
@@ -41,8 +47,12 @@ VALUES (:url, :method, :headers, :body, :final_url, :dir, :filename,
 	updated_at = :updated_at, completed_at = :completed_at, source = :source,
 	expected_size = :expected_size, mime = :mime, category = :category, kind = :kind, media = :media,
 	media_checkpoint = :media_checkpoint, completion_dialog = :completion_dialog, started_at = :started_at,
-	active_ms = :active_ms, replace_file = :replace_file
+	active_ms = :active_ms, replace_file = :replace_file, served_type = :served_type,
+	name_controls = :name_controls, page_url = :page_url, remote_name = :remote_name,
+	rescued_bytes = :rescued_bytes
 WHERE id = :id`
+
+	setFileCheckSQL = `UPDATE downloads SET file_check = ? WHERE id = ?`
 
 	insertSegmentSQL = `INSERT INTO segments (download_id, seg_id, start_offset, end_offset, durable)
 VALUES (?, ?, ?, ?, ?)`
@@ -94,7 +104,42 @@ func downloadArgs(d *model.Download) ([]any, error) {
 		sql.Named("started_at", encodeTime(d.StartedAt)),
 		sql.Named("active_ms", d.ActiveMS),
 		sql.Named("replace_file", d.ReplaceFile),
+		sql.Named("served_type", d.ServedType),
+		sql.Named("name_controls", d.NameControls),
+		sql.Named("page_url", d.PageURL),
+		sql.Named("remote_name", d.RemoteName),
+		sql.Named("rescued_bytes", d.RescuedBytes),
 	}, nil
+}
+
+// encodeFileCheck stores a file check as JSON; nil is NULL.
+func encodeFileCheck(fc *model.FileCheck) (sql.NullString, error) {
+	if fc == nil {
+		return sql.NullString{}, nil
+	}
+	c := *fc
+	c.CheckedAt = canonicalTime(c.CheckedAt)
+	b, err := json.Marshal(&c)
+	if err != nil {
+		return sql.NullString{}, fmt.Errorf("encode file check: %w", err)
+	}
+	return sql.NullString{String: string(b), Valid: true}, nil
+}
+
+// decodeFileCheck parses the stored file check. Invalid JSON reads as none: the check
+// is advisory and never makes a record unreadable.
+func decodeFileCheck(s sql.NullString) *model.FileCheck {
+	if !s.Valid {
+		return nil
+	}
+	var fc model.FileCheck
+	if err := json.Unmarshal([]byte(s.String), &fc); err != nil {
+		return nil
+	}
+	if !fc.CheckedAt.IsZero() {
+		fc.CheckedAt = fc.CheckedAt.UTC()
+	}
+	return &fc
 }
 
 // rowScanner is implemented by *sql.Row and *sql.Rows.
@@ -104,45 +149,131 @@ type rowScanner interface {
 
 // scanDownload decodes one row selected with downloadSelect.
 func scanDownload(r rowScanner) (model.Download, error) {
-	var (
-		d                                 model.Download
-		id, mode, state, maxConns, source int64
-		kind, queueID                     int64
-		headers, media                    sql.NullString
-		checkpoint                        []byte
-		hasBody                           bool
-		body                              []byte
-		createdAt, updatedAt, completedAt sql.NullInt64
-		startedAt                         sql.NullInt64
-	)
-	err := r.Scan(&id, &d.Request.URL, &d.Request.Method, &headers, &hasBody, &body,
-		&d.FinalURL, &d.Dir, &d.Filename, &d.Size, &mode, &state,
-		&d.Validators.ETag, &d.Validators.StrongETag, &d.Validators.LastModified,
-		&maxConns, &d.SpeedLimit, &d.Error, &createdAt, &updatedAt, &completedAt,
-		&source, &d.ExpectedSize, &d.MIME, &d.Category, &kind, &media, &checkpoint,
-		&d.CompletionDialog, &startedAt, &d.ActiveMS, &queueID, &d.ReplaceFile)
-	if err != nil {
+	var raw rawDownload
+	if err := raw.scan(r); err != nil {
 		return model.Download{}, err
 	}
-	d.ID = model.DownloadID(id)
-	if d.Request.Headers, err = decodeHeaders(headers); err != nil {
-		return model.Download{}, fmt.Errorf("download %d: %w", id, err)
+	return raw.decode()
+}
+
+// rawDownload is a row selected with downloadSelect before its JSON columns are parsed:
+// scanning stays on the row cursor, the parsing (most of a row's cost) can run anywhere.
+type rawDownload struct {
+	d                                 model.Download
+	id, mode, state, maxConns, source int64
+	kind, queueID                     int64
+	headers, media, fileCheck         sql.NullString
+	checkpoint                        []byte
+	hasBody                           bool
+	body                              []byte
+	createdAt, updatedAt, completedAt sql.NullInt64
+	startedAt                         sql.NullInt64
+}
+
+func (x *rawDownload) scan(r rowScanner) error {
+	d := &x.d
+	return r.Scan(&x.id, &d.Request.URL, &d.Request.Method, &x.headers, &x.hasBody, &x.body,
+		&d.FinalURL, &d.Dir, &d.Filename, &d.Size, &x.mode, &x.state,
+		&d.Validators.ETag, &d.Validators.StrongETag, &d.Validators.LastModified,
+		&x.maxConns, &d.SpeedLimit, &d.Error, &x.createdAt, &x.updatedAt, &x.completedAt,
+		&x.source, &d.ExpectedSize, &d.MIME, &d.Category, &x.kind, &x.media, &x.checkpoint,
+		&d.CompletionDialog, &x.startedAt, &d.ActiveMS, &x.queueID, &d.ReplaceFile,
+		&d.ServedType, &d.NameControls, &x.fileCheck, &d.PageURL, &d.RemoteName, &d.RescuedBytes)
+}
+
+func (x *rawDownload) decode() (model.Download, error) {
+	d := x.d
+	var err error
+	d.FileCheck = decodeFileCheck(x.fileCheck)
+	d.ID = model.DownloadID(x.id)
+	if d.Request.Headers, err = decodeHeaders(x.headers); err != nil {
+		return model.Download{}, fmt.Errorf("download %d: %w", x.id, err)
 	}
-	d.Request.Body = decodeBody(hasBody, body)
-	d.Mode = model.Mode(mode)
-	d.State = model.State(state)
-	d.MaxConnections = int(maxConns)
-	d.Source = model.Source(source)
-	d.Kind = model.Kind(kind)
-	d.QueueID = model.QueueID(queueID)
-	if d.Media, err = decodeMedia(media, checkpoint); err != nil {
-		return model.Download{}, fmt.Errorf("download %d: %w", id, err)
+	d.Request.Body = decodeBody(x.hasBody, x.body)
+	d.Mode = model.Mode(x.mode)
+	d.State = model.State(x.state)
+	d.MaxConnections = int(x.maxConns)
+	d.Source = model.Source(x.source)
+	d.Kind = model.Kind(x.kind)
+	d.QueueID = model.QueueID(x.queueID)
+	if d.Media, err = decodeMedia(x.media, x.checkpoint); err != nil {
+		return model.Download{}, fmt.Errorf("download %d: %w", x.id, err)
 	}
-	d.CreatedAt = decodeTime(createdAt)
-	d.UpdatedAt = decodeTime(updatedAt)
-	d.CompletedAt = decodeTime(completedAt)
-	d.StartedAt = decodeTime(startedAt)
+	d.CreatedAt = decodeTime(x.createdAt)
+	d.UpdatedAt = decodeTime(x.updatedAt)
+	d.CompletedAt = decodeTime(x.completedAt)
+	d.StartedAt = decodeTime(x.startedAt)
 	return d, nil
+}
+
+// listDecoder parses the rows of a listing in chunks while the cursor goes on scanning:
+// the JSON columns are most of a row's cost, so on up to GOMAXPROCS goroutines a listing
+// of a long history takes about as long as reading its rows.
+type listDecoder struct {
+	chunks []*listPart
+	sem    chan struct{}
+	wg     sync.WaitGroup
+}
+
+type listPart struct {
+	out []model.Download
+	err error
+}
+
+// listChunk is how many rows one goroutine parses; a shorter listing is parsed on the
+// cursor's goroutine.
+const listChunk = 256
+
+func newListDecoder() *listDecoder {
+	return &listDecoder{sem: make(chan struct{}, runtime.GOMAXPROCS(0))}
+}
+
+// add parses rows: on the caller's goroutine when they are the whole listing, otherwise
+// in the background.
+func (l *listDecoder) add(rows []rawDownload, last bool) {
+	part := &listPart{out: make([]model.Download, len(rows))}
+	l.chunks = append(l.chunks, part)
+	run := func() {
+		for k := range rows {
+			d, err := rows[k].decode()
+			if err != nil {
+				part.err = err
+				return
+			}
+			part.out[k] = d
+		}
+	}
+	if last && len(l.chunks) == 1 {
+		run()
+		return
+	}
+	l.sem <- struct{}{}
+	l.wg.Add(1)
+	go func() {
+		defer func() { <-l.sem; l.wg.Done() }()
+		run()
+	}()
+}
+
+// wait returns the rows in order, or the first failing row's error in row order (as a
+// sequential parse would). Every add must have been made before it.
+func (l *listDecoder) wait() ([]model.Download, error) {
+	l.wg.Wait()
+	n := 0
+	for _, p := range l.chunks {
+		if p.err != nil {
+			return nil, p.err
+		}
+		n += len(p.out)
+	}
+	if len(l.chunks) == 1 {
+		return l.chunks[0].out, nil
+	}
+	out := make([]model.Download, 0, n)
+	for _, p := range l.chunks {
+		out = append(out, p.out...)
+	}
+	return out, nil
 }
 
 // encodeHeaders stores a header map as JSON, keeping nil distinct from empty.

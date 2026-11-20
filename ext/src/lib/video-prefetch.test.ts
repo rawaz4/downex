@@ -74,14 +74,13 @@ describe('prefetchVideo', () => {
     }
   });
 
-  it('names the curated sites marked for it, never their embeds, Facebook or Instagram', () => {
+  it('names the curated sites marked for it, never their embeds, Facebook, Instagram, Reddit or posts', () => {
     for (const [url, key] of [
       ['https://vimeo.com/76979871', 'vimeo:76979871'],
       ['https://x.com/someone/status/42', 'x:42'],
       ['https://www.tiktok.com/@u/video/7300000000000000001', 'tiktok:7300000000000000001'],
       ['https://www.dailymotion.com/video/x8abc12', 'dailymotion:x8abc12'],
       ['https://dai.ly/x8abc12', 'dailymotion:x8abc12'],
-      ['https://www.reddit.com/r/videos/comments/1abc2de/t/', 'reddit:1abc2de'],
       ['https://www.twitch.tv/videos/2000000001', 'twitch:2000000001'],
       ['https://www.twitch.tv/chan/clip/FunnyClip', 'twitch:clip:FunnyClip'],
       ['https://clips.twitch.tv/FunnyClip', 'twitch:clip:FunnyClip'],
@@ -101,6 +100,11 @@ describe('prefetchVideo', () => {
       'https://player.twitch.tv/?video=v2000000001',
       'https://www.twitch.tv/some_channel',
       'https://streamable.com/e/abc123',
+      'https://www.reddit.com/r/videos/comments/1abc2de/t/',
+      'https://x.com/i/broadcasts/1AbCdEfGhIjKl',
+      'https://vm.tiktok.com/ZMabc123/',
+      'https://www.pinterest.com/pin/123456789012345678/',
+      'https://www.threads.com/@u/post/AbC12dEfGh',
     ]) {
       expect(prefetchVideo(url)).toBeUndefined();
     }
@@ -111,13 +115,15 @@ describe('prefetchVideo', () => {
 });
 
 describe('lookAheadAllowed', () => {
-  it('needs the option and the Download button, and never runs with the sign-in allowed', () => {
+  it('needs the option and the Download button, whatever the sign-in option says', () => {
     expect(lookAheadAllowed(DEFAULT_VIDEO_OPTIONS)).toBe(true);
     expect(lookAheadAllowed({ ...DEFAULT_VIDEO_OPTIONS, videoPrefetch: false })).toBe(false);
     // With the button off the user does not use Downex on YouTube.
     expect(lookAheadAllowed({ ...DEFAULT_VIDEO_OPTIONS, videoButton: false })).toBe(false);
-    // A look-ahead never sends the user's cookies, and one without them is not the click's probe.
-    expect(lookAheadAllowed({ ...DEFAULT_VIDEO_OPTIONS, useSignInForVideos: true })).toBe(false);
+    // A look-ahead never sends the user's cookies, and neither does a click's first request
+    // (SITE-MEDIA-SPEC §6.3): the switch does not stop look-aheads.
+    expect(lookAheadAllowed({ ...DEFAULT_VIDEO_OPTIONS, useSignInForVideos: true })).toBe(true);
+    expect(lookAheadAllowed({ ...DEFAULT_VIDEO_OPTIONS, useSignInForVideos: false })).toBe(true);
   });
 });
 
@@ -176,6 +182,24 @@ describe('PrefetchDwell', () => {
       vi.advanceTimersByTime(PREFETCH_DWELL_MS);
     }
     expect(fired).toEqual([watch(A)]);
+  });
+
+  it('reports at once when the pointer enters the Download button, still once per stay (§5.5)', () => {
+    const { fired, dwell } = setup();
+    dwell.now();
+    expect(fired).toEqual([]);
+    dwell.sync();
+    vi.advanceTimersByTime(200);
+    dwell.now();
+    expect(fired).toEqual([watch(A)]);
+    dwell.now();
+    vi.advanceTimersByTime(PREFETCH_DWELL_MS * 2);
+    expect(fired).toEqual([watch(A)]);
+    // Turned off or hidden: nothing.
+    const off = setup({ enabled: false });
+    off.dwell.sync();
+    off.dwell.now();
+    expect(off.fired).toEqual([]);
   });
 
   it('starts again on SPA navigation, so Shorts swiped past are never reported', () => {
@@ -290,11 +314,11 @@ describe('lookAheadRequest', () => {
       host: 'www.youtube.com',
     });
     // A curated site's video.
-    const reddit = 'https://www.reddit.com/r/videos/comments/1abc2de/some_title/';
-    expect(lookAheadRequest(sender(reddit), reddit)).toEqual({
+    const tiktok = 'https://www.tiktok.com/@some.user/video/7300000000000000001?lang=en';
+    expect(lookAheadRequest(sender(tiktok), tiktok)).toEqual({
       tabId: 4,
-      target: { key: 'reddit:1abc2de', pageUrl: 'https://www.reddit.com/r/videos/comments/1abc2de/', storeId: '', generic: false },
-      host: 'www.reddit.com',
+      target: { key: 'tiktok:7300000000000000001', pageUrl: 'https://www.tiktok.com/@some.user/video/7300000000000000001', storeId: '', generic: false },
+      host: 'www.tiktok.com',
     });
     // Chromium names no `active` on some senders: the content script saw the tab visible.
     expect(lookAheadRequest(sender(watch(A), {}, { active: undefined }), watch(A))).toBeDefined();

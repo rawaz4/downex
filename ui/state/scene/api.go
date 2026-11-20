@@ -2,7 +2,9 @@ package scene
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"sort"
@@ -13,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
 
+	"downex/internal/filecheck"
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/categories"
 	"downex/ui/core/media"
@@ -367,6 +370,10 @@ func (m *Mock) Confirm(ctx context.Context, req *downexv1.ConfirmRequest) (*down
 			if e := validate.CheckFilename(req.GetFilename()); e != "" {
 				return nil, apiErr(invalidArgument, "filename: "+e)
 			}
+			if name := sanitizeFilename(req.GetFilename()); name != d.filename && d.fileCheck != nil {
+				// downexd judges the user's own name again (DESKTOP-SPEC §9.5)
+				d.fileCheck = protoCheck(filecheck.CheckName(name, false, d.mime), name)
+			}
 			d.filename = sanitizeFilename(req.GetFilename())
 		}
 		switch {
@@ -590,6 +597,88 @@ func (m *Mock) Remove(ctx context.Context, req *downexv1.RemoveRequest) (*downex
 	})
 }
 
+// Rescue implements host.Daemon for the demo's rescue of a partial file
+// (docs/DESKTOP-SPEC.md §11): an add of its address named after the partial (without
+// .crdownload or .part) that keeps 40 % of its size.
+func (m *Mock) Rescue(ctx context.Context, req *downexv1.RescueRequest) (*downexv1.RescueResponse, error) {
+	return call(m, ctx, func() (*downexv1.RescueResponse, error) {
+		p := req.GetPartialPath()
+		if p == "" {
+			return nil, apiErr(invalidArgument, "partial_path is required")
+		}
+		name := req.GetFilename()
+		if name == "" {
+			name = path.Base(strings.ReplaceAll(p, `\`, "/"))
+			for _, suf := range []string{".crdownload", ".part"} {
+				name = strings.TrimSuffix(name, suf)
+			}
+		}
+		d, err := m.addNow(&downexv1.AddRequest{Url: req.GetUrl(), Headers: req.GetHeaders(), Filename: name,
+			MaxConnections: req.GetMaxConnections(), SpeedLimit: req.GetSpeedLimit(), StartPaused: req.GetStartPaused(),
+			QueueId: req.GetQueueId(), Source: downexv1.AddSource_ADD_SOURCE_UI})
+		if err != nil {
+			return nil, err
+		}
+		kept := max(d.GetSize(), 0) * 2 / 5
+		d.RescuedBytes = kept
+		return &downexv1.RescueResponse{Download: d, RescuedBytes: kept}, nil
+	})
+}
+
+// RenewLink implements host.Daemon as downexd does for a new link that serves the same
+// file (docs/DESKTOP-SPEC.md §10): the download continues from where it stopped; with
+// from_download that download is removed. A link containing "other" serves another file.
+func (m *Mock) RenewLink(ctx context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
+	return call(m, ctx, func() (*downexv1.RenewLinkResponse, error) {
+		s, err := m.get(req.GetId())
+		if err != nil {
+			return nil, err
+		}
+		d := s.d
+		switch {
+		case d.kind == downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA:
+			return nil, apiErr(invalidArgument, fmt.Sprintf("download %d is a stream or web page video: it cannot take a new link", d.id))
+		case d.state != state.StatePaused && d.state != state.StateFailed && d.state != state.StateQueued:
+			return nil, apiErr(failedPrecondition, fmt.Sprintf("download %d is %s", d.id, stateName(d.state)))
+		}
+		u := req.GetUrl()
+		var from *sim
+		if id := req.GetFromDownload(); id != 0 {
+			if from, err = m.get(id); err != nil {
+				return nil, err
+			}
+			u = from.d.url
+		} else if _, ok := checkURL(u); !ok {
+			return nil, apiErr(invalidArgument, "url scheme must be http or https")
+		}
+		if strings.Contains(u, "other") {
+			ce := connect.NewError(failedPrecondition, errors.New("renew_mismatch: bytes 0-65535 differ: engine: the new link serves different data"))
+			ce.Meta().Set("Downex-Error-Code", "renew_mismatch")
+			return nil, ce
+		}
+		d.url, d.err, d.errCode = u, "", ""
+		d.state = state.StatePaused
+		if req.GetStart() {
+			d.state = state.StateQueued
+		}
+		if req.GetPageUrl() != "" {
+			d.pageURL = req.GetPageUrl()
+		}
+		m.queueDirty = true
+		m.touch(d)
+		if from != nil {
+			id := from.d.id
+			if q := m.queues[from.d.queueID]; q != nil {
+				q.order = slices.DeleteFunc(slices.Clone(q.order), func(x int64) bool { return x == id })
+				m.markQueue(q.id)
+			}
+			m.deleteSim(id)
+			m.removed = append(m.removed, id)
+		}
+		return &downexv1.RenewLinkResponse{Download: d.clone()}, nil
+	})
+}
+
 // SetDownloadOptions implements host.Daemon.
 func (m *Mock) SetDownloadOptions(ctx context.Context, req *downexv1.SetDownloadOptionsRequest) (*downexv1.SetDownloadOptionsResponse, error) {
 	return call(m, ctx, func() (*downexv1.SetDownloadOptionsResponse, error) {
@@ -712,6 +801,12 @@ func (m *Mock) UpdateSettings(ctx context.Context, req *downexv1.UpdateSettingsR
 				delete(m.loginPasswords, id)
 			}
 		}
+		if s.GetPoliteMode() != m.settings.GetPoliteMode() {
+			m.politeChanged = true
+			if !s.GetPoliteMode() {
+				m.politeFixed = nil // switched off: the fixture's status no longer applies
+			}
+		}
 		m.settings = s
 		return &downexv1.UpdateSettingsResponse{Settings: m.settingsView()}, nil
 	})
@@ -731,7 +826,7 @@ func (m *Mock) Status(ctx context.Context) (*downexv1.StatusResponse, error) {
 		}
 		f := m.folders()
 		return &downexv1.StatusResponse{Version: "0.0.0-mock", Pid: 4242, StartedAt: stamp(m.startedAt), Active: active, Queued: queued,
-			Endpoint: "mock://downexd", DataDir: f.data, LogDir: f.logs, ToolsDir: f.tools}, nil
+			Endpoint: "mock://downexd", DataDir: f.data, LogDir: f.logs, ToolsDir: f.tools, Polite: m.politeStatusLocked()}, nil
 	})
 }
 

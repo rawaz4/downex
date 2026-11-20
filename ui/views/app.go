@@ -47,6 +47,9 @@ type Platform interface {
 	PickFile(ctx context.Context, title, initial string) (string, error)
 	// OpenExternal opens a fixed https address in the system's browser.
 	OpenExternal(ctx context.Context, url string) error
+	// OpenPage opens a download's page (an http or https address, pageurl.Check) in the
+	// system's browser, only ever when the user clicks for it (docs/DESKTOP-SPEC.md §10).
+	OpenPage(ctx context.Context, url string) error
 	// CopyText puts text on the clipboard.
 	CopyText(ctx context.Context, text string) error
 	// Diagnostics is Settings → About's "Copy diagnostics" text.

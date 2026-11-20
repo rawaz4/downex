@@ -42,6 +42,8 @@ type backend struct {
 	// shows the "--confirm <id>" requests (nil in a fixture run).
 	start   func()
 	confirm func(show func(ids []int64))
+	// renew says where the main window shows the "--renew <id>" requests (New link…).
+	renew func(show func(ids []int64))
 	// shown is told the window's first frame (the first-frame memory trim; nil in a fixture run).
 	shown func()
 	// later adds what is let go once the window has closed, the last added first.
@@ -61,6 +63,9 @@ type backend struct {
 	mainStarted func()
 	// asked is when the window was asked for: its first-frame time is measured from it.
 	asked time.Time
+	// gw is the host's window (nil in a fixture run): the main window and the standalone
+	// Confirm download window keep each other's confirmations apart through it.
+	gw *glue.Window
 }
 
 // since is the time since the window was asked for (the process's start for its first one).
@@ -106,12 +111,14 @@ func productBackend(gw *glue.Window, o options) *backend {
 		},
 		start:        func() { gw.Session.Start(hub.Emit) },
 		confirm:      gw.Session.Confirmations().Ready,
+		renew:        gw.Session.Confirmations().ReadyRenew,
 		shown:        gw.FirstFrame,
+		gw:           gw,
 		later:        gw.Defer,
 		foreignClose: gw.ForeignClose,
 	}
 	osBackend(b, gw)
-	if o.remember && !gw.View.IsProgress() {
+	if o.remember && gw.View.IsMain() {
 		b.statePath = gw.Files.WindowState
 	}
 	return b

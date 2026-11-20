@@ -23,6 +23,9 @@ type windowSpec struct {
 	CustomFrame bool
 	// Maximized: it opens maximised, Size being the size it restores to.
 	Maximized bool
+	// Dialog: a dialog's window (the standalone Confirm download window), without the
+	// maximise button.
+	Dialog bool
 }
 
 // openWindow opens root's window on a as ws says, with the run's flags (-render, -dpi,
@@ -33,11 +36,18 @@ func openWindow(a *osApp, root kit.Root, ws windowSpec, o options, b *backend) (
 		CustomFrame: ws.CustomFrame, Software: o.software, NoActivate: o.noActivate, ForceDPI: o.dpi,
 		OnForeignClose: b.foreignClose,
 	}
+	if ws.Dialog {
+		wo.Style = dialogStyle
+	}
 	if ws.Maximized {
 		return a.NewMaximizedWindow(root, wo)
 	}
 	return a.NewWindow(root, wo)
 }
+
+// dialogStyle is a dialog window's Win32 style: the system frame without the maximise
+// button (WS_OVERLAPPEDWINDOW less WS_MAXIMIZEBOX, with WS_CLIPCHILDREN as every window).
+const dialogStyle = 0x00CF0000&^0x00010000 | 0x02000000
 
 // progressFrames are the frames the progress window's first size and its minimum leave out:
 // the system frame (today's sizes are the outer window's on Windows).

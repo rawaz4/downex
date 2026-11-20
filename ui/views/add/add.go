@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	imedia "downex/internal/media"
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/format"
 	"downex/ui/core/media"
@@ -176,15 +177,20 @@ type Add struct {
 	cardArea    *kit.Element
 	Video       *VideoCard
 	qualityArea *kit.Element
-	Picker      *Picker
+	// Items is the row of a page with several videos (nil for other pages,
+	// docs/SITE-MEDIA-SPEC.md §3.12): above the quality cards.
+	Items  *ItemRow
+	Picker *Picker
 
 	pair      *kit.Element
 	audioSlot *kit.Element
-	dirField  *views.Field
-	freeText  *views.Text
-	folder    *widgets.Input
-	change    *widgets.Button
-	dirErr    *views.Text
+	// Clip is the "Save only part of the video" section of a found video (nil before).
+	Clip     *ClipSection
+	dirField *views.Field
+	freeText *views.Text
+	folder   *widgets.Input
+	change   *widgets.Button
+	dirErr   *views.Text
 
 	more        *kit.Element
 	moreToggle  *moreToggle
@@ -411,6 +417,8 @@ func (a *Add) SubmitLabel() string {
 			return "Adding…"
 		case a.Info() == nil:
 			return "Find qualities"
+		case a.site() && media.AudioPage(a.Info()):
+			return "Add audio"
 		case a.site():
 			return "Add video"
 		}
@@ -465,11 +473,15 @@ func (a *Add) startText() string {
 
 // streamName is the file name More options would use, as far as the dialog knows it.
 func (a *Add) streamFileName() string {
+	ext := ".mp4"
+	if info := a.Info(); info != nil && a.site() {
+		ext = media.SiteExtension(info) // an audio page's .m4a or .mp3 (SITE-MEDIA-SPEC §3.13)
+	}
 	if typed := text.TrimJS(a.filename); typed != "" {
-		if strings.HasSuffix(strings.ToLower(typed), ".mp4") {
+		if strings.HasSuffix(strings.ToLower(typed), ext) {
 			return typed
 		}
-		return typed + ".mp4"
+		return typed + ext
 	}
 	title := ""
 	if info := a.Info(); info != nil {
@@ -477,7 +489,7 @@ func (a *Add) streamFileName() string {
 	}
 	switch {
 	case title != "":
-		return title + ".mp4"
+		return media.ClipName(title+ext, a.clip()) // the part's times, live (MEDIA-SPEC §8 C19)
 	case a.site():
 		return "Name from the video title"
 	}
@@ -518,8 +530,17 @@ func (a *Add) MoreSummary() string {
 }
 
 // streamSummary is the footer's summary of a listed video: "1080p · H.264", "+ English audio",
-// "about 544 MB".
-type streamSummary struct{ head, sound, prefix, size string }
+// "about 544 MB", "part 1:20 – 2:45".
+type streamSummary struct{ head, sound, prefix, size, part string }
+
+// clip is the part the section holds (the zero Clip: none, or the form has errors).
+func (a *Add) clip() imedia.Clip {
+	if a.Clip == nil {
+		return imedia.Clip{}
+	}
+	c, _ := a.Clip.Clip()
+	return c
+}
 
 func (a *Add) streamSum() *streamSummary {
 	info := a.Info()
@@ -552,6 +573,8 @@ func (a *Add) streamSum() *streamSummary {
 		}
 	case video.GetKind() == "muxed":
 		sound = "with its sound"
+	case media.NoSound(info, video):
+		sound = "· no sound"
 	case audio != nil:
 		if lang != "" {
 			sound = "+ " + lang + " audio"
@@ -559,7 +582,7 @@ func (a *Add) streamSum() *streamSummary {
 			sound = "+ audio"
 		}
 	}
-	size := media.PickSizeOf(info, a.pick)
+	size := media.ClipSize(media.PickSizeOf(info, a.pick), a.clip(), info.GetDurationMs())
 	prefix := ""
 	switch size.Kind {
 	case media.SizeEstimate:
@@ -571,7 +594,7 @@ func (a *Add) streamSum() *streamSummary {
 	if size.Bytes > 0 {
 		s = format.Bytes(float64(size.Bytes))
 	}
-	return &streamSummary{head: head, sound: sound, prefix: prefix, size: s}
+	return &streamSummary{head: head, sound: sound, prefix: prefix, size: s, part: media.ClipSummary(a.clip(), info.GetDurationMs())}
 }
 
 // FooterSummary is the footer's summary as its text reads ("2 links · 4 connections").
@@ -1083,6 +1106,24 @@ func (a *Add) refresh() {
 			a.Video.SetPicture(a.chosenPicture())
 		}
 	}
+	if a.Clip != nil {
+		a.Clip.SetDisabled(a.busy != idle)
+	}
+	if a.Items != nil {
+		a.Items.SetDisabled(a.busy != idle)
+		if a.run == nil {
+			// another item that could not be got: the select shows the item shown again
+			a.Items.Restore()
+		}
+	}
+	// the sizes and the length are the part's while one is chosen (the whole video's while the
+	// part is off, the whole, or has errors)
+	if a.Picker != nil {
+		a.Picker.SetClip(a.clip())
+	}
+	if a.Video != nil {
+		a.Video.SetPart(a.clip())
+	}
 
 	// the folder
 	a.pair.Style.Axis = kit.AxisRow
@@ -1236,24 +1277,50 @@ func (a *Add) showInfo(info *downexv1.MediaInfo) {
 	a.cardArea.RemoveAll()
 	a.qualityArea.RemoveAll()
 	a.audioSlot.RemoveAll()
-	a.Video, a.Picker = nil, nil
+	a.Video, a.Picker, a.Clip, a.Items = nil, nil, nil, nil
 	if info == nil {
 		return
 	}
 	a.Video = NewVideoCard(info, CardOptions{URL: a.streamURL, NoCookies: true})
 	a.cardArea.Add(a.Video)
+	if media.ShowsItems(info) {
+		a.Items = NewItemRow(info)
+		a.Items.OnChoose = a.chooseItem
+		a.Items.Style.Margin = kit.Edges{Bottom: tokens.Sp6}
+		a.qualityArea.Add(a.Items)
+	}
 	a.Picker = NewPicker(info, a.pick)
 	a.Picker.OnChange = func(p media.TrackPick) {
 		a.pick = p
 		a.refresh()
 	}
 	a.Picker.OnSubmit = a.onSubmit
+	if media.AudioPage(info) {
+		// An audio page (SITE-MEDIA-SPEC §3.13): its audio tracks, no part.
+		a.qualityArea.Add(views.NewHint(media.AudioPageHint(info)))
+		if w := a.Picker.Part(PartAudio); w != nil {
+			a.qualityArea.Add(w)
+		}
+		return
+	}
 	if w := a.Picker.Part(PartVideo); w != nil {
 		a.qualityArea.Add(w)
 	}
 	if w := a.Picker.Part(PartAudio); w != nil {
 		a.audioSlot.Add(w)
 	}
+	// The part of the video, after the qualities, inside the stream area (not in More: it
+	// changes what is downloaded; docs/MEDIA-SPEC.md §8, B1).
+	a.Clip = NewClipSection(info, nil)
+	a.Clip.OnChange = a.refresh
+	slot := a.qualityArea // under the cards, in their column: the dialog keeps its fit
+	if len(slot.Children()) == 0 || (a.Items != nil && len(slot.Children()) == 1) {
+		slot = a.audioSlot
+	}
+	if len(slot.Children()) > 0 {
+		a.Clip.Style.Margin = kit.Edges{Top: tokens.Sp6}
+	}
+	slot.Add(a.Clip)
 }
 
 // fitWidth keeps the dialog 38rem wide until a video is found, 56rem once it is (min(…,
@@ -1634,10 +1701,26 @@ func (a *Add) submitStream() {
 	if add == nil {
 		add = a.app.Main.Downloads.AddMedia
 	}
+	var clip *downexv1.MediaClip
+	if a.Clip != nil {
+		var ok bool
+		if clip, ok = a.Clip.Request(); !ok {
+			// An error under the part blocks the add (B3); the keyboard goes to its field.
+			a.Clip.ShowErrors()
+			a.refresh()
+			if w := a.app.Window; w != nil {
+				if f := a.Clip.FirstInvalid(); f != nil {
+					w.Focus(f)
+				}
+			}
+			return
+		}
+	}
 	req := &downexv1.AddMediaRequest{
 		ManifestUrl: target.ManifestUrl, PageUrl: target.PageUrl, Origin: target.Origin,
 		Dir: checked.Dir, Filename: checked.Filename, Source: downexv1.AddSource_ADD_SOURCE_UI,
 		VideoTrack: a.pick.Video, AudioTrack: media.PickedAudio(listed, a.pick), StartPaused: a.startPaused,
+		Clip: clip, EntryId: listed.GetEntryId(),
 	}
 	if a.offerQueues() && a.queueID != state.MainQueueID {
 		req.QueueId = a.queueID
@@ -1646,6 +1729,37 @@ func (a *Add) submitStream() {
 	a.call(checked.URL, site, func(ctx context.Context) (any, error) { return add(ctx, req) }, func(any) {
 		a.refresh()
 		a.done()
+	})
+	a.refresh()
+}
+
+// chooseItem gets the qualities of another video of the page (docs/SITE-MEDIA-SPEC.md §3.12):
+// the page is asked again with its id, the cards follow the answer, and Add sends that video.
+func (a *Add) chooseItem(id string) {
+	listed := a.Info()
+	if a.busy != idle || a.gone || listed == nil || id == listed.GetEntryId() {
+		if a.Items != nil {
+			a.Items.Restore()
+		}
+		return
+	}
+	url := a.probed.url
+	probe := a.o.ProbeMedia
+	if probe == nil {
+		probe = a.app.Main.Downloads.ProbeMedia
+	}
+	target := &downexv1.ProbeMediaRequest{PageUrl: url, Origin: downexv1.MediaOrigin_MEDIA_ORIGIN_SITE, EntryId: id}
+	a.streamFailure = ""
+	a.failureSettings = false
+	a.busy = busyProbe
+	a.call(url, true, func(ctx context.Context) (any, error) { return probe(ctx, target) }, func(v any) {
+		found := v.(*downexv1.MediaInfo)
+		a.probed = &probeResult{url: url, info: found}
+		a.pick = media.DefaultPick(found)
+		a.refresh()
+		if w := a.app.Window; w != nil && a.Items != nil {
+			w.Focus(a.Items.Select)
+		}
 	})
 	a.refresh()
 }
@@ -2008,8 +2122,12 @@ func (s *summaryLine) setStream(m *streamSummary) {
 		sizeLead = " · " + m.prefix
 		size = m.size
 	}
+	part := ""
+	if m.part != "" {
+		part = " · " + m.part
+	}
 	s.parts[1].SetText(rest + sizeLead)
-	s.setTexts(m.head, rest+sizeLead, size, "")
+	s.setTexts(m.head, rest+sizeLead, size, part)
 }
 
 func (s *summaryLine) clear() { s.setTexts("", "", "", "") }

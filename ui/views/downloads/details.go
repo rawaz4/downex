@@ -43,9 +43,12 @@ const (
 	txtAddLogin      = "Add site login…"
 	txtRestart       = "Restart…"
 	txtRetry         = "Retry"
+	txtNewLink       = display.NewLinkLabel
+	txtOpenPage      = display.OpenPageLabel
 	txtFinalURL      = "Final URL"
 	txtSavedTo       = "Saved to"
 	txtReceived      = "Received"
+	txtRescued       = display.RescuedLabel
 	txtSpeedLimit    = "Speed limit"
 	txtLimitLabel    = "Download speed limit"
 	txtUnlimited     = "Unlimited"
@@ -69,6 +72,8 @@ const (
 	txtPauseStrip    = "Pause"
 	txtResumeStrip   = "Resume"
 	txtRemoveStrip   = "Remove"
+	txtRemoveDelete  = "Remove and delete file…"
+	txtContents      = "Contents"
 )
 
 // The pane's heights (app.css --details-h, App.svelte's small-window rule) and its strip's.
@@ -289,6 +294,8 @@ func (p *Details) structureKey(d *downexv1.Download) string {
 		d.GetError() != "", d.GetFinalUrl() != "" && d.GetFinalUrl() != d.GetUrl(), v != "", a != "",
 		d.GetCompletedAt() != nil && tsMillis(d.GetCompletedAt()) > 0, p.queueText(d) != "", p.canLimit(d),
 		bigOf(d, p.dl.store.Stale()) != nil, p.live(d), d.GetErrorCode() != "",
+		display.ToneOfFileCheck(d) == display.FileCheckWarn, display.ToneOfFileCheck(d) == display.FileCheckFail,
+		display.ContentsText(d) != "", isMedia && m.GetClip() != nil,
 	}
 	b.WriteString(strconv.FormatInt(d.GetId(), 10))
 	b.WriteString(":")
@@ -579,6 +586,9 @@ func (p *Details) buildSingle(d *downexv1.Download) *single {
 	if d.GetState() == state.StateFailed || d.GetError() != "" {
 		body.Add(p.errorNote(d, site, stale, noteInset, cur))
 	}
+	if display.FileCheckWarns(d) {
+		body.Add(p.checkNote(d, stale, noteInset))
+	}
 
 	cols := newColumnsBox()
 	body.Add(cols)
@@ -674,6 +684,25 @@ func (p *Details) buildSingle(d *downexv1.Download) *single {
 		}
 		recv.set(runs...)
 	})
+	if m := d.GetMedia(); d.GetKind() == downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA && m.GetClip() != nil { // MEDIA-SPEC §8, B6
+		part := ddText()
+		addFact(media.ClipPartLabel, part, false)
+		p.on(func(d *downexv1.Download) {
+			v, tip := media.PartValue(d.GetMedia())
+			part.SetText(v)
+			part.Tooltip = tip
+		})
+	}
+	if d.GetRescuedBytes() > 0 { // docs/DESKTOP-SPEC.md §11
+		rescued := ddText()
+		row := addFact(txtRescued, rescued, false).Parent()
+		p.on(func(d *downexv1.Download) {
+			rescued.SetText(display.RescuedText(d.GetRescuedBytes()))
+			if row != nil {
+				row.SetHidden(d.GetRescuedBytes() <= 0)
+			}
+		})
+	}
 	if p.canLimit(d) {
 		limits := display.LimitOptions(float64(d.GetSpeedLimit()))
 		opts := make([]widgets.SelectOption, len(limits))
@@ -744,8 +773,9 @@ func (p *Details) buildSingle(d *downexv1.Download) *single {
 			} else if s = media.FormatLabel(mm.GetFormat()); s == "" {
 				s = txtUnknownFormat
 			}
-			if mm.GetDurationMs() > 0 {
-				s += " · " + format.Duration(float64(mm.GetDurationMs()))
+			// the part's length beside the whole's ("8:28 of 31:54"), as Confirm's card
+			if length, _ := media.LengthText(media.InfoClip(mm), mm.GetDurationMs()); length != "" {
+				s += " · " + length
 			}
 			kind.SetText(s)
 		})
@@ -775,6 +805,11 @@ func (p *Details) buildSingle(d *downexv1.Download) *single {
 			}
 			out.SetText(c)
 		})
+	}
+	if display.ContentsText(d) != "" { // the file check (DESKTOP-SPEC §9.7)
+		contents := ddText()
+		addFact(txtContents, contents, false)
+		p.on(func(d *downexv1.Download) { contents.SetText(display.ContentsText(d)) })
 	}
 	if tsMillis(d.GetCompletedAt()) > 0 {
 		done := ddText()
@@ -871,12 +906,40 @@ func (p *Details) errorNote(d *downexv1.Download, site, stale bool, inset kit.Ed
 		n.Add(b)
 	}
 	switch {
+	case display.LinkExpired(d) && d.GetKind() != downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA:
+		// docs/DESKTOP-SPEC.md §10: New link…, Open page (when known), Retry (the old link
+		// once more).
+		b := widgets.NewButton(txtNewLink, "link", widgets.Secondary, widgets.SizeSm, p.guard(func() {
+			if app.Open.Renew != nil {
+				app.Open.Renew(views.RenewRequest{ID: id})
+			}
+		}))
+		b.SetIconSize(14)
+		b.SetDisabled(stale, true)
+		n.Add(b)
+		if display.PageURL(d) != "" {
+			pb := widgets.NewButton(txtOpenPage, "external", widgets.Secondary, widgets.SizeSm, p.guard(func() {
+				if app.Act.OpenPage != nil {
+					app.Act.OpenPage(id)
+				}
+			}))
+			pb.SetIconSize(14)
+			n.Add(pb)
+		}
+		rb := widgets.NewButton(txtRetry, "resume", widgets.Secondary, widgets.SizeSm, p.guard(func() {
+			if app.Act.Resume != nil {
+				app.Act.Resume([]int64{id})
+			}
+		}))
+		rb.SetIconSize(14)
+		rb.SetDisabled(stale, true)
+		n.Add(rb)
 	case d.GetErrorCode() == "validator_changed":
 		b := widgets.NewButton(txtRestart, "restart", widgets.Secondary, widgets.SizeSm, p.guard(func() { p.dl.restart(cur()) }))
 		b.SetIconSize(14)
 		b.SetDisabled(stale, true)
 		n.Add(b)
-	case d.GetState() == state.StateFailed && !media.CannotRetry(d.GetErrorCode()):
+	case d.GetState() == state.StateFailed && !media.CannotRetryDownload(d):
 		b := widgets.NewButton(txtRetry, "resume", widgets.Secondary, widgets.SizeSm, p.guard(func() {
 			if app.Act.Resume != nil {
 				app.Act.Resume([]int64{id})
@@ -887,6 +950,13 @@ func (p *Details) errorNote(d *downexv1.Download, site, stale bool, inset kit.Ed
 		n.Add(b)
 	}
 	p.on(func(d *downexv1.Download) {
+		// A site's refusal says its short reason and what helps (SITE-MEDIA-SPEC §5.5).
+		if r, ok := media.SiteRefusalOfDownload(d); ok {
+			msg.SetText(r.Reason)
+			hint.SetText(r.Action)
+			hint.SetHidden(false)
+			return
+		}
 		if e := d.GetError(); e != "" {
 			msg.SetText(text.EscapeBidi(e))
 		} else {
@@ -897,10 +967,38 @@ func (p *Details) errorNote(d *downexv1.Download, site, stale bool, inset kit.Ed
 			h = media.SiteErrorHint(d.GetErrorCode())
 		}
 		if h == "" {
-			h = display.ErrorHint(d.GetErrorCode())
+			h = display.ErrorHintOf(d)
 		}
 		hint.SetText(h)
 		hint.SetHidden(h == "")
+	})
+	return n
+}
+
+// checkNote is the file check's note (docs/DESKTOP-SPEC.md §9.7): the heading, the summary
+// and the detail in a fail (DANGER) or warn (CAUTION) note; DANGER adds "Remove and delete
+// file…", which opens the Remove dialog with the file's deletion chosen (nothing is deleted
+// without that dialog).
+func (p *Details) checkNote(d *downexv1.Download, stale bool, inset kit.Edges) *views.FileCheckNote {
+	app := p.dl.app
+	danger := display.ToneOfFileCheck(d) == display.FileCheckFail
+	var more []kit.Widget
+	if danger && app.Open.Remove != nil {
+		id := d.GetId()
+		b := widgets.NewButton(txtRemoveDelete, "remove", widgets.DangerText, widgets.SizeSm, p.guard(func() {
+			app.Open.Remove(views.RemoveRequest{IDs: []int64{id}, DeleteFile: true})
+		}))
+		b.SetIconSize(14)
+		b.SetDisabled(stale, true)
+		b.Style.AlignSelf = kit.AlignStart
+		more = append(more, b)
+	}
+	fc := d.GetFileCheck()
+	n := views.NewFileCheckNote(display.FileCheckHeading(d), fc.GetSummary(), fc.GetDetail(), danger, more...)
+	n.Style.Margin = inset
+	p.on(func(d *downexv1.Download) {
+		fc := d.GetFileCheck()
+		n.Set(display.FileCheckHeading(d), fc.GetSummary(), fc.GetDetail())
 	})
 	return n
 }

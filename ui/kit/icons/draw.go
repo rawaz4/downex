@@ -156,10 +156,15 @@ func (s *Set) drawShape(c kit.Canvas, sh *shape, fill, stroke kit.Color) {
 // box's top-left corner at at: in the kind's colour, with the glyph on its tone in --tone-on
 // (--accent-on for downloading); in forced colours in CanvasText with the glyph in Canvas.
 func (s *Set) DrawMark(c kit.Canvas, k MarkKind, at kit.Point, size kit.DIP, t *tokens.Theme) {
-	if k >= numMarks {
+	var m *mark
+	switch {
+	case k < numMarks:
+		m = &marks[k]
+	case k == MarkCheckWarn:
+		m = &checkWarnMark
+	default:
 		return
 	}
-	m := &marks[k]
 	scale := size / 14
 	c.PushTransform(kit.Scaling(scale, scale).Then(kit.Translation(at.X, at.Y)))
 	for i := range m.shapes {
@@ -192,6 +197,29 @@ func markPaint(t *tokens.Theme, f func(*tokens.Theme) kit.Color, onTone bool) ki
 	}
 	return t.Ink // CanvasText
 }
+
+// MarkCheckWarn is the alert mark in the warn tone: a completed or running download whose
+// file check says it may not be the wanted file (CAUTION, docs/DESKTOP-SPEC.md §9.7). It is
+// MarkFailed's diamond and "!" in --warn; MarkFailed itself is the DANGER alert.
+const MarkCheckWarn = numMarks
+
+// checkWarnMark is MarkCheckWarn's drawing, made from MarkFailed's.
+var checkWarnMark = func() mark {
+	warn := func(t *tokens.Theme) kit.Color { return t.Warn }
+	m := mark{color: warn}
+	for _, ms := range marks[MarkFailed].shapes {
+		if !ms.onTone {
+			if ms.fill != nil {
+				ms.fill = warn
+			}
+			if ms.stroke != nil {
+				ms.stroke = warn
+			}
+		}
+		m.shapes = append(m.shapes, ms)
+	}
+	return m
+}()
 
 // MarkOf is the mark of a download state as StatusMark's markOfState maps them.
 func MarkOf(state string) MarkKind {

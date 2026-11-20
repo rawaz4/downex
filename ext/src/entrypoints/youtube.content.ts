@@ -6,19 +6,26 @@
 // or traffic. Isolated world; the UI lives in a closed shadow root with inlined CSS, so no
 // web-accessible resource reveals the extension. The button follows "Show a Download button
 // over videos" and the hidden sites through `downex:overlay-state`, which decides by the tab's
-// host (VIDEO-DETECT-SPEC §5.4).
+// host (VIDEO-DETECT-SPEC §5.4). The panel's Part row (save only part of the video) shows when
+// `downex:video-features` says the connected Downex takes parts; its timeline reads, seeks,
+// plays and pauses the player's own <video> element (nothing else of the player).
 
 import { browser } from 'wxt/browser';
 import { createShadowRootUi } from 'wxt/utils/content-script-ui/shadow-root';
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import type {
-  OverlayStateMessage,
-  OverlayStateResponse,
-  PageVideoAddMessage,
-  PageVideoPrefetchMessage,
-  PageVideoProbeMessage,
-  VideoAddResponse,
-  VideoProbeResponse,
+import { clipFields } from '../lib/clip';
+import {
+  isFrameMessage,
+  type OverlayStateMessage,
+  type OverlayStateResponse,
+  type PageVideoAddMessage,
+  type PageVideoPrefetchMessage,
+  type PageVideoProbeMessage,
+  type ShowPanelResponse,
+  type VideoAddResponse,
+  type VideoFeaturesMessage,
+  type VideoFeaturesResponse,
+  type VideoProbeResponse,
 } from '../lib/messages';
 import { DEFAULT_VIDEO_OPTIONS, parseVideoOptions, VIDEO_OPTIONS_KEY, type VideoOptions } from '../lib/options-form';
 import { errorMessage, failure } from '../lib/protocol';
@@ -26,6 +33,7 @@ import { parseSiteVideo } from '../lib/site-video';
 import {
   findPlayer,
   OVERLAY_CSS,
+  playerVideo,
   REVEAL_ACTIVITY_MS,
   REVEAL_LOAD_MS,
   VideoOverlay,
@@ -65,23 +73,27 @@ export default defineContentScript({
       }
     };
 
+    /** The player the overlay is mounted in (findPlayer), or null. */
+    let anchor: HTMLElement | null = null;
     const overlay = new VideoOverlay(document, {
       probe: () => send<VideoProbeResponse>({ type: 'downex:page-video-probe', url: location.href }),
-      add: (pick) =>
-        send<VideoAddResponse>({
-          type: 'downex:page-video-add',
-          url: location.href,
-          videoTrack: pick.video,
-          audioTrack: pick.audio,
-        }),
-      allowSignIn: async () => {
-        const got = await browser.storage.local.get(VIDEO_OPTIONS_KEY);
-        const next = { ...parseVideoOptions(got[VIDEO_OPTIONS_KEY]), useSignInForVideos: true };
-        await browser.storage.local.set({ [VIDEO_OPTIONS_KEY]: next });
-        options = next;
+      add: (pick, clip) => {
+        const msg: PageVideoAddMessage = { type: 'downex:page-video-add', url: location.href, videoTrack: pick.video, audioTrack: pick.audio };
+        // A part of the video (MEDIA-SPEC §8): no end = to the end.
+        if (clip) Object.assign(msg, clipFields(clip));
+        return send<VideoAddResponse>(msg);
       },
-      // Once allowed, a refusal for sign-in offers "Try again" (the user may sign in on the site).
-      signInAllowed: () => options.useSignInForVideos,
+      clips: async () => {
+        const msg: VideoFeaturesMessage = { type: 'downex:video-features' };
+        try {
+          const answer = (await browser.runtime.sendMessage(msg)) as VideoFeaturesResponse | undefined;
+          return answer?.clips === true;
+        } catch {
+          return false; // extension reloaded: this script is orphaned
+        }
+      },
+      // The Part row's timeline: the video of the player the panel belongs to (its own <video>).
+      video: () => playerVideo(anchor),
     });
 
     // The look-ahead: only the top frame's own page counts, while the tab is shown.
@@ -104,7 +116,6 @@ export default defineContentScript({
     });
     ctx.onInvalidated(() => dwell.stop());
 
-    let anchor: HTMLElement | null = null;
     const ui = await createShadowRootUi(ctx, {
       name: 'downex-video',
       position: 'inline',
@@ -115,6 +126,18 @@ export default defineContentScript({
       onMount: (container, shadow) => overlay.attach(container, shadow),
     });
     ctx.onInvalidated(() => overlay.destroy());
+
+    // "Show Downex download panel" on this frame's player (VIDEO-DETECT-SPEC §5.1 "Menu"): its
+    // own panel opens when its button is shown; otherwise the background says what to use.
+    const onMessage = (msg: unknown, _sender: unknown, sendResponse: (r: ShowPanelResponse) => void) => {
+      if (!isFrameMessage(msg) || msg.type !== 'downex:show-panel') return undefined;
+      sync();
+      if (anchor && ui.shadowHost.isConnected) overlay.open();
+      sendResponse({ shown: overlay.isOpen });
+      return undefined;
+    };
+    browser.runtime.onMessage.addListener(onMessage);
+    ctx.onInvalidated(() => browser.runtime?.onMessage?.removeListener(onMessage)); // gone once orphaned
 
     /** Re-reads the address and the player: mounts, moves or removes the overlay. */
     const sync = () => {
@@ -169,7 +192,7 @@ export default defineContentScript({
       void askOverlayState();
     };
     browser.storage.onChanged.addListener(onStorage);
-    ctx.onInvalidated(() => browser.storage.onChanged.removeListener(onStorage));
+    ctx.onInvalidated(() => browser.storage?.onChanged?.removeListener(onStorage)); // gone once orphaned
 
     // YouTube is a single-page app: its own event, WXT's history watcher, back/forward and the
     // page cache all mean another address; a `loadstart` (it does not bubble) a new video.

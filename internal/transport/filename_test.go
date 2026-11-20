@@ -55,6 +55,22 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 }
 
+func TestHiddenControlsAndRawName(t *testing.T) {
+	if got := RawFilenameFromURL("https://example.com/files/photo%E2%80%AEgpj.exe?x=1"); got != "photo‮gpj.exe" {
+		t.Fatalf("RawFilenameFromURL = %q", got)
+	}
+	for _, s := range []string{"a‮b", "a⁦b⁩", "a‪b"} {
+		if !HiddenControls(s) {
+			t.Errorf("HiddenControls(%q) = false", s)
+		}
+	}
+	for _, s := range []string{"report.pdf", "‏ملف.pdf", "a‎b", "a؜b"} {
+		if HiddenControls(s) {
+			t.Errorf("HiddenControls(%q) = true", s)
+		}
+	}
+}
+
 func TestFilenameFromURL(t *testing.T) {
 	tests := []struct {
 		in, want string

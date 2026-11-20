@@ -69,8 +69,10 @@ export function createHandOff(deps: HandoffDeps): HandOff {
     const rec: HandoffRecord = { ts: now(), url: target.url, source, ok: outcome.ok };
     const filename = baseName(target.filename);
     if (filename) rec.filename = filename;
-    if (outcome.ok) rec.downloadId = outcome.value.downloadId;
-    else rec.error = outcome.error;
+    if (outcome.ok) {
+      rec.downloadId = outcome.value.downloadId;
+      if (outcome.value.renewCheck === true) rec.renewCheck = true;
+    } else rec.error = outcome.error;
     if (duplicate) rec.duplicate = true;
     deps.history.add(rec).catch((e: unknown) => deps.onError?.(e));
   };

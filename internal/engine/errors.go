@@ -44,6 +44,32 @@ var (
 	// which are missing or were rejected (transport.ErrAuthRequired, re-exported). The
 	// daemon maps it to the auth_required error code so the UI can offer a site login.
 	ErrAuthRequired = transport.ErrAuthRequired
+	// ErrLinkExpired reports a link that stopped working (§7.2): the server refused it
+	// (403, 410, 401 without a challenge, a redirect to 404) or answered a range with a web
+	// page. The data received so far is kept; give the download a new link (Renew).
+	ErrLinkExpired = errors.New("engine: link expired")
+)
+
+// Refusals of ProveLink and Renew (§7.3). The download is never changed by them.
+var (
+	ErrLinkMismatch = errors.New("engine: the new link serves different data")
+	ErrLinkSize     = errors.New("engine: the new link's file has another size")
+	ErrLinkChanged  = errors.New("engine: the new link serves another version")
+	ErrLinkNoRanges = errors.New("engine: the new link's server does not send byte ranges")
+	ErrLinkUnproven = errors.New("engine: too little data to compare with the new link")
+	ErrLinkStale    = errors.New("engine: the download changed during the check")
+)
+
+// Refusals of Rescue (§7.4) besides the proof's (ErrLinkMismatch, ErrLinkSize,
+// ErrLinkChanged, ErrLinkNoRanges, ErrLinkUnproven). Nothing on disk is changed by them.
+var (
+	// ErrSizeUnknown: the server answers ranges without a total ("bytes a-b/*"); it also
+	// matches ErrLinkNoRanges.
+	ErrSizeUnknown = errors.New("engine: the server does not report the file's size")
+	// ErrPartialEmpty: the partial file holds no byte that can be kept.
+	ErrPartialEmpty = errors.New("engine: the partial file is empty")
+	// ErrPartialLocked: another program still writes or holds the partial file.
+	ErrPartialLocked = errors.New("engine: the partial file is in use by another program")
 )
 
 // StatusError reports an HTTP status the engine could not use.
@@ -75,7 +101,9 @@ func isTransient(err error) bool {
 	for _, permanent := range []error{
 		ErrRangeIgnored, ErrValidatorChanged, ErrDiskFull, ErrCorruptCheckpoint, ErrInvalidRequest,
 		transport.ErrTLS, transport.ErrTooLarge, transport.ErrRedirects, transport.ErrInvalidRequest,
-		transport.ErrInsecureRedirect, transport.ErrAuthRequired,
+		transport.ErrInsecureRedirect, transport.ErrAuthRequired, ErrLinkExpired,
+		ErrLinkMismatch, ErrLinkSize, ErrLinkChanged, ErrLinkNoRanges, ErrLinkUnproven, ErrLinkStale,
+		ErrSizeUnknown, ErrPartialEmpty, ErrPartialLocked,
 	} {
 		if errors.Is(err, permanent) {
 			return false

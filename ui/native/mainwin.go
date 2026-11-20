@@ -146,8 +146,17 @@ func openMain(a *osApp, b *backend, o options) (*osWindow, error) {
 	if b.mainStarted != nil {
 		b.mainStarted()
 	}
+	if b.gw != nil {
+		// The standalone Confirm download window confirms the browser's downloads: this
+		// window does not show them too (docs/DESKTOP-SPEC.md §1).
+		m.SetConfirmElsewhere(b.gw.ConfirmWindowOpen)
+		b.gw.SetConfirmHooks(m.ConfirmShownElsewhere, m.ConfirmElsewhereChanged)
+	}
 	if b.confirm != nil {
 		b.confirm(m.RequestConfirm)
+	}
+	if b.renew != nil {
+		b.renew(m.RequestRenew)
 	}
 	if b.menu != nil {
 		b.menu(func(c string) { _ = kw.Post(func() { m.MenuCommand(c) }) })

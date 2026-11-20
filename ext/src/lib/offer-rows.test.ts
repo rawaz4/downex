@@ -145,7 +145,8 @@ describe('buildOfferRows', () => {
     expect(r.main.map((x) => [x.id, x.quality, x.detail, x.title])).toEqual([
       ['stream:film:a1', '1080p (Full HD)', 'H.264', '1920×818 · cdn.example.com/…/film/master.m3u8'],
       ['stream:film:a2', '720p (HD)', 'H.264', '1280×544 · cdn.example.com/…/film/master.m3u8'],
-      ['stream:other:o1', '1080p (Full HD) 60fps', 'H.264', '1920×1080 · cdn.example.com/…/other/master.m3u8'],
+      // A video listed without any audio has no sound, and says so.
+      ['stream:other:o1', '1080p (Full HD) 60fps', 'H.264 · No sound', '1920×1080 · cdn.example.com/…/other/master.m3u8'],
     ]);
     expect(r.defaultId).toBe('stream:film:a1');
   });
@@ -304,6 +305,29 @@ describe('buildOfferRows', () => {
     expect(r.other).toEqual([]);
     expect(r.defaultId).toBe('site:137');
     expect(allRows(r)).toHaveLength(6);
+  });
+
+  it('recommends and preselects the highest quality with sound of the site and what played (§5.2)', () => {
+    // The daemon's default is 360p: the 1080p video (paired with the audio) is recommended.
+    const low = rows({ site: { name: 'Instagram', info: { ...SITE, selectedVideo: '18', selectedAudio: '' }, audio: '140' } });
+    expect(low.defaultId).toBe('site:137');
+    expect(low.main.filter((x) => x.recommended).map((x) => x.id)).toEqual(['site:137']);
+    // Played first, the site's larger quality recommended.
+    const played = info([track({ id: 'p', kind: 'muxed', codecs: 'avc1, mp4a', width: 576, height: 1024, size: 2 * MB })], { format: 'http', selectedVideo: 'p' });
+    const both = rows({ site: { name: 'TikTok', info: SITE, audio: '140' }, played: { info: played, audio: '', key: 'k' } as OfferRowsInput['played'] });
+    expect(both.main[0]!.id).toBe('played:p');
+    expect(both.defaultId).toBe('site:137');
+    // A larger video without sound loses to a smaller one with sound.
+    const silent = info(
+      [
+        track({ id: 'v', kind: 'video', codecs: 'avc1', height: 1080, size: 9 * MB }),
+        track({ id: 'm', kind: 'muxed', codecs: 'avc1, mp4a', height: 720, size: 5 * MB }),
+      ],
+      { format: 'http', selectedVideo: 'v' },
+    );
+    expect(rows({ site: { name: 'X', info: silent, audio: '' } }).defaultId).toBe('site:m');
+    // One quality: no badge.
+    expect(rows({ site: { name: 'X', info: info([track({ id: 'm', kind: 'muxed', height: 720 })], { format: 'http' }), audio: '' } }).main[0]!.recommended).toBeUndefined();
   });
 
   it('has no default without rows, and falls back to the first usable row', () => {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"downex/internal/media"
+	"downex/internal/validate"
 )
 
 // testNow is the time the fixtures were written for: their expire parameters are 6 h
@@ -147,7 +148,7 @@ func TestParseRefusals(t *testing.T) {
 		"over 32 MiB":     {huge, media.ErrTooLarge},
 		"array":           {[]byte(`[{"id": "x", "extractor_key": "Generic"}]`), media.ErrMalformed},
 		"string":          {[]byte(`"x"`), media.ErrMalformed},
-		"null":            {[]byte(`null`), media.ErrMalformed},
+		"null":            {[]byte(" null\n"), ErrSiteUnsupported},
 		"empty":           {nil, media.ErrMalformed},
 		"trailing data":   {[]byte(`{"id": "x", "extractor_key": "Generic"} {}`), media.ErrMalformed},
 		"no id":           {[]byte(`{"extractor_key": "Generic"}`), media.ErrMalformed},
@@ -488,5 +489,52 @@ func TestFiniteJSON(t *testing.T) {
 	in := []byte(`{"a": 1}`)
 	if out := finiteJSON(in); &out[0] != &in[0] {
 		t.Error("finiteJSON copied input without non-finite numbers")
+	}
+}
+
+// Chapters for choosing a part (docs/MEDIA-SPEC.md §8 C14): invalid entries are dropped,
+// titles cleaned, overlaps dropped; a list that is not one, or too long, means none.
+func TestParseChapters(t *testing.T) {
+	data := `{"id": "x", "extractor_key": "Generic", "title": "t", "duration": 754, "chapters": [
+		{"start_time": 80, "end_time": 165.5, "title": "Results\nand more"},
+		{"start_time": 0, "end_time": 80, "title": "Intro"},
+		{"start_time": 100, "end_time": 120, "title": "overlap"},
+		{"start_time": "1", "end_time": 2, "title": "wrong type"},
+		{"start_time": 700, "end_time": 900, "title": "past the end"},
+		{"start_time": 165.5, "end_time": 754, "title": null}]}`
+	info, err := Parse([]byte(data), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []validate.Chapter{{StartMs: 0, EndMs: 80_000, Title: "Intro"}, {StartMs: 80_000, EndMs: 165_500, Title: "Results and more"}, {StartMs: 165_500, EndMs: 754_000}}
+	if !reflect.DeepEqual(info.Chapters, want) {
+		t.Errorf("chapters %+v, want %+v", info.Chapters, want)
+	}
+	for _, v := range []string{`"chapters": {}`, `"chapters": "x"`, `"chapters": [` + strings.Repeat(`{"start_time":0,"end_time":1},`, validate.MaxChapters) + `{"start_time":1,"end_time":2}]`} {
+		info, err := Parse([]byte(`{"id": "x", "extractor_key": "Generic", `+v+`}`), testNow)
+		if err != nil || info.Chapters != nil {
+			t.Errorf("%.40s: %v %+v", v, err, info.Chapters)
+		}
+	}
+}
+
+// Facebook's titles lead with the post's counts; the video's own text is its title
+// (measured 2026-11-18). Other sites' titles keep their numbers.
+func TestParseFacebookCounts(t *testing.T) {
+	for _, c := range []struct{ key, title, want string }{
+		{"Facebook", "4.6K views · 38K reactions | The trend | Example Page", "The trend | Example Page"},
+		{"FacebookReel", "1,204 views · 9 reactions | A clip", "A clip"},
+		{"Facebook", "12 views | ", "12 views |"},
+		{"Facebook", "Morning walk | Example", "Morning walk | Example"},
+		{"Youtube", "10 things | You missed", "10 things | You missed"},
+	} {
+		data := `{"id": "x", "extractor_key": "` + c.key + `", "title": "` + c.title + `"}`
+		info, err := Parse([]byte(data), testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Title != c.want {
+			t.Errorf("%s %q: title %q, want %q", c.key, c.title, info.Title, c.want)
+		}
 	}
 }

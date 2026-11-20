@@ -88,9 +88,11 @@ func (p Proxy) hasLogin() bool { return p.Username != "" || p.Password != "" }
 type Request struct {
 	// PageURL is the page (an absolute http(s) URL).
 	PageURL string
-	// Cookie is the Cookie header the user allowed for the page (§6.3), and Referer
-	// the page that embeds it; "" = none.
-	Cookie, Referer string
+	// Cookie is the Cookie header of the user's sign-in for the page (§6.3), and
+	// Referer the page that embeds it; "" = none. CookieDomain is the domain the sign-in
+	// is for (validate.SiteCookie): the cookie file then covers it and its subdomains; "" = the
+	// page's exact host.
+	Cookie, CookieDomain, Referer string
 	// Proxy is the page's route.
 	Proxy Proxy
 	// Fresh bypasses the cache: the page is resolved again (a running extraction is
@@ -448,9 +450,9 @@ func (r *Resolver) attempt(ctx context.Context, l *tools.Lease, req Request, man
 		return nil, tools.OK, false, fmt.Errorf("%w: cannot prepare the run: %v", sitemedia.ErrSiteError, err)
 	}
 	defer os.RemoveAll(run)
-	cookies := ""
+	cookies, signIn := "", 0
 	if req.Cookie != "" {
-		if cookies, err = writeCookieFile(run, req.PageURL, req.Cookie); err != nil {
+		if cookies, signIn, err = writeCookieFile(run, req.PageURL, req.Cookie, req.CookieDomain); err != nil {
 			return nil, tools.OK, false, fmt.Errorf("%w: cannot prepare the run: %v", sitemedia.ErrSiteError, err)
 		}
 	}
@@ -472,7 +474,9 @@ func (r *Resolver) attempt(ctx context.Context, l *tools.Lease, req Request, man
 	}
 	info, outcome, err = r.interpret(res, err)
 	attrs := []any{"page", logURL(req.PageURL), "elapsed", time.Since(start).Round(time.Millisecond), "exit", res.ExitCode,
-		"managed", l.YtDlpManaged, "version", l.YtDlpVersion, "manifests", manifests, "lookahead", req.Prefetch}
+		"managed", l.YtDlpManaged, "version", l.YtDlpVersion, "manifests", manifests, "lookahead", req.Prefetch,
+		// How many cookies of the user's sign-in it had, never which (§6.3).
+		"cookies", signIn}
 	if err != nil {
 		attrs = append(attrs, "error", err)
 	}
@@ -495,6 +499,10 @@ func (r *Resolver) interpret(res tools.ExecResult, execErr error) (*sitemedia.In
 		return nil, tools.SiteError, fmt.Errorf("%w: it took longer than %s", sitemedia.ErrSiteError, r.cfg.Timeout)
 	case res.ExitCode == 0 && len(bytes.TrimSpace(res.Stdout)) > 0:
 		info, err := sitemedia.Parse(res.Stdout, r.cfg.Now())
+		if errors.Is(err, media.ErrLive) && saysNotLive(res.StderrTail) {
+			// A page with nothing to play that the site's reader calls live (classify.go).
+			return nil, tools.OK, fmt.Errorf("%w: yt-dlp found nothing to play in it", sitemedia.ErrSiteUnsupported)
+		}
 		return info, tools.OK, err
 	case res.ExitCode == 2:
 		reason := cleanReason(lastLine(res.StderrTail), false)
@@ -521,7 +529,7 @@ func (e *resolvingError) Unwrap() []error { return []error{sitemedia.ErrSiteReso
 
 // checkRequest validates a request: an http(s) page and Referer (validate.URL) without
 // user information (it would reach yt-dlp's arguments, which other users of the machine
-// can read) and a proxy URL of a scheme yt-dlp can use, with a host and without user
+// can read), the sign-in's cookie and its domain (validate.SiteCookie) and a proxy URL of a scheme yt-dlp can use, with a host and without user
 // information, path, query or fragment. Its errors never repeat the values.
 func checkRequest(req Request) error {
 	if validate.URL(req.PageURL) != nil || hasUserinfo(req.PageURL) {
@@ -529,6 +537,9 @@ func checkRequest(req Request) error {
 	}
 	if req.Referer != "" && (validate.URL(req.Referer) != nil || hasUserinfo(req.Referer)) {
 		return fmt.Errorf("%w: the Referer is not valid", sitemedia.ErrSiteError)
+	}
+	if err := validate.SiteCookie(req.PageURL, req.Cookie, req.CookieDomain); err != nil {
+		return fmt.Errorf("%w: %v", sitemedia.ErrSiteError, err)
 	}
 	if req.Proxy.URL == "" {
 		if req.Proxy.hasLogin() {

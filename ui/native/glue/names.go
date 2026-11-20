@@ -32,6 +32,9 @@ func InstanceID(base string, v host.View) string {
 	if v.IsProgress() {
 		return base + "-progress-" + strconv.FormatInt(v.Progress, 10)
 	}
+	if v.IsConfirm() {
+		return base + "-confirm"
+	}
 	return base
 }
 

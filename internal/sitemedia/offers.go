@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"downex/internal/media"
 )
@@ -24,8 +25,13 @@ type Offer struct {
 	// are then the offer, and refuses a probed container other than mp4, or a
 	// presentation without video, as media_unsupported.
 	Format string
-	// Container is always ContainerMP4.
+	// Container is ContainerMP4, or for an audio page's offer (Audio)
+	// ContainerM4A or ContainerMP3.
 	Container string
+	// Audio marks the offer of an audio page (docs/SITE-MEDIA-SPEC.md §3.13): Tracks are
+	// audio tracks only (FormatHTTP) or the manifest's tracks are probed with
+	// ManifestAudioTracks; there is no video and DefaultVideo is "".
+	Audio bool
 	// Tracks (FormatHTTP) are one MP4 video per quality class (classVideos), best class
 	// first, and every MP4 video without a picture after them, then the MP4 audio
 	// tracks, best first; at most MaxOffered.
@@ -37,6 +43,9 @@ type Offer struct {
 	// headers of one of its formats (a Cookie only for the manifest's own host).
 	ManifestURL string
 	Headers     http.Header
+	// Expires (FormatHLS, FormatDASH) is when the address of the offer's stream expires,
+	// as its signed URL says (Format.Expires); zero when unknown.
+	Expires time.Time
 
 	// more are the usable MP4 videos the one-per-class rule (or the cap) left out: Select
 	// still finds them by key or ID (a pick of an earlier offer, or an ID the user
@@ -44,6 +53,10 @@ type Offer struct {
 	// video of Tracks and more, by ID.
 	more  []media.Track
 	class map[string]int
+	// streamed is the format an audio page's stream was chosen from (DescribeAudio).
+	streamed *Format
+	// next is the offer of an audio page's next usable group (Next).
+	next *Offer
 }
 
 // Offers lists what a parsed page offers (docs/SITE-MEDIA-SPEC.md §3.11). pageHost is
@@ -51,17 +64,21 @@ type Offer struct {
 // URLs on localhost or on a loopback, link-local or unspecified address are usable
 // only when they are on that same host (docs/SITE-MEDIA-SPEC.md §6.1).
 //
+// An audio page (Info.AudioOnly) is offered its audio instead (audioOffer,
+// docs/SITE-MEDIA-SPEC.md §3.13).
+//
 // The offer is one direct MP4 video per quality class (a video-only format only when
-// an MP4 audio exists to pair it with; classVideos) with the MP4 audios; without any,
-// the manifest that most of the page's video formats share. A page with neither is
-// refused: encrypted (media.ErrEncrypted) when it had DRM-protected formats,
-// ErrAuthRequired when yt-dlp says the video needs an account, else
-// media.ErrUnsupported ("no MP4 video").
+// an MP4 audio exists to pair it with, or alone on a silent page, Info.Silent;
+// classVideos) with the MP4 audios; without any, the manifest that most of the page's
+// video formats share. A page with neither is refused: encrypted (media.ErrEncrypted)
+// when it had DRM-protected formats, ErrAuthRequired when yt-dlp says the video needs
+// an account, else media.ErrUnsupported ("no MP4 video").
 func Offers(info *Info, pageHost string) (*Offer, error) {
 	if info == nil {
 		return nil, fmt.Errorf("%w: no page to offer", media.ErrMalformed)
 	}
 	host := normalizeHost(pageHost)
+	silent := info.Silent
 	var muxed, videoOnly []classVideo
 	var audios []*Format
 	for i := range info.Formats {
@@ -70,7 +87,7 @@ func Offers(info *Info, pageHost string) (*Offer, error) {
 			continue
 		}
 		switch {
-		case pairableVideo(f):
+		case pairableVideo(f), silent && silentVideo(f):
 			videoOnly = append(videoOnly, classVideo{f: f, order: i})
 		case pairableAudio(f):
 			audios = append(audios, f)
@@ -79,10 +96,11 @@ func Offers(info *Info, pageHost string) (*Offer, error) {
 		}
 	}
 	usable := muxed
-	if len(audios) > 0 {
+	if len(audios) > 0 || silent {
 		usable = append(usable, videoOnly...)
 	}
 	videos, more := classVideos(usable, info.ExtractorKey == youtubeKey)
+	videos, more = hideUnknown(videos, more)
 	slices.SortFunc(audios, compareAudio)
 	// At most MaxOffered tracks: the longer of the two lists loses its worst. Classed
 	// videos are at most 9, so only audios and videos without a picture go; a video
@@ -110,21 +128,19 @@ func Offers(info *Info, pageHost string) (*Offer, error) {
 			off.class[v.f.ID] = v.class
 		}
 		off.DefaultVideo = videos[0].f.ID
-		if videos[0].f.Kind == media.KindVideo {
+		if videos[0].f.Kind == media.KindVideo && len(audios) > 0 {
 			off.DefaultAudio = audios[0].ID
 		}
 		return off, nil
 	}
+	if info.AudioOnly {
+		return audioOffer(info, host)
+	}
 	if off := manifestOffer(info, host); off != nil {
 		return off, nil
 	}
-	switch {
-	case info.Protected > 0 || info.HasDRM:
-		return nil, fmt.Errorf("%w: the video is DRM-protected", media.ErrEncrypted)
-	case info.Availability == "needs_auth":
-		return nil, fmt.Errorf("%w: the video needs a signed-in account", ErrAuthRequired)
-	case info.Availability == "premium_only", info.Availability == "subscriber_only":
-		return nil, fmt.Errorf("%w: the video is for members only", ErrAuthRequired)
+	if err := noOfferError(info); err != nil {
+		return nil, err
 	}
 	return nil, fmt.Errorf("%w: no MP4 video on this page", media.ErrUnsupported)
 }
@@ -155,7 +171,8 @@ func manifestOffer(info *Info, host string) *Offer {
 	if best == nil {
 		return nil
 	}
-	off := &Offer{Format: FormatHLS, Container: ContainerMP4, ManifestURL: best.ManifestURL, Headers: best.Headers.Clone()}
+	off := &Offer{Format: FormatHLS, Container: ContainerMP4, ManifestURL: best.ManifestURL, Headers: best.Headers.Clone(),
+		Expires: best.Expires}
 	if best.Protocol == protoDASH {
 		off.Format = FormatDASH
 	}
@@ -322,14 +339,44 @@ func codecRank(family string) int {
 	return 3
 }
 
-// pairableVideo reports a video-only fragmented MP4 of H.264, AV1 or HEVC.
+// pairableVideo reports a video-only MP4 of H.264, AV1 or HEVC: a fragmented one, or
+// one without a container (SITE-MEDIA-SPEC amendment 2026-11-18: its bytes decide; the
+// download's first chunk must show a fragmented MP4 before anything is joined).
 func pairableVideo(f *Format) bool {
-	return f.Kind == media.KindVideo && f.fragmented() && f.Ext == "mp4" && mp4Video(f.VCodec)
+	return f.Kind == media.KindVideo && f.Ext == "mp4" && (f.fragmented() || f.Container == "") && mp4Video(f.VCodec)
 }
 
-// pairableAudio reports an audio-only fragmented MP4 (m4a) of AAC, AC-3 or E-AC-3.
+// pairableAudio reports an audio-only MP4 (m4a or mp4) of AAC, AC-3 or E-AC-3,
+// fragmented or without a container, as pairableVideo.
 func pairableAudio(f *Format) bool {
-	return f.Kind == media.KindAudio && f.fragmented() && mp4Audio(f.ACodec)
+	return f.Kind == media.KindAudio && (f.fragmented() || f.Container == "" && (f.Ext == "m4a" || f.Ext == "mp4")) &&
+		mp4Audio(f.ACodec)
+}
+
+// silentVideo reports a video-only MP4 of a silent page whose codec yt-dlp does not
+// name: saved as it is, or joined when it is fragmented.
+func silentVideo(f *Format) bool {
+	return f.Kind == media.KindVideo && f.Ext == "mp4" && f.VCodec == "" && (f.fragmented() || f.Container == "")
+}
+
+// hideUnknown moves the offered videos without a picture (so no class) that say nothing
+// of themselves (no codec) or that the site calls watermarked (format_note) out of the
+// list when a video of a known class is offered: they are another copy of a listed
+// video as often as not, and a row that names nothing, or a marked copy, helps no one
+// (SITE-MEDIA-SPEC amendment 2026-11-18). They stay selectable, as every video the class
+// rule leaves out.
+func hideUnknown(offered, rest []classVideo) (shown, hidden []classVideo) {
+	if !slices.ContainsFunc(offered, func(v classVideo) bool { return v.class > 0 }) {
+		return offered, rest
+	}
+	for _, v := range offered {
+		if v.class == 0 && (v.f.VCodec == "" && v.f.ACodec == "" || watermarked(v.f)) {
+			rest = append(rest, v)
+			continue
+		}
+		shown = append(shown, v)
+	}
+	return shown, rest
 }
 
 // muxedMP4 reports an MP4 with video and audio whose codecs are MP4 ones. A codec
@@ -387,8 +434,9 @@ func classVideos(videos []classVideo, youtube bool) (offered, rest []classVideo)
 
 // compareClassVideo orders videos best first, which makes the first of each class the
 // one offered and the first offered the default video (docs/SITE-MEDIA-SPEC.md §3.11,
-// amendment 2026-10-23): the class; then, within a class, video-only before muxed
-// (muxed formats are offered only for a class without a video-only one); SDR before
+// amendment 2026-10-23): the class; then, within a class, a fragmented video-only
+// format, then muxed, then a video-only format without a container (kindRank; muxed
+// formats are offered only for a class without a fragmented video-only one); SDR before
 // HDR (HDR only when the class has nothing else); the frame rate, rounded; H.264, which
 // plays everywhere, before HEVC before AV1 (codecRank); bit rate; picture area; size;
 // the format yt-dlp lists later (it lists them worst first).
@@ -397,8 +445,8 @@ func compareClassVideo(av, bv classVideo) int {
 	if c := cmp.Compare(bv.class, av.class); c != 0 {
 		return c
 	}
-	if am, bm := a.Kind == media.KindMuxed, b.Kind == media.KindMuxed; am != bm {
-		return boolFirst(!am)
+	if c := cmp.Compare(kindRank(a), kindRank(b)); c != 0 {
+		return c
 	}
 	if a.HDR != b.HDR {
 		return boolFirst(!a.HDR)
@@ -443,6 +491,20 @@ func compareAudio(a, b *Format) int {
 	return strings.Compare(a.ID, b.ID)
 }
 
+// kindRank ranks the kinds of video formats within a class (compareClassVideo): a
+// video-only format in yt-dlp's DASH container, then a muxed format, then a video-only
+// format without a container, which can be joined only if its bytes turn out to be a
+// fragmented MP4 (SITE-MEDIA-SPEC amendment 2026-11-18).
+func kindRank(f *Format) int {
+	switch {
+	case f.Kind == media.KindMuxed:
+		return 1
+	case f.fragmented():
+		return 0
+	}
+	return 2
+}
+
 // boolFirst orders a before b when first holds, b before a otherwise.
 func boolFirst(first bool) int {
 	if first {
@@ -450,6 +512,9 @@ func boolFirst(first bool) int {
 	}
 	return 1
 }
+
+// watermarked reports a format the site's note calls watermarked.
+func watermarked(f *Format) bool { return strings.Contains(strings.ToLower(f.Note), "watermark") }
 
 func original(f *Format) bool { return strings.Contains(strings.ToLower(f.Note), "original") }
 
@@ -475,15 +540,16 @@ func track(f *Format, class int) media.Track {
 		Key:       f.Key,
 		Ext:       f.Ext,
 	}
+	vcodec, acodec := trackCodec(f.VCodec), trackCodec(f.ACodec)
 	switch f.Kind {
 	case media.KindAudio:
-		t.Codecs = f.ACodec
+		t.Codecs = acodec
 		t.Name = f.Note
 	case media.KindVideo:
-		t.Codecs = f.VCodec
+		t.Codecs = vcodec
 		t.Name = media.ClassName(class, f.FPS, f.HDR)
 	default:
-		t.Codecs = strings.Join(slices.DeleteFunc([]string{f.VCodec, f.ACodec}, func(s string) bool { return s == "" }), ", ")
+		t.Codecs = strings.Join(slices.DeleteFunc([]string{vcodec, acodec}, func(s string) bool { return s == "" }), ", ")
 		t.Name = media.ClassName(class, f.FPS, f.HDR)
 	}
 	if f.Size > 0 {

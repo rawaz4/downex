@@ -13,10 +13,31 @@ func TestCodecName(t *testing.T) {
 		"av01.0.08M.08": "AV1", "hvc1.1.6.L120.90": "HEVC", "hev1.2.4": "HEVC",
 		"vp09.00.40.08": "VP9", "vp9": "VP9", "mp4a.40.2": "AAC", "opus": "Opus",
 		"ac-3": "AC-3", "ec-3": "E-AC-3", " mp4a.40.5": "AAC",
-		"": "", "none": "", "h264": "", "mp3": "",
+		// Plain names (TikTok and other sites; amendment 2026-11-18), whole strings only.
+		"h264": "H.264", "H264": "H.264", "avc": "H.264", "h265": "HEVC", "hevc": "HEVC", "bytevc1": "HEVC",
+		"av1": "AV1", "aac": "AAC", "ac3": "AC-3", "eac3": "E-AC-3",
+		"mp3": "MP3", "MP3": "MP3", // a direct MP3 of an audio page (§3.13)
+		"": "", "none": "", "mp4": "", "h264.1": "", "bytevc2": "", "aac.lc": "",
 	} {
 		if got := CodecName(codec); got != want {
 			t.Errorf("CodecName(%q) = %q, want %q", codec, got, want)
+		}
+	}
+}
+
+// A plain codec name is offered as its family's sample entry, so every UI names it;
+// a sample entry or an unknown codec is kept as yt-dlp gave it.
+func TestTrackCodec(t *testing.T) {
+	for codec, want := range map[string]string{
+		"h264": "avc1", "AVC": "avc1", "bytevc1": "hvc1", "h265": "hvc1", "hevc": "hvc1", "av1": "av01",
+		"aac": "mp4a", "ac3": "ac-3", "eac3": "ec-3",
+		"avc1.640028": "avc1.640028", "hev1.2.4": "hev1.2.4", "vp9": "vp9", "mp4": "mp4", "": "",
+	} {
+		if got := trackCodec(codec); got != want {
+			t.Errorf("trackCodec(%q) = %q, want %q", codec, got, want)
+		}
+		if name := CodecName(codec); name != "" && CodecName(trackCodec(codec)) != name {
+			t.Errorf("CodecName(trackCodec(%q)) = %q, want %q", codec, CodecName(trackCodec(codec)), name)
 		}
 	}
 }
@@ -26,12 +47,35 @@ func TestCodecName(t *testing.T) {
 func TestSiteName(t *testing.T) {
 	for key, want := range map[string]string{
 		"Youtube": "YouTube", "Twitter": "X", "TwitchVod": "Twitch", "TwitchClips": "Twitch", "FacebookReel": "Facebook",
+		"TwitterBroadcast": "X", "KickClip": "Kick", "KickVOD": "Kick", "BiliBili": "Bilibili", "NineGag": "9GAG",
+		"TelegramEmbed": "Telegram", "LBRY": "Odysee", "FoxNews": "Fox News", "FacebookPluginsVideo": "Facebook",
+		"InstagramStory": "Instagram", "ApplePodcasts": "Apple Podcasts", "GooglePodcasts": "Google Podcasts",
+		"ABCNews": "ABC News", "WashingtonPost": "Washington Post", "BBCCoUk": "BBC", "DailyMotion": "Dailymotion",
 		"Vimeo": "Vimeo", "Facebook": "Facebook", "Instagram": "Instagram", "TikTok": "TikTok", "Dailymotion": "Dailymotion",
 		"Reddit": "Reddit", "Streamable": "Streamable", "YoutubeTab": "YoutubeTab", "Generic": "Generic",
 		"youtube": "youtube", "twitter": "twitter", "": "",
 	} {
 		if got := SiteName(key); got != want {
 			t.Errorf("SiteName(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// A page read by yt-dlp's readers of any page is named by its host (amendment
+// 2026-11-18); a site's own extractor keeps its name.
+func TestPageSiteName(t *testing.T) {
+	for _, c := range []struct{ key, host, want string }{
+		{"Generic", "www.example.com", "example.com"},
+		{"Generic", "Media.Example.org:8443", "media.example.org"},
+		{"HTML5MediaEmbed", "[::1]:80", "::1"},
+		{"Generic", "", "Generic"},
+		{"Generic", strings.Repeat("a", 61) + ".com", "Generic"},
+		{"Youtube", "www.example.com", "YouTube"},
+		{"BiliBili", "www.example.com", "Bilibili"},
+		{"Vimeo", "", "Vimeo"},
+	} {
+		if got := PageSiteName(c.key, c.host); got != c.want {
+			t.Errorf("PageSiteName(%q, %q) = %q, want %q", c.key, c.host, got, c.want)
 		}
 	}
 }

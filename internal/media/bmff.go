@@ -30,9 +30,29 @@ func CheckInit(data []byte) error {
 	return nil
 }
 
+// InitHasVideo reports whether the 'moov' of an initialization segment (or of a whole
+// MP4 file's head) has a video track: a 'trak' whose handler is 'vide'. The data is
+// walked as CheckInit walks it, and its errors are CheckInit's. An audio download
+// (docs/SITE-MEDIA-SPEC.md §3.13) refuses such data, so it never saves a picture.
+func InitHasVideo(data []byte) (bool, error) {
+	if len(data) == 0 {
+		return false, errf(ErrMalformed, "empty initialization segment")
+	}
+	w := &boxWalker{}
+	if err := w.walk(data, 0); err != nil {
+		return false, err
+	}
+	if !w.sawMoov {
+		return false, errf(ErrMalformed, "initialization segment has no 'moov' box")
+	}
+	return w.video, nil
+}
+
 type boxWalker struct {
 	count   int // boxes visited
 	sawMoov bool
+	// video reports a track whose handler is 'vide' (InitHasVideo).
+	video bool
 	// handler is the handler_type of the current track ('vide', 'soun', ...), which
 	// decides the layout of its sample entries.
 	handler string
@@ -125,6 +145,7 @@ func (w *boxWalker) walk(data []byte, depth int) error {
 			// reference ('dhlr') describes storage, not media.
 			if len(payload) >= 12 && string(payload[4:8]) != "dhlr" {
 				w.handler = string(payload[8:12])
+				w.video = w.video || w.handler == "vide"
 			}
 			return nil
 		case "stsd":

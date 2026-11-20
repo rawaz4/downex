@@ -153,6 +153,60 @@ type Download struct {
 	// (docs/ENGINE-SPEC.md §7.1). The file under Filename stays until the new copy is
 	// complete, which then replaces it (a regular file only); cleared when it completes.
 	ReplaceFile bool `json:"replaceFile,omitempty"`
+	// File check (docs/DESKTOP-SPEC.md §9). ServedType is the media type of the probe
+	// response's Content-Type (lower case, no parameters; "" = none), set by the engine.
+	// NameControls: the name the server or requester proposed held bidi overrides,
+	// embeddings or isolates that sanitising removed. FileCheck is the final check of a
+	// completed file: stores write it only through SetFileCheck, and UpdateDownload and
+	// SaveCheckpoint keep the stored value (the QueueID rule: runs write copies).
+	ServedType   string     `json:"servedType,omitempty"`
+	NameControls bool       `json:"nameControls,omitempty"`
+	FileCheck    *FileCheck `json:"fileCheck,omitempty"`
+	// Expired links (docs/ENGINE-SPEC.md §7.2-7.3). PageURL is the page a file download
+	// was started from (http or https; "" = unknown), set from the add. RemoteName is the
+	// server's name for the file at the first probe (Content-Disposition, else the URL),
+	// before any "name (n).ext" variant; "" before the probe and after a restart.
+	PageURL    string `json:"pageUrl,omitempty"`
+	RemoteName string `json:"remoteName,omitempty"`
+	// RescuedBytes is how many bytes of this download were adopted from a partial file
+	// another program (a browser) left unfinished (docs/ENGINE-SPEC.md §7.4); 0 = none.
+	// Kept after completion; cleared by a restart (every reset of the remote state).
+	RescuedBytes int64 `json:"rescuedBytes,omitempty"`
+}
+
+// FileCheckLevel is how much a file check has to say (docs/DESKTOP-SPEC.md §9).
+type FileCheckLevel int
+
+const (
+	FileCheckNone    FileCheckLevel = iota // nothing to say
+	FileCheckNote                          // a harmless difference, details only
+	FileCheckCaution                       // probably not the wanted file; Open not held
+	FileCheckDanger                        // the file pretends to be another type; Open asks first
+)
+
+// FileCheckStage is what a file check looked at (docs/DESKTOP-SPEC.md §9.1).
+type FileCheckStage int
+
+const (
+	FileCheckStageName  FileCheckStage = iota // name, served type and MIME hint only
+	FileCheckStageEarly                       // the first 64 KiB of a running download
+	FileCheckStageFinal                       // the completed file, archive listing included
+)
+
+// FileCheck is the result of a file check (docs/DESKTOP-SPEC.md §9). It is advisory:
+// it never says a file is safe.
+type FileCheck struct {
+	Level             FileCheckLevel `json:"level"`
+	Stage             FileCheckStage `json:"stage"`
+	Reason            string         `json:"reason"`            // stable code (§9.9)
+	Content           string         `json:"content,omitempty"` // sniffed content id ("" = unknown)
+	Brand             string         `json:"brand,omitempty"`   // content subtype (ISO-BMFF brand family, container kind, "dll")
+	Claim             string         `json:"claim,omitempty"`   // the claimed type's label key (an extension or a served-type family)
+	Served            string         `json:"served,omitempty"`  // the served Content-Type media type
+	Member            string         `json:"member,omitempty"`  // the archive member the reason names
+	ProgramMembers    int            `json:"programMembers,omitempty"`
+	ListingIncomplete bool           `json:"listingIncomplete,omitempty"`
+	CheckedAt         time.Time      `json:"checkedAt,omitempty"`
 }
 
 // Kind is what a download fetches.
@@ -225,14 +279,97 @@ type Media struct {
 	FragmentsTotal int   `json:"fragmentsTotal,omitempty"`
 	FragmentsDone  int   `json:"fragmentsDone,omitempty"`
 	BytesDone      int64 `json:"bytesDone,omitempty"`
+	// Clip is the part of the video to save (docs/MEDIA-SPEC.md §8); nil = the whole
+	// video. It is fixed at Add or Confirm and kept by Pause, Resume and Download again.
+	Clip *MediaClip `json:"clip,omitempty"`
+	// Chapters are the video's chapters (site media only, docs/MEDIA-SPEC.md §8 C14),
+	// for choosing a part; never embedded in the file.
+	Chapters []Chapter `json:"chapters,omitempty"`
+	// EntryID is the item of a page with several videos that the download saves, by the
+	// site's id of it (site media only, docs/SITE-MEDIA-SPEC.md §3.12; "" = a page with
+	// one video, or a record written before items): every run picks it by that id and
+	// fails rather than take another. Items are the page's videos as the probe listed them
+	// (without thumbnails) and ItemsLeftOut its other items, for the confirmation's list.
+	EntryID      string      `json:"entryId,omitempty"`
+	Items        []MediaItem `json:"items,omitempty"`
+	ItemsLeftOut int         `json:"itemsLeftOut,omitempty"`
+	// BrowserFetch: the bytes of this site download come through the user's browser
+	// (docs/SITE-MEDIA-SPEC.md §2.8): its site's video servers answer only browsers, or a
+	// run's own requests were refused again and it went on through the browser. Runs then
+	// fetch through the browser from the start while one fetches for the download.
+	BrowserFetch bool `json:"browserFetch,omitempty"`
+	// FetchTicket is the browser fetch ticket of a download added from the browser with
+	// browser_fetch (docs/SITE-MEDIA-SPEC.md §2.8, amendment 2026-11-19): kept so that
+	// the same ticket serves the download again after downexd restarts, while the browser
+	// still holds it. "" = none; cleared when the download completes. Never sent to clients.
+	FetchTicket string `json:"fetchTicket,omitempty"`
+	// Played holds the chosen files of a video saved from what the user's browser played
+	// (origin "played", docs/SITE-MEDIA-SPEC.md §2.9): there is no page to read again, so
+	// pause, resume and a restart of downexd use these addresses, as a manifest record
+	// uses its manifest URL. Never logged beyond scheme://host/path, never shown; it holds
+	// no cookie (none exists).
+	Played []PlayedTrack `json:"played,omitempty"`
 	// Checkpoint records which fragments are durable on disk; nil before the first one
 	// and after completion. Stores persist it apart from the rest (it changes often).
 	Checkpoint *MediaCheckpoint `json:"-"`
 }
 
+// PlayedTrack is one chosen file of a played video (docs/SITE-MEDIA-SPEC.md §2.9): ID is
+// its track id, Kind "video", "audio" or "muxed", Size its exact size (0 = unknown),
+// Fragmented that its samples are in movie fragments (it is joined, not copied, into a
+// progressive MP4) and Browser that its first bytes needed the tab, so it is fetched
+// through the browser.
+type PlayedTrack struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	URL        string `json:"url"`
+	Size       int64  `json:"size,omitempty"`
+	Fragmented bool   `json:"fragmented,omitempty"`
+	Browser    bool   `json:"browser,omitempty"`
+}
+
+// MediaClip is a part of a video (docs/MEDIA-SPEC.md §8): [StartMs, EndMs) in
+// presentation time, EndMs 0 = to the end. The fields after Chapter are set by the
+// daemon when the download completes (C20) and are shown only then.
+type MediaClip struct {
+	StartMs int64 `json:"startMs,omitempty"`
+	EndMs   int64 `json:"endMs,omitempty"`
+	// Chapter is the title of the chapter the part was chosen by ("" = custom times);
+	// display only.
+	Chapter string `json:"chapter,omitempty"`
+	// KeyframeMs is the presentation time of the first decoded frame (≤ StartMs, or
+	// later when there is no keyframe before it); FetchStartMs/FetchEndMs what was
+	// downloaded; FetchedWhole: the resource had no index, so it was downloaded in full
+	// and cut locally (C9).
+	KeyframeMs   int64 `json:"keyframeMs,omitempty"`
+	FetchStartMs int64 `json:"fetchStartMs,omitempty"`
+	FetchEndMs   int64 `json:"fetchEndMs,omitempty"`
+	FetchedWhole bool  `json:"fetchedWhole,omitempty"`
+}
+
+// MediaItem is one video of a page with several (docs/SITE-MEDIA-SPEC.md §3.12).
+type MediaItem struct {
+	ID       string        `json:"id"`
+	Title    string        `json:"title,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	// Thumbnail is the page's https image of the item, for a probe's answer only: it is
+	// never stored (AddMedia clears it, and JSON leaves it out).
+	Thumbnail string `json:"-"`
+}
+
+// Chapter is one chapter of a video (docs/MEDIA-SPEC.md §8 C14).
+type Chapter struct {
+	StartMs int64  `json:"startMs"`
+	EndMs   int64  `json:"endMs"`
+	Title   string `json:"title,omitempty"`
+}
+
 // MediaCheckpoint is the persisted fragment progress of a media download.
 type MediaCheckpoint struct {
 	Tracks []MediaTrackCheckpoint `json:"tracks"`
+	// LeadIn is the number of media fragments a part's window was extended back by to
+	// find a keyframe (docs/MEDIA-SPEC.md §8 C5); 0 without a part.
+	LeadIn int `json:"leadIn,omitempty"`
 	// DurableBytes counts the bytes the checkpoint records as durable (its fragments and
 	// chunk prefixes); BytesTotal is the exact size of the selected tracks when a site
 	// job knows every one, else 0 (docs/SITE-MEDIA-SPEC.md §2.5). Checkpoints written
@@ -255,6 +392,12 @@ type MediaTrackCheckpoint struct {
 	Key        string        `json:"key,omitempty"` // the track's Key when it has one (see MediaTrack.Key)
 	ChunkBytes int64         `json:"chunkBytes,omitempty"`
 	Partial    map[int]int64 `json:"partial,omitempty"`
+	// A part's window (docs/MEDIA-SPEC.md §8 C11/C12): First is the full-plan index of
+	// the window's first fragment; Base the resource offset of a ranged track's first
+	// byte in its file (a span); Head the length of its synced head file.
+	First int   `json:"first,omitempty"`
+	Base  int64 `json:"base,omitempty"`
+	Head  int64 `json:"head,omitempty"`
 }
 
 // Clone returns a deep copy of m (nil for nil).
@@ -264,6 +407,13 @@ func (m *Media) Clone() *Media {
 	}
 	c := *m
 	c.Tracks = slices.Clone(m.Tracks)
+	c.Chapters = slices.Clone(m.Chapters)
+	c.Items = slices.Clone(m.Items)
+	c.Played = slices.Clone(m.Played)
+	if m.Clip != nil {
+		clip := *m.Clip
+		c.Clip = &clip
+	}
 	c.Checkpoint = m.Checkpoint.Clone()
 	return &c
 }
@@ -273,7 +423,7 @@ func (c *MediaCheckpoint) Clone() *MediaCheckpoint {
 	if c == nil {
 		return nil
 	}
-	out := &MediaCheckpoint{DurableBytes: c.DurableBytes, BytesTotal: c.BytesTotal}
+	out := &MediaCheckpoint{DurableBytes: c.DurableBytes, BytesTotal: c.BytesTotal, LeadIn: c.LeadIn}
 	if c.Tracks != nil {
 		out.Tracks = make([]MediaTrackCheckpoint, len(c.Tracks))
 		for i, t := range c.Tracks {

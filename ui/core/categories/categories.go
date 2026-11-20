@@ -53,12 +53,15 @@ var byExtension = func() map[string]FileKind {
 	return m
 }()
 
-// ExtensionOf is the lower-case extension of the last path component ("" when none). It
-// ignores a query or fragment.
+// ExtensionOf is the lower-case extension of the last path component ("" when none). Only
+// an address ("scheme://…") has a query or fragment to ignore: in a file name or path, "#"
+// and "?" are ordinary characters ("Episode #37.mp4" is an mp4, "game#1.exe" a program).
 func ExtensionOf(name string) string {
 	base := name
-	if cut := strings.IndexAny(base, "?#"); cut >= 0 {
-		base = base[:cut]
+	if strings.Contains(base, "://") {
+		if cut := strings.IndexAny(base, "?#"); cut >= 0 {
+			base = base[:cut]
+		}
 	}
 	if slash := strings.LastIndexAny(base, `/\`); slash >= 0 {
 		base = base[slash+1:]
@@ -131,6 +134,21 @@ var executable = func() map[string]bool {
 // IsExecutableName reports whether opening the file could run code (judged from the real,
 // unescaped name).
 func IsExecutableName(name string) bool { return executable[ExtensionOf(name)] }
+
+// Disguised reports a download whose file check found that the file pretends to be another
+// type (DANGER, docs/DESKTOP-SPEC.md §9.7): Open and Open with… ask first.
+func Disguised(d *downexv1.Download) bool {
+	return d.GetFileCheck().GetLevel() == downexv1.FileCheckLevel_FILE_CHECK_LEVEL_DANGER
+}
+
+// NeedsOpenConfirm reports a completed download that is confirmed before it opens: a
+// program, a name that hides its type, or a file that is not what its name says. Every way
+// of opening a download (the row, the toolbar, the menus, the details, the palette, the
+// progress window) asks this one question.
+func NeedsOpenConfirm(d *downexv1.Download) bool {
+	raw := RawName(d)
+	return IsExecutableName(raw) || text.HasBidiControls(raw) || Disguised(d)
+}
 
 // ---- categories ------------------------------------------------------------------
 

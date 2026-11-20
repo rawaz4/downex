@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"downex/internal/media"
+	"downex/internal/validate"
 )
 
 // Limits on yt-dlp's output and on what is offered (docs/SITE-MEDIA-SPEC.md §3.10,
@@ -18,6 +19,9 @@ const (
 	MaxFormats = 2_000
 	// MaxOffered bounds the tracks of an offer, videos and audios together.
 	MaxOffered = 200
+	// MaxEntries bounds the videos read of a page with several (docs/SITE-MEDIA-SPEC.md
+	// §3.12); later ones count as left out.
+	MaxEntries = 20
 )
 
 // Values of Offer.Format and Offer.Container (= model.Media.Format and Container).
@@ -28,8 +32,13 @@ const (
 	// downloaded as in docs/MEDIA-SPEC.md.
 	FormatHLS  = "hls"
 	FormatDASH = "dash"
-	// ContainerMP4 is the container of every site download.
+	// ContainerMP4 is the container of every site download of a video.
 	ContainerMP4 = "mp4"
+	// ContainerM4A and ContainerMP3 are the containers of an audio page's download
+	// (docs/SITE-MEDIA-SPEC.md §3.13): AAC in an MP4 with one sound track, and an MP3 as
+	// it came. They are also the file's extension.
+	ContainerM4A = "m4a"
+	ContainerMP3 = "mp3"
 )
 
 // Values of Pick.Output (the same strings as mediajob.OutputRemux and OutputCopy).
@@ -73,6 +82,31 @@ type Info struct {
 	// Formats are the formats that passed validation, in yt-dlp's order (worst first),
 	// each format ID once.
 	Formats []Format
+	// Silent reports a page that has no sound: it lists formats, and every one of them,
+	// kept or dropped, has the acodec "none" (docs/SITE-MEDIA-SPEC.md §3.10, amendment
+	// 2026-11-18). Its video-only formats are offered alone.
+	Silent bool
+	// AudioOnly reports an audio page: it lists formats, and every one of them, kept or
+	// dropped, has no picture (vcodec "none", or no vcodec and an audio file type), while
+	// some have sound (docs/SITE-MEDIA-SPEC.md §3.10, §3.13, amendment 2026-11-18). Its
+	// audio is offered (audioOffer).
+	AudioOnly bool
+	// Chapters are the video's chapters, checked by validate.Chapters
+	// (docs/MEDIA-SPEC.md §8 C14), for choosing a part; never embedded in the file.
+	Chapters []validate.Chapter
+	// Thumbnail is the video's (or the playlist's) image: an https URL of the page's
+	// (docs/SITE-MEDIA-SPEC.md §3.12), "" when absent or not allowed.
+	Thumbnail string
+
+	// A page with several videos (docs/SITE-MEDIA-SPEC.md §3.12): Playlist is set, ID,
+	// Title and Thumbnail are the playlist's, it has no formats of its own, and Entries
+	// are its videos in the page's order (at most MaxEntries, each id once), each an Info
+	// of one video with its own fields and formats. LeftOut counts the other items of the
+	// page (links, live streams, malformed entries, videos past the cap, items
+	// playlist_count names beyond the entries listed). See ChooseEntry.
+	Playlist bool
+	Entries  []*Info
+	LeftOut  int
 }
 
 // Format is one validated yt-dlp format (docs/SITE-MEDIA-SPEC.md §3.10).
@@ -93,6 +127,10 @@ type Format struct {
 	// manifest format (yt-dlp's manifest_url, else its url); "" for direct formats.
 	URL         string
 	ManifestURL string
+	// PlaylistURL is an HLS format's own media playlist (yt-dlp's url, when it also gives
+	// a manifest_url, the master), "" otherwise. An audio page's stream is read from it
+	// (docs/SITE-MEDIA-SPEC.md §3.13): a master of audio variants lists no video to pair.
+	PlaylistURL string
 	// VCodec and ACodec are the codecs as yt-dlp names them ("" when none or unknown).
 	VCodec, ACodec string
 	Width, Height  int
@@ -115,6 +153,10 @@ type Format struct {
 	LanguagePreference int
 	// Note is the cleaned format_note ("medium, DRC", "English original (default)", ...).
 	Note string
+	// Preview reports a format that yt-dlp marks as a preview (the word "preview" in
+	// its format_id or format_note): a short part of the track, not the whole of it
+	// (docs/SITE-MEDIA-SPEC.md §3.10, §3.13).
+	Preview bool
 	// Headers are the request headers of the format after the allow-list of
 	// docs/SITE-MEDIA-SPEC.md §6.2, with a Cookie built from the format's cookies for
 	// URL (direct formats) or ManifestURL (manifest formats) only.
@@ -129,7 +171,9 @@ type Format struct {
 	Unranged bool
 	// Hints from the query of a direct format's URL: Expires is when the URL expires
 	// (zero = unknown), Network the address family its ip parameter binds it to (""
-	// | "tcp4" | "tcp6"), LMT its lmt parameter ("" = none), part of the Key.
+	// | "tcp4" | "tcp6"), LMT its lmt parameter ("" = none), part of the Key. A
+	// manifest format's Expires is when its signed manifest or playlist URL expires
+	// (signedExpiry).
 	Expires time.Time
 	Network string
 	LMT     string
@@ -165,26 +209,56 @@ const (
 	familyEAC3 = "eac3"
 )
 
-// codecFamily returns the family of a codec string such as "avc1.640028" or
-// "mp4a.40.2" by its sample entry, "" for any other codec. Only the MP4 families are
-// known; VP9, Opus and the rest are not saved and need no family.
-func codecFamily(codec string) string {
-	id, _, _ := strings.Cut(codec, ".")
-	switch strings.ToLower(strings.TrimSpace(id)) {
-	case "avc1", "avc3":
-		return familyH264
-	case "av01":
-		return familyAV1
-	case "hvc1", "hev1":
-		return familyHEVC
-	case "mp4a":
-		return familyAAC
-	case "ac-3":
-		return familyAC3
-	case "ec-3":
-		return familyEAC3
+// sampleFamilies are the families of the MP4 sample entries (RFC 6381's first part of a
+// codec string, "avc1" of "avc1.640028"); plainFamilies those of the plain codec names
+// some sites give instead ("h264", "aac", "bytevc1": ByteDance's HEVC encoder), matched
+// as the whole string (docs/SITE-MEDIA-SPEC.md §3.11, amendment 2026-11-18).
+var (
+	sampleFamilies = map[string]string{
+		"avc1": familyH264, "avc3": familyH264,
+		"av01": familyAV1,
+		"hvc1": familyHEVC, "hev1": familyHEVC,
+		"mp4a": familyAAC,
+		"ac-3": familyAC3,
+		"ec-3": familyEAC3,
 	}
-	return ""
+	plainFamilies = map[string]string{
+		"h264": familyH264, "avc": familyH264,
+		"av1":  familyAV1,
+		"h265": familyHEVC, "hevc": familyHEVC, "bytevc1": familyHEVC,
+		"aac":  familyAAC,
+		"ac3":  familyAC3,
+		"eac3": familyEAC3,
+	}
+	// familyEntries is the sample entry that stands for a family when a plain name is
+	// offered (trackCodec).
+	familyEntries = map[string]string{
+		familyH264: "avc1", familyAV1: "av01", familyHEVC: "hvc1",
+		familyAAC: "mp4a", familyAC3: "ac-3", familyEAC3: "ec-3",
+	}
+)
+
+// codecFamily returns the family of a codec string such as "avc1.640028", "mp4a.40.2"
+// (by its sample entry) or "h264" (a plain name), "" for any other codec. Only the MP4
+// families are known; VP9, Opus and the rest are not saved and need no family.
+func codecFamily(codec string) string {
+	c := strings.ToLower(strings.TrimSpace(codec))
+	if f, ok := plainFamilies[c]; ok {
+		return f
+	}
+	id, _, _ := strings.Cut(c, ".")
+	return sampleFamilies[id]
+}
+
+// trackCodec is a format's codec as an offered track names it: a plain name becomes
+// the sample entry of its family ("h264" → "avc1", "bytevc1" → "hvc1"), so every UI
+// names it as it names the MP4 sample entries; any other string is kept as yt-dlp gave
+// it. Format keeps the source string.
+func trackCodec(codec string) string {
+	if f, ok := plainFamilies[strings.ToLower(strings.TrimSpace(codec))]; ok {
+		return familyEntries[f]
+	}
+	return codec
 }
 
 // mp4Video and mp4Audio report a codec of a family Downex saves as MP4 video or audio.

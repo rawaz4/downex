@@ -15,6 +15,20 @@ export function isSite(info: Pick<MediaInfo, 'origin'> | null | undefined): bool
   return info?.origin === 'site';
 }
 
+/**
+ * A web page without video whose audio downexd offers (SITE-MEDIA-SPEC §3.13): its container is
+ * m4a or mp3.
+ */
+export function audioPage(info: Pick<MediaInfo, 'origin' | 'container'> | null | undefined): boolean {
+  const c = info?.container.trim().toLowerCase();
+  return isSite(info) && (c === 'm4a' || c === 'mp3');
+}
+
+/** The file type of a web page's file for display: "MP4", or an audio page's "M4A" or "MP3". */
+export function siteFileType(info: Pick<MediaInfo, 'origin' | 'container'> | null | undefined): string {
+  return audioPage(info) ? (info?.container.trim().toUpperCase() ?? 'MP4') : 'MP4';
+}
+
 /** A media download of a web page's video. */
 export function isSiteDownload(d: Pick<Download, 'kind' | 'media'>): boolean {
   return d.kind === 'media' && isSite(d.media);
@@ -191,6 +205,17 @@ export function videoTrackLabel(t: MediaTrack, site = false): string {
   return parts.join(' · ');
 }
 
+/** What the pickers say of a video without sound (SITE-MEDIA-SPEC §5.3, amendment 2026-11-18). */
+export const NO_SOUND = 'No sound';
+
+/**
+ * A video-only track listed without any audio track: downexd lists one alone only when the page or
+ * stream has no sound (SITE-MEDIA-SPEC §3.11, VIDEO-DETECT-SPEC §3.3), so its file has none.
+ */
+export function noSound(info: Pick<MediaInfo, 'tracks'>, t: Pick<MediaTrack, 'kind'>): boolean {
+  return t.kind === 'video' && !info.tracks.some((a) => a.kind === 'audio');
+}
+
 /**
  * A web page's quality as the picker lists it (SITE-MEDIA-SPEC §5.3), with the size of the file
  * it makes: the video and the audio `pick` pairs it with (its audio, or the default one), as the
@@ -200,6 +225,7 @@ export function siteQualityLabel(info: Pick<MediaInfo, 'tracks' | 'durationMs'> 
   const parts = [shownName(t)];
   const codecs = codecNames(t.codecs);
   if (codecs) parts.push(codecs);
+  if (noSound(info, t)) parts.push(NO_SOUND);
   const size = pickSizeText(pickSize(info, withVideo(info, pick, t.id))) || formatBitrate(t.bandwidth);
   if (size) parts.push(size);
   return parts.join(' · ');

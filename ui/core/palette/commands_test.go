@@ -48,7 +48,7 @@ func TestCommands(t *testing.T) {
 	for _, c := range list {
 		got = append(got, c.ID)
 	}
-	want := []string{"add", "add-video", "pause", "resume", "pause-all", "resume-all", "download-again", "remove", "select-all", "limit", "when-done",
+	want := []string{"add", "add-video", "rescue", "pause", "resume", "pause-all", "resume-all", "download-again", "new-link", "open-page", "remove", "select-all", "limit", "polite", "when-done",
 		"search", "details", "density-comfortable", "density-compact", "theme-system", "theme-light", "theme-dark", "settings", "queues",
 		"cat-all", "cat-cat:Video", "cat-other",
 		"status-awaiting", "status-active", "status-queued", "status-paused", "status-completed", "status-failed",
@@ -67,6 +67,10 @@ func TestCommands(t *testing.T) {
 		{"resume-all", "Resume all", "Resumes the 1 paused download", true, "nothing is paused"},
 		{"download-again", "Download again…", "Gets the selected completed download again; asks what happens to its file", true, "nothing completed in the selection"},
 		{"limit", "Set global speed limit…", "Now unlimited · applies to every download", false, "the settings are not read yet"},
+		{"rescue", "Rescue partial file…", "Finishes a download a browser left unfinished (.crdownload, .part)", false, ""},
+		{"new-link", "New link…", "Gives the selected download a new link; it continues when the new link serves the same file", true, "select one paused or failed download"},
+		{"open-page", "Open download page", "Opens the page the selected download came from in the browser", true, "the page of the selection is not known"},
+		{"polite", "Turn on Polite mode", "Slow down when downloads make the line laggy", false, "the settings are not read yet"},
 		{"details", "Hide details pane", "Facts, connections and speed of the selected download", false, ""},
 		{"density-comfortable", "Density: comfortable", "Two lines per download: name, then site and category", true, "already in use"},
 		{"cat-all", "Category: All downloads", "4 downloads", false, ""},
@@ -93,6 +97,7 @@ func TestCommands(t *testing.T) {
 		{"resume-all", "Resumes every paused download", "downexd is not reachable"},
 		{"download-again", "Gets the 2 selected completed downloads again; asks what happens to their files", "downexd is not reachable"},
 		{"limit", "Now 2.5 MB/s · applies to every download", "downexd is not reachable"},
+		{"polite", "Slow down when downloads make the line laggy", "downexd is not reachable"},
 	} {
 		if got := find(t, list, c.id); got.Description != c.desc || got.DisabledReason != c.why {
 			t.Errorf("stale %s = %+v", c.id, got)
@@ -184,5 +189,37 @@ func TestPaletteDownloads(t *testing.T) {
 	}
 	if got[1].Tag != "YouTube" || got[0].Tag != "" || got[0].Kind != "archives" {
 		t.Errorf("tags and kinds = %+v, %+v", got[0], got[1])
+	}
+}
+
+// The Polite mode command (docs/POLITE-SPEC.md §8): its label follows the setting, its
+// description the state downexd reports, and it is unavailable like the speed limit.
+func TestPoliteCommand(t *testing.T) {
+	s := state()
+	if c := find(t, Commands(s), "polite"); c.Label != "Turn on Polite mode" || c.Icon != IconGauge || c.Group != "Commands" ||
+		c.Keywords != "lag latency calls games streaming bufferbloat bandwidth" || c.Disabled {
+		t.Errorf("off: %+v", c)
+	}
+	s.PoliteMode = true
+	for _, tc := range []struct {
+		st   *downexv1.PoliteStatus
+		desc string
+	}{
+		{nil, "Now on, full speed"},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_WATCHING}, "Now on, full speed"},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_IDLE}, "Now on, nothing downloading"},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_SLOWED, RateLimit: 2_400_000}, "Now slowed to 2.4 MB/s to keep the line smooth"},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_MEASURING}, "Now measuring the line"},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_NO_SIGNAL}, "Now on, but this connection can't be measured: full speed"},
+		{&downexv1.PoliteStatus{State: downexv1.PoliteState_POLITE_STATE_UNAVAILABLE}, "Now on, but not available with this downexd"},
+	} {
+		s.Polite = tc.st
+		if c := find(t, Commands(s), "polite"); c.Label != "Turn off Polite mode" || c.Description != tc.desc {
+			t.Errorf("%v: %q / %q, want %q", tc.st.GetState(), c.Label, c.Description, tc.desc)
+		}
+	}
+	s.SettingsLoaded = false
+	if c := find(t, Commands(s), "polite"); !c.Disabled || c.DisabledReason != "the settings are not read yet" {
+		t.Errorf("settings not read: %+v", c)
 	}
 }

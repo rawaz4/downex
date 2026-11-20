@@ -3,12 +3,15 @@
 // list, the direct files ("This video" first), and the folded groups "More sources (n)" and
 // "Other videos on this page (n)". Pure: the sources' states come in, rows go out.
 
+import type { ClipRange } from './clip';
 import type { FileOffer, OfferKey, StreamOffer } from './offer-types';
 import type { ProtocolError, VideoInfoResult } from './protocol';
 import { fileLabel, formatLabel, gettingInfoText, OFFER_TEXTS, streamFailureText, streamRefusal } from './ui-format';
 import {
+  codecsLabel,
   defaultAudio,
   defaultPick,
+  highestWithSound,
   isVideoTrack,
   pickedAudio,
   type PickerInfo,
@@ -19,7 +22,7 @@ import {
   withVideo,
 } from './video-picker';
 
-export type OfferSource = 'site' | 'stream' | 'file';
+export type OfferSource = 'site' | 'stream' | 'file' | 'played';
 
 /** What is known of one stream's MP4 qualities (`downex:stream-probe`). */
 export type StreamProbe =
@@ -55,6 +58,8 @@ export interface OfferRow {
   matched: boolean;
   /** Not usable now: the stream's qualities are being got. */
   disabled: boolean;
+  /** The highest quality with sound of the site's and the played qualities, the default (§5.2). */
+  recommended?: boolean;
 }
 
 export interface OfferRowsInput {
@@ -66,6 +71,21 @@ export interface OfferRowsInput {
   probes: ReadonlyMap<OfferKey, StreamProbe>;
   /** The audio chosen per stream (default: its default audio). */
   streamAudio?: ReadonlyMap<OfferKey, string>;
+  /**
+   * The part of the video the Part row sends with a site or stream quality (undefined: the whole
+   * video): those rows' sizes are then the part's estimates (clipSize, "~").
+   */
+  clip?: ClipRange | undefined;
+  /**
+   * The clicked video's files as its tab played them, once Downex matched them (SITE-MEDIA-SPEC
+   * §2.9), and the audio chosen for them.
+   */
+  played?: { key: OfferKey; info: VideoInfoResult; audio: string } | undefined;
+  /**
+   * The site's rows come before the Played ones: the frame's own address is the video, and its
+   * video servers answer more than browsers (VIDEO-DETECT-SPEC §2.6, amendment 2026-11-18).
+   */
+  siteFirst?: boolean;
 }
 
 export interface OfferRows {
@@ -134,8 +154,19 @@ function codecDetail(codecs: string): string {
   return codecs || 'MP4';
 }
 
-function siteRows(site: NonNullable<OfferRowsInput['site']>): OfferRow[] {
-  return qualityRows(site.info, site.audio).map((r) => {
+function siteRows(site: NonNullable<OfferRowsInput['site']>, clip: ClipRange | undefined): OfferRow[] {
+  // Qualities the site lists without a picture or a size read the same: one row says them all
+  // (measured 2026-11-18: three "Video and audio, MP4" rows for one reel).
+  const seen = new Set<string>();
+  const rows = qualityRows(site.info, site.audio, clip).filter((r) => {
+    const t = trackById(site.info, r.id);
+    if (!t || t.height > 0 || t.width > 0 || r.size !== '') return true;
+    const same = `${r.quality}|${r.codecs}`;
+    if (seen.has(same)) return false;
+    seen.add(same);
+    return true;
+  });
+  return rows.map((r) => {
     const pick = withVideo(site.info, { video: '', audio: site.audio }, r.id);
     const detail = codecDetail(r.codecs);
     const row: OfferRow = {
@@ -193,7 +224,7 @@ function streamRows(streams: readonly StreamOffer[], input: OfferRowsInput, bare
       if (isBare && !onlyBare) continue;
       const info = probe.info;
       const audio = input.streamAudio?.get(s.key) ?? defaultAudio(info);
-      for (const r of qualityRows(info, audio)) {
+      for (const r of qualityRows(info, audio, input.clip)) {
         const track = trackById(info, r.id);
         if (!track) continue;
         const dedupe = qualityKey(track);
@@ -249,6 +280,34 @@ function streamRows(streams: readonly StreamOffer[], input: OfferRowsInput, bare
   return [...rows, ...later];
 }
 
+/** The Played source's qualities ("Playing"): what the tab played, one row per quality class. */
+function playedRows(played: NonNullable<OfferRowsInput['played']>): OfferRow[] {
+  const { info, key } = played;
+  return qualityRows(info, played.audio, undefined).map((r) => {
+    const pick = withVideo(info, { video: '', audio: played.audio }, r.id);
+    // A video file saved with its sound names both, as a muxed file does ("VP9 + AAC").
+    const sound = trackById(info, pickedAudio(info, pick));
+    const joined = trackById(info, r.id)?.kind === 'video' && sound ? codecsLabel(sound) : '';
+    const detail = codecDetail([r.codecs, joined].filter((c) => c !== '').join(' + '));
+    const row: OfferRow = {
+      id: `played:${r.id}`,
+      source: 'played',
+      tag: OFFER_TEXTS.played,
+      quality: r.quality,
+      detail,
+      size: r.size,
+      label: joinLabel(r.quality, detail, r.size, OFFER_TEXTS.played),
+      key,
+      pick: { video: r.id, audio: pickedAudio(info, pick) },
+      action: 'add',
+      matched: true,
+      disabled: false,
+    };
+    if (r.picture) row.title = r.picture;
+    return row;
+  });
+}
+
 function fileRow(f: FileOffer): OfferRow {
   const l = fileLabel(f);
   return {
@@ -280,7 +339,7 @@ function fileRow(f: FileOffer): OfferRow {
  */
 export function buildOfferRows(input: OfferRowsInput): OfferRows {
   const listed = input.site !== undefined && input.site.info.tracks.some(isVideoTrack);
-  const site = listed && input.site ? siteRows(input.site) : [];
+  const site = listed && input.site ? siteRows(input.site, input.clip) : [];
   const siteSizes = new Set(listed && input.site ? input.site.info.tracks.filter((t) => t.size > 0).map((t) => t.size) : []);
   const keep = (f: FileOffer) => !(f.sizeKnown && siteSizes.has(f.size));
 
@@ -307,9 +366,34 @@ export function buildOfferRows(input: OfferRowsInput): OfferRows {
 
   const network = [...ownStreams, ...matched, ...ownFiles];
   const folded = [...otherStreams, ...otherFiles, ...shortFiles];
-  const rows: OfferRows = listed
-    ? { main: site, more: [...network, ...folded], other: [], defaultId: undefined, siteListed: true }
-    : { main: network, more: [], other: folded, defaultId: undefined, siteListed: false };
+  const played = input.played && input.played.info.tracks.some(isVideoTrack) ? playedRows(input.played) : [];
+  let rows: OfferRows;
+  if (played.length > 0 && listed && input.siteFirst) {
+    // The frame's own video page: the site's qualities first, what played under "More sources".
+    rows = { main: site, more: [...played, ...network, ...folded], other: [], defaultId: undefined, siteListed: true };
+  } else if (played.length > 0) {
+    // What the tab played first (§2.9), then the site's qualities of the clicked post.
+    rows = listed
+      ? { main: [...played, ...site], more: [...network, ...folded], other: [], defaultId: undefined, siteListed: true }
+      : { main: played, more: network, other: folded, defaultId: undefined, siteListed: false };
+  } else {
+    rows = listed
+      ? { main: site, more: [...network, ...folded], other: [], defaultId: undefined, siteListed: true }
+      : { main: network, more: [], other: folded, defaultId: undefined, siteListed: false };
+  }
+  // The highest quality with sound of the site's and the played qualities is recommended and the
+  // default (VIDEO-DETECT-SPEC §5.2, amended 2026-11-19), when there are several to choose from.
+  const best = recommendedRow(rows.main, input);
+  if (best) {
+    best.recommended = true;
+    rows.defaultId = best.id;
+    return rows;
+  }
+  if (played.length > 0 && !(listed && input.siteFirst) && input.played) {
+    const first = rows.main.find((r) => r.id === `played:${defaultPick(input.played?.info).video}`) ?? played[0];
+    rows.defaultId = first?.id;
+    return rows;
+  }
 
   // The default: the matched file (when shown at once and not a short clip), else the site's
   // default, else the first stream quality, else the first row shown; a bare media playlist or a
@@ -323,6 +407,18 @@ export function buildOfferRows(input: OfferRowsInput): OfferRows {
     rows.main.find(usable) ?? rows.other.find(usable) ?? rows.main.find((r) => !r.disabled) ?? rows.other.find((r) => !r.disabled);
   rows.defaultId = (firstMatched ?? siteDefault ?? firstStream ?? fallback)?.id;
   return rows;
+}
+
+/** Of the site's and the played rows of `main`, the highest with sound; none with fewer than two. */
+function recommendedRow(main: OfferRow[], input: OfferRowsInput): OfferRow | undefined {
+  const infoOf = (r: OfferRow) => (r.source === 'site' ? input.site?.info : r.source === 'played' ? input.played?.info : undefined);
+  const scored = main.flatMap((row) => {
+    const info = infoOf(row);
+    const t = info ? trackById(info, row.pick.video) : undefined;
+    return t && isVideoTrack(t) ? [{ row, kind: t.kind, width: t.width, height: t.height, sound: row.pick.audio !== '' }] : [];
+  });
+  if (scored.length < 2) return undefined;
+  return highestWithSound(scored, (s) => s.sound)?.row;
 }
 
 /** Every row of a panel, in the order shown when every group is open. */

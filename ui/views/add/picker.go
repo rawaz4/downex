@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	imedia "downex/internal/media"
 	downexv1 "downex/internal/rpc/downex/v1"
 	"downex/ui/core/format"
 	"downex/ui/core/media"
@@ -53,9 +54,10 @@ func CodecNote(tracks []*downexv1.MediaTrack) string {
 }
 
 // CardSize is a card's size: the file the quality makes (with the audio it is paired with),
-// "~" when it is an estimate; else the bitrate; "" unknown.
-func CardSize(info *downexv1.MediaInfo, pick media.TrackPick, t *downexv1.MediaTrack) string {
-	size := media.PickSizeOf(info, media.WithVideo(info, pick, t.GetId()))
+// "~" when it is an estimate; with a part (clip not zero), the part's estimate (media.ClipSize,
+// "~"); else the bitrate; "" unknown.
+func CardSize(info *downexv1.MediaInfo, pick media.TrackPick, t *downexv1.MediaTrack, clip imedia.Clip) string {
+	size := media.ClipSize(media.PickSizeOf(info, media.WithVideo(info, pick, t.GetId())), clip, info.GetDurationMs())
 	switch size.Kind {
 	case media.SizeExact:
 		return format.Bytes(float64(size.Bytes))
@@ -106,7 +108,7 @@ type cardText struct {
 	cls, suffix, codec, size, label, tip string
 }
 
-func cardTexts(info *downexv1.MediaInfo, pick media.TrackPick, t *downexv1.MediaTrack, site bool) cardText {
+func cardTexts(info *downexv1.MediaInfo, pick media.TrackPick, t *downexv1.MediaTrack, site bool, clip imedia.Clip) cardText {
 	name := media.QualityName(t)
 	if name == "" {
 		name = "Video"
@@ -122,7 +124,7 @@ func cardTexts(info *downexv1.MediaInfo, pick media.TrackPick, t *downexv1.Media
 	if !strings.HasPrefix(name, cls) {
 		suffix = ""
 	}
-	size := CardSize(info, pick, t)
+	size := CardSize(info, pick, t, clip)
 	codec := ""
 	if t.GetCodecs() != "" {
 		first, _, _ := strings.Cut(t.GetCodecs(), ",")
@@ -141,13 +143,16 @@ func cardTexts(info *downexv1.MediaInfo, pick media.TrackPick, t *downexv1.Media
 	if !site {
 		rate = format.Bitrate(float64(t.GetBandwidth()))
 	}
-	sound := ""
-	if t.GetKind() == "muxed" {
+	sound, silent := "", ""
+	switch {
+	case t.GetKind() == "muxed":
 		sound = "with its sound"
+	case media.NoSound(info, t):
+		sound, silent = media.NoSoundText, media.NoSoundText
 	}
 	return cardText{
 		cls: cls, suffix: suffix, codec: codec, size: size,
-		label: join(name, media.CodecNames(t.GetCodecs()), size),
+		label: join(name, media.CodecNames(t.GetCodecs()), silent, size),
 		tip:   join(name, media.VideoPictureText(t, site), rate, sound),
 	}
 }
@@ -175,6 +180,8 @@ type Picker struct {
 	site bool
 	pick media.TrackPick
 	off  bool
+	// clip is the part the sizes are of (the zero Clip: the whole video).
+	clip imedia.Clip
 
 	videos, audios []*downexv1.MediaTrack
 	offerNoVideo   bool
@@ -230,6 +237,19 @@ func (p *Picker) set(q media.TrackPick) {
 	}
 }
 
+// SetClip makes the sizes the part's (the cards' and the audio tracks', "~"), or the whole
+// video's again for the zero Clip (none, the whole, or a form with errors).
+func (p *Picker) SetClip(c imedia.Clip) {
+	if c == p.clip {
+		return
+	}
+	p.clip = c
+	p.update()
+}
+
+// Clip is the part the sizes are of (SetClip).
+func (p *Picker) Clip() imedia.Clip { return p.clip }
+
 // SetDisabled turns every card and the audio select off while the dialog is busy.
 func (p *Picker) SetDisabled(off bool) {
 	if off == p.off {
@@ -256,6 +276,13 @@ func (p *Picker) onlyAudio() *downexv1.MediaTrack {
 
 func (p *Picker) muxedChosen() bool {
 	return len(p.videos) > 0 && len(p.audios) > 0 && media.TrackByID(p.Info, p.pick.Video).GetKind() == "muxed"
+}
+
+// silentChosen reports a chosen video without sound (media.NoSound): the page or stream has
+// none.
+func (p *Picker) silentChosen() bool {
+	t := media.TrackByID(p.Info, p.pick.Video)
+	return t != nil && media.NoSound(p.Info, t)
 }
 
 func (p *Picker) update() {
@@ -510,7 +537,7 @@ func newQCard(s *qualitySection, id string) *qcard {
 		c.Semantics.Name = "No video (audio only)"
 	} else {
 		t := media.TrackByID(s.p.Info, id)
-		ct := cardTexts(s.p.Info, s.p.pick, t, s.p.site)
+		ct := cardTexts(s.p.Info, s.p.pick, t, s.p.site, s.p.clip)
 		c.cls = kit.NewLabel(text.EscapeBidi(ct.cls), clsFont, kit.TextOptions{Direction: kit.DirLTR})
 		if ct.suffix != "" {
 			c.suff = views.NewLine(text.EscapeBidi(ct.suffix), views.FontHint, views.InkMuted)
@@ -579,7 +606,7 @@ func (c *qcard) On() bool { return c.on() }
 func (c *qcard) update(first bool) {
 	p := c.s.p
 	if c.id == "" {
-		s := media.PickSizeOf(p.Info, media.TrackPick{Audio: orStr(p.pick.Audio, p.Info.GetSelectedAudio())})
+		s := media.ClipSize(media.PickSizeOf(p.Info, media.TrackPick{Audio: orStr(p.pick.Audio, p.Info.GetSelectedAudio())}), p.clip, p.Info.GetDurationMs())
 		size := ""
 		switch {
 		case s.Kind == media.SizeExact:
@@ -590,7 +617,7 @@ func (c *qcard) update(first bool) {
 		c.size.SetText(size)
 	} else {
 		t := media.TrackByID(p.Info, c.id)
-		ct := cardTexts(p.Info, p.pick, t, p.site)
+		ct := cardTexts(p.Info, p.pick, t, p.site, p.clip)
 		c.size.SetText(ct.size)
 		c.Semantics.Name = text.EscapeBidi(ct.label)
 	}
@@ -797,8 +824,8 @@ func (cc *cardCodec) Paint(p *kit.PaintContext) {
 // ---- the audio track -------------------------------------------------------------------------
 
 // audioPart is MediaPicker's audio part: "Audio track" over a Select of the tracks when there
-// is a choice, the one track (or "This video quality includes its sound.") as a line when there
-// is none, nothing otherwise.
+// is a choice, the one track (or "This video quality includes its sound.", or "This video has no
+// sound." for a video listed without audio) as a line when there is none, nothing otherwise.
 type audioPart struct {
 	kit.Element
 	p      *Picker
@@ -806,6 +833,8 @@ type audioPart struct {
 	static *staticLine
 	field  *views.Field
 	mode   int // 0 none, 1 select, 2 static
+	// clip is the part the Select's sizes are of.
+	clip imedia.Clip
 }
 
 func (p *Picker) audioPart() *audioPart {
@@ -824,10 +853,10 @@ func (p *Picker) AudioOptions() []widgets.SelectOption {
 			Value:  t.GetId(),
 			Label:  text.EscapeBidi(media.AudioTrackTitle(t, p.site)),
 			Detail: AudioDetail(t, p.site),
-			Title:  text.EscapeBidi(media.AudioTrackLabel(t, p.site)),
+			Title:  text.EscapeBidi(media.ClipAudioTrackLabel(t, p.site, p.clip, p.Info.GetDurationMs())),
 		}
 		if p.site {
-			o.Meta = media.TrackSizeText(t)
+			o.Meta = media.ClipTrackSizeText(t, p.clip, p.Info.GetDurationMs())
 		}
 		opts = append(opts, o)
 	}
@@ -840,7 +869,7 @@ func (a *audioPart) update() {
 	switch {
 	case p.showAudio():
 		mode = 1
-	case p.onlyAudio() != nil || p.muxedChosen():
+	case p.onlyAudio() != nil || p.muxedChosen() || p.silentChosen():
 		mode = 2
 	}
 	if mode != a.mode {
@@ -848,6 +877,7 @@ func (a *audioPart) update() {
 		a.field = nil
 		switch mode {
 		case 1:
+			a.clip = p.clip
 			a.Select = widgets.NewSelect(p.AudioOptions(), p.pick.Audio, widgets.SelectOptions{Label: "Audio track", Icon: "headphones", Disabled: p.off}, func(v string) {
 				p.ChooseAudio(v)
 			})
@@ -864,6 +894,10 @@ func (a *audioPart) update() {
 	}
 	switch mode {
 	case 1:
+		if a.clip != p.clip { // the sizes follow the part
+			a.clip = p.clip
+			a.Select.SetOptions(p.AudioOptions())
+		}
 		if a.Select.Value() != p.pick.Audio {
 			a.Select.SetValue(p.pick.Audio)
 		}
@@ -874,7 +908,9 @@ func (a *audioPart) update() {
 			if detail != "" {
 				detail = " · " + detail
 			}
-			a.static.set(text.EscapeBidi(media.AudioTrackTitle(t, p.site)), detail, text.EscapeBidi(media.AudioTrackLabel(t, p.site)))
+			a.static.set(text.EscapeBidi(media.AudioTrackTitle(t, p.site)), detail, text.EscapeBidi(media.ClipAudioTrackLabel(t, p.site, p.clip, p.Info.GetDurationMs())))
+		} else if p.silentChosen() {
+			a.static.set("This video has no sound.", "", "")
 		} else {
 			a.static.set("This video quality includes its sound.", "", "")
 		}

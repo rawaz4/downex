@@ -94,15 +94,26 @@ func (s *SQLite) ListDownloads(ctx context.Context) ([]model.Download, error) {
 	}
 	defer rows.Close()
 
-	out := []model.Download{}
+	dec := newListDecoder()
+	raws := make([]rawDownload, 0, listChunk)
 	for rows.Next() {
-		d, err := scanDownload(rows)
-		if err != nil {
+		raws = append(raws, rawDownload{})
+		if err := raws[len(raws)-1].scan(rows); err != nil {
+			dec.wg.Wait()
 			return nil, fmt.Errorf("store: list downloads: %w", err)
 		}
-		out = append(out, d)
+		if len(raws) == listChunk {
+			dec.add(raws, false)
+			raws = make([]rawDownload, 0, listChunk)
+		}
 	}
 	if err := rows.Err(); err != nil {
+		dec.wg.Wait()
+		return nil, fmt.Errorf("store: list downloads: %w", err)
+	}
+	dec.add(raws, true)
+	out, err := dec.wait()
+	if err != nil {
 		return nil, fmt.Errorf("store: list downloads: %w", err)
 	}
 	return out, nil
@@ -194,6 +205,25 @@ WHERE d.id = ? ORDER BY s.seg_id`
 		return nil, fmt.Errorf("store: load segments: download %d: %w", id, ErrNotFound)
 	}
 	return out, nil
+}
+
+// SetFileCheck replaces (nil: clears) the stored file check of download id.
+func (s *SQLite) SetFileCheck(ctx context.Context, id model.DownloadID, fc *model.FileCheck) error {
+	v, err := encodeFileCheck(fc)
+	if err != nil {
+		return fmt.Errorf("store: set file check: %w", err)
+	}
+	err = s.writeTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, setFileCheckSQL, v, int64(id))
+		if err != nil {
+			return err
+		}
+		return requireOneRow(res, id)
+	})
+	if err != nil {
+		return fmt.Errorf("store: set file check: %w", err)
+	}
+	return nil
 }
 
 // updateDownload replaces the row for id with args (from downloadArgs).

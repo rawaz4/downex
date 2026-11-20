@@ -20,9 +20,10 @@ const (
 // latest kind wins, and removed is final) and the latest post-queue action event per
 // queue, so its buffer is bounded by the number of downloads and queues however slowly
 // it is drained, and the actual messages are built only when the subscriber sends its
-// next batch. Queue, post-queue action, tools and update events go to subscribers of every
-// download only (a Watch without ids); a tools event carries the status when the batch is
-// built, so one pending flag is enough, and an update event the latest check's result.
+// next batch. Queue, post-queue action, tools, update and polite events go to subscribers
+// of every download only (a Watch without ids); a tools or polite event carries the status
+// when the batch is built, so one pending flag is enough, and an update event the latest
+// check's result.
 type hub struct {
 	mu     sync.Mutex
 	subs   map[*subscriber]struct{}
@@ -38,6 +39,7 @@ type subscriber struct {
 	posts   map[model.QueueID]*downexv1.PostActionPending
 	tools   bool                 // the tools status changed (docs/SITE-MEDIA-SPEC.md §3.1)
 	update  *downexv1.UpdateInfo // an automatic update check's result (docs/M6-SPEC.md §4)
+	polite  bool                 // Polite mode's status changed (docs/POLITE-SPEC.md §7)
 	signal  chan struct{}        // capacity 1: something became pending
 }
 
@@ -48,10 +50,11 @@ type pendingBatch struct {
 	posts     map[model.QueueID]*downexv1.PostActionPending
 	tools     bool
 	update    *downexv1.UpdateInfo // the latest automatic update check's result, if one ran since
+	polite    bool
 }
 
 func (b pendingBatch) empty() bool {
-	return len(b.downloads) == 0 && len(b.queues) == 0 && len(b.posts) == 0 && !b.tools && b.update == nil
+	return len(b.downloads) == 0 && len(b.queues) == 0 && len(b.posts) == 0 && !b.tools && b.update == nil && !b.polite
 }
 
 func newHub() *hub {
@@ -160,12 +163,26 @@ func (h *hub) publishUpdate(info *downexv1.UpdateInfo) {
 	}
 }
 
+// publishPolite records that Polite mode's status changed for the subscribers of every
+// download (docs/POLITE-SPEC.md §7).
+func (h *hub) publishPolite() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for s := range h.subs {
+		if s.ids != nil {
+			continue
+		}
+		s.polite = true
+		s.wake()
+	}
+}
+
 // take returns and clears the subscriber's pending changes.
 func (h *hub) take(s *subscriber) pendingBatch {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	b := pendingBatch{downloads: s.pending, queues: s.queues, posts: s.posts, tools: s.tools, update: s.update}
-	s.tools, s.update = false, nil
+	b := pendingBatch{downloads: s.pending, queues: s.queues, posts: s.posts, tools: s.tools, update: s.update, polite: s.polite}
+	s.tools, s.update, s.polite = false, nil, false
 	if len(s.pending) > 0 {
 		s.pending = make(map[model.DownloadID]eventKind, len(b.downloads))
 	} else {

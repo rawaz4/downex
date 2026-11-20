@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -363,6 +364,130 @@ func (d *Daemon) ProbeMedia(_ context.Context, req *downexv1.ProbeMediaRequest) 
 		return nil, Err(connect.CodeInvalidArgument, "live: the presentation is live")
 	}
 	return &downexv1.ProbeMediaResponse{Media: formattest.MediaInfo(func(m *downexv1.MediaInfo) { m.ManifestUrl = req.GetManifestUrl() })}, nil
+}
+
+// RenewLink renews a stopped download as downexd does when the new link proves to serve
+// the same file: a url containing "mismatch", "expired" or "name" (without
+// allow_name_change) is refused with renew_mismatch, link_expired or renew_name; with
+// from_download that download is removed.
+func (d *Daemon) RenewLink(_ context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
+	if err := d.gate("renewLink", req.GetId(), req); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	cur := d.items[req.GetId()]
+	switch {
+	case cur == nil:
+		return nil, Err(connect.CodeNotFound, "no such download")
+	case cur.GetKind() == downexv1.DownloadKind_DOWNLOAD_KIND_MEDIA:
+		return nil, Err(connect.CodeInvalidArgument, "download %d is a stream or web page video: it cannot take a new link", req.GetId())
+	case cur.GetState() == state.StateCompleted || cur.GetState() == state.StateDownloading || cur.GetState() == state.StateProbing:
+		return nil, Err(connect.CodeFailedPrecondition, "download %d is %s", req.GetId(), cur.GetState())
+	}
+	u := req.GetUrl()
+	if from := req.GetFromDownload(); from != 0 {
+		src := d.items[from]
+		if src == nil {
+			return nil, Err(connect.CodeNotFound, "no such download")
+		}
+		u = src.GetUrl()
+	}
+	for _, refusal := range [...]struct{ word, code, msg string }{
+		{"mismatch", "renew_mismatch", "bytes 0-65535 differ: engine: the new link serves different data"},
+		{"expired", "link_expired", "bytes 0-65535: HTTP 403 Forbidden: engine: link expired"},
+		{"bigger", "renew_size", "9000000 bytes, expected 4000000: engine: the new link's file has another size"},
+	} {
+		if strings.Contains(u, refusal.word) {
+			return nil, RenewErr(refusal.code, refusal.msg)
+		}
+	}
+	if strings.Contains(u, "name") && !req.GetAllowNameChange() {
+		return nil, RenewErr("renew_name", fmt.Sprintf("the new link names the file %q; download %d is %q", "other.bin", req.GetId(), cur.GetFilename()))
+	}
+	x, err := d.updateLocked(req.GetId(), func(x *downexv1.Download) {
+		x.Url, x.Error, x.ErrorCode = u, "", ""
+		x.State = state.StatePaused
+		if req.GetStart() {
+			x.State = state.StateQueued
+		}
+		if req.GetPageUrl() != "" {
+			x.PageUrl = req.GetPageUrl()
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if from := req.GetFromDownload(); from != 0 {
+		delete(d.items, from)
+		d.order = slices.DeleteFunc(d.order, func(x int64) bool { return x == from })
+	}
+	return &downexv1.RenewLinkResponse{Download: x, NameDiffers: strings.Contains(u, "name")}, nil
+}
+
+// Rescue adopts a partial file as downexd does once the server proves to serve the same
+// file: an address containing "changed", "noranges" or "locked" is refused with
+// rescue_changed, rescue_no_ranges or rescue_locked, a partial path containing "gone"
+// with rescue_not_found and one containing "empty" with rescue_empty (InvalidArgument).
+// The new download keeps 40 % of a 100 MB file, named after the partial without
+// .crdownload or .part.
+func (d *Daemon) Rescue(_ context.Context, req *downexv1.RescueRequest) (*downexv1.RescueResponse, error) {
+	if err := d.gate("rescue", req); err != nil {
+		return nil, err
+	}
+	p, u := req.GetPartialPath(), req.GetUrl()
+	switch {
+	case p == "" || !strings.HasPrefix(strings.ToLower(u), "http"):
+		return nil, Err(connect.CodeInvalidArgument, "partial_path and an http(s) url are required")
+	case strings.Contains(p, "gone"):
+		return nil, RenewErr("rescue_not_found", "the partial file: file does not exist")
+	case strings.Contains(p, "empty"):
+		ce := connect.NewError(connect.CodeInvalidArgument, errors.New("rescue_empty: engine: the partial file is empty"))
+		ce.Meta().Set("Downex-Error-Code", "rescue_empty")
+		return nil, ce
+	}
+	for _, refusal := range [...]struct{ word, code, msg string }{
+		{"changed", "rescue_changed", "bytes 0-65535 differ: engine: the new link serves different data"},
+		{"noranges", "rescue_no_ranges", "the whole file was sent: engine: the new link's server does not send byte ranges"},
+		{"locked", "rescue_locked", "engine: the partial file is in use by another program"},
+	} {
+		if strings.Contains(u, refusal.word) {
+			return nil, RenewErr(refusal.code, refusal.msg)
+		}
+	}
+	name := req.GetFilename()
+	if name == "" {
+		name = filepath.Base(p)
+		for _, suf := range []string{".crdownload", ".part"} {
+			name = strings.TrimSuffix(name, suf)
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id := d.nextID
+	d.nextID++
+	const size, kept = 100_000_000, 40_000_000
+	x := formattest.Download(id, func(x *downexv1.Download) {
+		x.Url, x.Filename, x.Dir = u, name, filepath.Dir(p)
+		x.Size, x.Received, x.RescuedBytes = size, kept, kept
+		x.State = state.StateQueued
+		if req.GetStartPaused() {
+			x.State = state.StatePaused
+		}
+		x.QueueId = state.MainQueueID
+		x.Source = req.GetSource()
+	})
+	d.items[id] = x
+	d.order = append(d.order, id)
+	return &downexv1.RescueResponse{Download: x, RescuedBytes: kept}, nil
+}
+
+// RenewErr is a RenewLink refusal as downexd sends it: FailedPrecondition, the code as
+// the message's prefix and as Downex-Error-Code.
+func RenewErr(code, msg string) error {
+	ce := connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s: %s", code, msg))
+	ce.Meta().Set("Downex-Error-Code", code)
+	return ce
 }
 
 func (d *Daemon) SetDownloadOptions(_ context.Context, req *downexv1.SetDownloadOptionsRequest) (*downexv1.SetDownloadOptionsResponse, error) {

@@ -71,16 +71,22 @@ func Run(ctx context.Context, opts Options, sel Selection, resume *Checkpoint, o
 	if err != nil {
 		return "", err
 	}
-	if container, done, err := finishAssembled(ctx, o); err != nil || done {
+	if container, clip, done, err := finishRecorded(ctx, o); err != nil || done {
 		if done && onProgress != nil {
 			n := checkpointTotals(resume)
 			size := int64(0)
 			if fi, serr := os.Stat(o.OutPath); serr == nil {
 				size = fi.Size()
 			}
-			onProgress(Progress{FragmentsTotal: n, FragmentsDone: n, BytesDone: size, BytesTotal: size})
+			onProgress(Progress{FragmentsTotal: n, FragmentsDone: n, BytesDone: size, BytesTotal: size, Clip: clip})
 		}
 		return container, err
+	}
+	if !sel.Clip.IsZero() && o.LegacyTS {
+		return "", fmt.Errorf("mediajob: %w: a part cannot be saved from a download stored as .ts", media.ErrUnsupported)
+	}
+	if !sel.Clip.IsZero() && o.AudioOnly {
+		return "", errAudioPart
 	}
 	r := &runner{
 		o:            o,
@@ -94,24 +100,65 @@ func Run(ctx context.Context, opts Options, sel Selection, resume *Checkpoint, o
 	// The manifest's slot becomes the first fetch slot: its connection stays warm when
 	// the fragments are on the manifest's host.
 	r.pool = []*warmSlot{newWarmSlot(o.Factory.NewSlot())}
-	res, err := resolve(ctx, r.pool[0], r.rt, sel, o.LegacyTS)
+	res, err := resolve(ctx, r.pool[0], r.rt, sel, o.LegacyTS, o.AudioOnly)
 	if err != nil {
 		return "", err
+	}
+	if o.AudioOnly {
+		if err := audioOnly(res); err != nil {
+			return "", err
+		}
 	}
 	if err := o.checkMP4(res.info.Container); err != nil {
 		return "", err
 	}
-	if err := r.prepare(res, resume); err != nil {
-		return "", err
+	leadIn := 0
+	if resume != nil {
+		leadIn = resume.LeadIn
 	}
-	now := o.Clock.Now()
-	r.speed.reset(now, 0)
-	r.lastCP = now
-	r.emit(true)
-	container, err := r.run(ctx)
-	r.speed.rate = 0
-	r.emit(true)
-	return container, err
+	r.clip = newClipRun(res, sel.Clip, leadIn)
+	for {
+		if r.clip != nil {
+			wins, err := r.clip.window(res)
+			if err != nil {
+				return "", err
+			}
+			r.wins = wins
+		}
+		if err := r.prepare(res, resume); err != nil {
+			return "", err
+		}
+		now := o.Clock.Now()
+		r.speed.reset(now, 0)
+		r.lastCP = now
+		if r.clip != nil && r.dirty {
+			// A window that changed (a lead-in) is stored before anything is fetched
+			// for it (docs/MEDIA-SPEC.md §8 C12).
+			if err := r.checkpoint(true); err != nil {
+				return "", err
+			}
+		}
+		r.emit(true)
+		container, err := r.run(ctx)
+		if r.clip != nil && errors.Is(err, remux.ErrNoKeyframe) && r.clip.extendable() {
+			// No keyframe at or before the part's start in the first fragment: one more
+			// fragment back (C5).
+			r.clip.leadIn++
+			resume = r.snapshot()
+			r.reset()
+			continue
+		}
+		r.speed.rate = 0
+		r.emit(true)
+		return container, err
+	}
+}
+
+// reset forgets the tracks of a prepared run, for preparing a new window.
+func (r *runner) reset() {
+	r.tracks, r.total, r.doneN, r.durable, r.dirty = nil, 0, 0, 0, false
+	r.est = estimator{}
+	r.slots = nil
 }
 
 // trackState is a selected track and its durable fragments.
@@ -122,6 +169,9 @@ type trackState struct {
 	done  []byte // bitmap of durable fragments
 	ndone int
 	dirty bool // fragments renamed into dir since the last checkpoint
+	// win is the track's window in a clip run (nil otherwise): its fragments are a
+	// window of the full plan, their files named by their full-plan index.
+	win *clipWindow
 }
 
 func (s *trackState) isDone(i int) bool { return s.done[i>>3]&(1<<(i&7)) != 0 }
@@ -132,8 +182,48 @@ func (s *trackState) setDone(i int) {
 	s.dirty = true
 }
 
+// fragPath is the file of fragment i: named by its index in the full plan, which a
+// window of the plan keeps (docs/MEDIA-SPEC.md §8 C11).
 func (s *trackState) fragPath(i int) string {
-	return filepath.Join(s.dir, strconv.Itoa(i)+".frag")
+	return filepath.Join(s.dir, strconv.Itoa(s.plan.Fragments[i].FullIndex)+".frag")
+}
+
+// cpTotal and cpBit map the track's fragments to its checkpoint: a window's bitmap
+// counts full-plan indexes from its First (C11), a whole plan's its own indexes.
+func (s *trackState) cpTotal() int {
+	if s.win != nil {
+		return s.win.span
+	}
+	return len(s.plan.Fragments)
+}
+
+func (s *trackState) cpBit(i int) int {
+	if s.win != nil {
+		return s.plan.Fragments[i].FullIndex - s.win.First
+	}
+	return i
+}
+
+func (s *trackState) cpFirst() int {
+	if s.win != nil {
+		return s.win.First
+	}
+	return 0
+}
+
+// cpDone returns the checkpoint bitmap of the durable fragments.
+func (s *trackState) cpDone() []byte {
+	if s.win == nil {
+		return bytes.Clone(s.done)
+	}
+	out := make([]byte, (s.win.span+7)/8)
+	for i := range s.plan.Fragments {
+		if s.isDone(i) {
+			b := s.cpBit(i)
+			out[b>>3] |= 1 << (b & 7)
+		}
+	}
+	return out
 }
 
 // firstMedia is the index of the track's first media fragment.
@@ -227,6 +317,12 @@ type runner struct {
 	// most MaxConnections. Closed after the last phase and when Run returns.
 	pool []*warmSlot
 
+	// clip is the part a Run saves (nil: all of it), wins the tracks' windows, and
+	// clipDone the assembled part (Progress.Clip).
+	clip     *clipRun
+	wins     []*clipWindow
+	clipDone *model.MediaClip
+
 	inflight atomic.Int64 // bytes of attempts in progress
 	received atomic.Int64 // every payload byte received, for the speed average
 	active   atomic.Int32 // requests in flight
@@ -268,9 +364,12 @@ func (r *runner) prepare(res *resolved, resume *Checkpoint) error {
 		prev = resume.Tracks
 	}
 	taken := 0 // checkpoints of prev whose fragments are taken over
-	for _, t := range res.tracks {
+	for k, t := range res.tracks {
 		n := len(t.plan.Fragments)
 		s := &trackState{track: t, dir: filepath.Join(r.o.PartDir, dirName(t.kind, t.id)), base: r.total, done: make([]byte, (n+7)/8)}
+		if k < len(r.wins) {
+			s.win = r.wins[k]
+		}
 		cp := resumedTrack(prev, t)
 		if cp != nil && cp.TrackID != t.id && !r.adoptDir(s, cp.TrackID) {
 			cp = nil // its fragments cannot be moved: the track starts over
@@ -285,9 +384,13 @@ func (r *runner) prepare(res *resolved, resume *Checkpoint) error {
 		}
 		if cp != nil {
 			taken++
-			if cp.Total == n && len(cp.Done) == len(s.done) {
+			if s.reusable(cp) {
 				for i := range n {
-					if cp.Done[i>>3]&(1<<(i&7)) == 0 {
+					b := s.cpBit(i) + s.cpFirst() - cp.First
+					if b < 0 || b >= cp.Total || cp.Done[b>>3]&(1<<(b&7)) == 0 {
+						if cp.First != s.cpFirst() {
+							r.dirty = true // the window moved: the next checkpoint records it
+						}
 						continue
 					}
 					if size, ok := s.intact(i); ok {
@@ -311,6 +414,19 @@ func (r *runner) prepare(res *resolved, resume *Checkpoint) error {
 		r.dirty = true // the next checkpoint drops the tracks that were not taken over
 	}
 	return nil
+}
+
+// reusable reports whether the fragments cp records can be taken over by s: the same
+// plan (its fragment count; for a window the same full-plan span), or a window that only
+// begins earlier than cp's (a lead-in, docs/MEDIA-SPEC.md §8 C11/C12).
+func (s *trackState) reusable(cp *TrackCheckpoint) bool {
+	if cp.Total < 0 || len(cp.Done) != (cp.Total+7)/8 {
+		return false
+	}
+	if s.win == nil {
+		return cp.First == 0 && cp.Total == len(s.plan.Fragments)
+	}
+	return cp.First >= s.win.First && cp.First+cp.Total == s.win.First+s.win.span
 }
 
 // resumedTrack returns the checkpoint of t in prev, or nil: the one with t's key when it
@@ -742,6 +858,11 @@ func (r *runner) checkInits() error {
 			if err := media.CheckInit(data); err != nil {
 				return fmt.Errorf("mediajob: track %q: initialization segment: %w", s.id, err)
 			}
+			if r.o.AudioOnly {
+				if err := checkNoVideo(s.id, data); err != nil {
+					return err
+				}
+			}
 			switch {
 			case first == nil:
 				first = data
@@ -879,11 +1000,21 @@ func (r *runner) assemble(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("mediajob: removing a stale part file: %w", err)
 	}
 	var container string
+	var clip *model.MediaClip
 	if r.o.LegacyTS && out == remux.ContainerTS {
 		// A download stored as ".ts" before 2026-10-23 keeps the join it began with.
 		container, err = remux.ContainerTS, r.o.ConcatTS(ctx, inputs[0], part)
 	} else {
-		container, err = r.o.Assemble(ctx, inputs, part)
+		var w remux.Window
+		if r.clip != nil {
+			w = r.clip.remuxWindow()
+		}
+		var res remux.Result
+		res, err = r.o.Assemble(ctx, inputs, part, w)
+		container = res.Container
+		if err == nil && r.clip != nil {
+			clip = r.clip.result(res, r.tracks[0].plan.Duration)
+		}
 	}
 	if err == nil {
 		err = r.o.checkMP4(container)
@@ -895,10 +1026,11 @@ func (r *runner) assemble(ctx context.Context) (string, error) {
 		}
 		return "", diskErr("assembling", err)
 	}
-	if err := publish(ctx, r.o, part, container); err != nil {
+	if err := publish(ctx, r.o, part, container, clip); err != nil {
 		_ = os.Remove(part)
 		return "", err
 	}
+	r.clipDone = clip
 	return container, nil
 }
 
@@ -907,8 +1039,8 @@ func (r *runner) assemble(ctx context.Context) (string, error) {
 // before the rename, so that a job stopped after it is known complete. PartDir stays:
 // the caller removes it once it has stored the completion. On failure part is left in
 // place for the caller to remove or keep.
-func publish(ctx context.Context, o Options, part, container string) error {
-	if err := recordOutput(ctx, o, part, container); err != nil {
+func publish(ctx context.Context, o Options, part, container string, clip *model.MediaClip) error {
+	if err := recordOutput(ctx, o, part, container, clip); err != nil {
 		return diskErr("recording the output", err)
 	}
 	if err := placeOutput(ctx, o, part); err != nil {
@@ -937,19 +1069,27 @@ func (r *runner) checkpoint(force bool) error {
 		}
 	}
 	if r.onCheckpoint != nil {
-		// DurableBytes: what the caller stores as the bytes done, never the bytes of
-		// requests in flight (they are taken back when a request is given up).
-		cp := Checkpoint{Tracks: make([]TrackCheckpoint, len(r.tracks)), DurableBytes: r.durable}
-		for k, s := range r.tracks {
-			cp.Tracks[k] = TrackCheckpoint{TrackID: s.id, Total: len(s.plan.Fragments), Done: bytes.Clone(s.done), Key: s.key}
-		}
-		if err := r.onCheckpoint(cp); err != nil {
+		if err := r.onCheckpoint(*r.snapshot()); err != nil {
 			return fmt.Errorf("mediajob: saving the checkpoint: %w", err)
 		}
 	}
 	r.dirty = false
 	r.lastCP = now
 	return nil
+}
+
+// snapshot returns the checkpoint of the durable fragments. DurableBytes: what the
+// caller stores as the bytes done, never the bytes of requests in flight (they are taken
+// back when a request is given up).
+func (r *runner) snapshot() *Checkpoint {
+	cp := &Checkpoint{Tracks: make([]TrackCheckpoint, len(r.tracks)), DurableBytes: r.durable}
+	if r.clip != nil {
+		cp.LeadIn = r.clip.leadIn
+	}
+	for k, s := range r.tracks {
+		cp.Tracks[k] = TrackCheckpoint{TrackID: s.id, Total: s.cpTotal(), Done: s.cpDone(), Key: s.key, First: s.cpFirst()}
+	}
+	return cp
 }
 
 func (r *runner) emit(force bool) {
@@ -959,6 +1099,7 @@ func (r *runner) emit(force bool) {
 		BytesDone:      r.durable + r.inflight.Load(),
 		SpeedBps:       r.speed.rate,
 		Connections:    int(r.active.Load()),
+		Clip:           r.clipDone,
 	}
 	p.BytesTotal, p.BytesTotalApprox = r.est.estimate(r.tracks, r.doneN)
 	r.rep.emit(p, r.slots, r.o.Clock.Now(), force)

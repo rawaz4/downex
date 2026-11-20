@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"downex/internal/model"
 )
 
 // outputRecordName is the file in PartDir that records an assembled output. Track
@@ -26,6 +28,8 @@ type outputRecord struct {
 	Size      int64  `json:"size"`      // size of the assembled file
 	ModTime   int64  `json:"modTime"`   // its modification time (Unix nanoseconds), which renames keep
 	Container string `json:"container"` // what Assemble returned
+	// Clip describes the assembled part of a run with a clip (Progress.Clip).
+	Clip *model.MediaClip `json:"clip,omitempty"`
 }
 
 // matches reports whether fi is the file r describes.
@@ -34,12 +38,12 @@ func (r *outputRecord) matches(fi fs.FileInfo) bool {
 }
 
 // recordOutput durably records the assembled part file of o in o.PartDir.
-func recordOutput(ctx context.Context, o Options, part, container string) error {
+func recordOutput(ctx context.Context, o Options, part, container string, clip *model.MediaClip) error {
 	fi, err := os.Stat(part)
 	if err != nil {
 		return err
 	}
-	b, err := json.Marshal(outputRecord{Name: filepath.Base(o.OutPath), Size: fi.Size(), ModTime: fi.ModTime().UnixNano(), Container: container})
+	b, err := json.Marshal(outputRecord{Name: filepath.Base(o.OutPath), Size: fi.Size(), ModTime: fi.ModTime().UnixNano(), Container: container, Clip: clip})
 	if err != nil {
 		return err
 	}
@@ -107,32 +111,38 @@ func replaceable(path string) (bool, error) {
 // ReplaceExisting also over the file it replaces, see placeOutput). A record that
 // describes neither file is stale and removed; Run then proceeds as usual.
 func finishAssembled(ctx context.Context, o Options) (string, bool, error) {
+	c, _, done, err := finishRecorded(ctx, o)
+	return c, done, err
+}
+
+// finishRecorded is finishAssembled that also returns the record's Clip.
+func finishRecorded(ctx context.Context, o Options) (string, *model.MediaClip, bool, error) {
 	f, err := os.Open(filepath.Join(o.PartDir, outputRecordName))
 	if err != nil {
-		return "", false, nil
+		return "", nil, false, nil
 	}
 	var rec outputRecord
 	err = json.NewDecoder(io.LimitReader(f, 4<<10)).Decode(&rec)
 	f.Close()
-	if err != nil || rec.Name != filepath.Base(o.OutPath) || (rec.Container != "mp4" && rec.Container != "ts") {
+	if err != nil || rec.Name != filepath.Base(o.OutPath) || (rec.Container != "mp4" && rec.Container != "ts" && rec.Container != containerMP3) {
 		forgetOutput(o)
-		return "", false, nil
+		return "", nil, false, nil
 	}
 	part := o.OutPath + ".dxpart"
 	out, outErr := os.Lstat(o.OutPath)
 	pf, partErr := os.Lstat(part)
 	switch {
 	case outErr == nil && errors.Is(partErr, fs.ErrNotExist) && rec.matches(out):
-		return rec.Container, true, nil
+		return rec.Container, rec.Clip, true, nil
 	case partErr == nil && rec.matches(pf) && (errors.Is(outErr, fs.ErrNotExist) || outErr == nil && o.ReplaceExisting):
 		if err := placeOutput(ctx, o, part); err != nil {
-			return "", false, fmt.Errorf("mediajob: renaming the output: %w", err)
+			return "", nil, false, fmt.Errorf("mediajob: renaming the output: %w", err)
 		}
 		syncDir(filepath.Dir(o.OutPath))
-		return rec.Container, true, nil
+		return rec.Container, rec.Clip, true, nil
 	}
 	forgetOutput(o)
-	return "", false, nil
+	return "", nil, false, nil
 }
 
 // checkpointTotals returns the fragments a checkpoint covers (nil: none).

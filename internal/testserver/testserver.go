@@ -2,12 +2,15 @@
 // It serves deterministic content (see Byte and Fill) of a configurable size with
 // single byte-range support (RFC 9110 §14) and injectable faults: ranges disabled,
 // "Accept-Ranges: none", changeable validators, throttling, stalls, 429/503 with
-// Retry-After, a per-client connection limit, forced 416, Content-Disposition names
-// and HTTP/2 over TLS. Hold withholds body bytes past a budget until Release, so a
-// test can act on a download midway without racing its completion.
+// Retry-After, a per-client connection limit, forced 416, Content-Disposition names,
+// signed links that expire (Token) and HTTP/2 over TLS. Hold withholds body bytes past
+// a budget until Release, so a test can act on a download midway without racing its
+// completion.
 package testserver
 
 import (
+	"cmp"
+	"crypto/sha256"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -22,10 +25,16 @@ import (
 type Options struct {
 	Size int64  // content length in bytes
 	Seed uint64 // content generator seed; change it to simulate a modified file
+	// Prefix replaces the generated content from offset 0 (ranges honoured), so tests
+	// can serve a file that starts like a program, a web page or an archive followed by
+	// deterministic filler. Bytes beyond Size are not served.
+	Prefix []byte
 
 	NoRanges         bool // ignore Range headers and always answer 200 with the full body
 	AcceptRangesNone bool // send "Accept-Ranges: none" and ignore Range headers
 	Always416        bool // answer every range request with 416
+	// UnknownTotal answers ranges with an unknown total: "Content-Range: bytes a-b/*".
+	UnknownTotal bool
 
 	ETag         string    // ETag header, e.g. `"v1"` or `W/"v1"` (weak); empty = none
 	LastModified time.Time // Last-Modified header; zero = none
@@ -48,6 +57,29 @@ type Options struct {
 	LimitAbort bool
 
 	HTTP2 bool // serve over TLS with HTTP/2 enabled
+
+	// Token makes the server act like one serving signed links (docs/ENGINE-SPEC.md §7.2):
+	// when set, a request whose query lacks token=<Token> gets the expiry answer, which is
+	// ExpiredStatus (default 403); 401 without WWW-Authenticate with
+	// ExpiredNoChallenge401; or with ExpiredRedirect a 302 to /expired, which serves a
+	// 200 text/html page. Change it with SetToken to expire the links handed out so far.
+	Token                 string
+	ExpiredStatus         int
+	ExpiredRedirect       bool
+	ExpiredNoChallenge401 bool
+}
+
+// ExpiredPage is the body of the /expired page (Options.ExpiredRedirect).
+const ExpiredPage = "<!doctype html><html><head><title>Link expired</title></head><body>This link has expired.</body></html>"
+
+// URLWithToken returns the server's URL for path with the token query of the current
+// Options.Token ("" without one).
+func (s *Server) URLWithToken(path string) string {
+	u := s.URL + path
+	if tok := s.Options().Token; tok != "" {
+		u += "?token=" + tok
+	}
+	return u
 }
 
 // Request records one request the server received.
@@ -169,6 +201,10 @@ func (s *Server) SetETag(etag string) { s.Update(func(o *Options) { o.ETag = eta
 // SetLastModified changes the Last-Modified time of the served representation.
 func (s *Server) SetLastModified(t time.Time) { s.Update(func(o *Options) { o.LastModified = t }) }
 
+// SetToken changes the token that links need (Options.Token): links with the old one
+// expire.
+func (s *Server) SetToken(token string) { s.Update(func(o *Options) { o.Token = token }) }
+
 // Options returns the current options.
 func (s *Server) Options() Options {
 	s.mu.Lock()
@@ -186,7 +222,26 @@ func (s *Server) Requests() []Request {
 // Sum256 returns the SHA-256 of the content currently served.
 func (s *Server) Sum256() [32]byte {
 	o := s.Options()
-	return Sum256(o.Seed, o.Size)
+	if len(o.Prefix) == 0 {
+		return Sum256(o.Seed, o.Size)
+	}
+	return sha256.Sum256(Content(o))
+}
+
+// ContentAt writes the served bytes [off, off+len(p)) of a server configured by o into
+// p: the generated content with o.Prefix in place of its first bytes.
+func ContentAt(o Options, p []byte, off int64) {
+	Fill(o.Seed, p, off)
+	if off < int64(len(o.Prefix)) {
+		copy(p, o.Prefix[off:])
+	}
+}
+
+// Content returns every byte a server configured by o serves (o.Size bytes).
+func Content(o Options) []byte {
+	p := make([]byte, o.Size)
+	ContentAt(o, p, 0)
+	return p
 }
 
 // BytesSent returns the number of response body bytes written to clients so far,
@@ -235,6 +290,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	if r.URL.Path == "/expired" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		s.record(rec, http.StatusOK)
+		_, _ = w.Write([]byte(ExpiredPage))
+		return
+	}
+	if o.Token != "" && r.URL.Query().Get("token") != o.Token {
+		switch {
+		case o.ExpiredRedirect:
+			s.record(rec, http.StatusFound)
+			http.Redirect(w, r, "/expired", http.StatusFound)
+		case o.ExpiredNoChallenge401:
+			s.record(rec, http.StatusUnauthorized)
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			status := cmp.Or(o.ExpiredStatus, http.StatusForbidden)
+			s.record(rec, status)
+			w.WriteHeader(status)
+		}
+		return
+	}
 	if fail {
 		status := o.FailStatus
 		if status == 0 {
@@ -281,7 +357,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		case kind == rangeOK:
 			start, end, status = a, b, http.StatusPartialContent
-			h.Set("Content-Range", "bytes "+strconv.FormatInt(a, 10)+"-"+strconv.FormatInt(b, 10)+"/"+strconv.FormatInt(o.Size, 10))
+			total := strconv.FormatInt(o.Size, 10)
+			if o.UnknownTotal {
+				total = "*"
+			}
+			h.Set("Content-Range", "bytes "+strconv.FormatInt(a, 10)+"-"+strconv.FormatInt(b, 10)+"/"+total)
 		}
 	}
 	length := end - start + 1
@@ -362,7 +442,7 @@ func (s *Server) writeBody(w http.ResponseWriter, r *http.Request, o Options, st
 			return
 		}
 		chunk = granted
-		Fill(o.Seed, buf[:chunk], off)
+		ContentAt(o, buf[:chunk], off)
 		wrote = time.Now()
 		// Counted before the write: a client can read the whole chunk before Write
 		// returns, and must then already see it in BytesSent.

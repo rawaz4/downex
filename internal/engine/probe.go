@@ -24,8 +24,10 @@ type probeResult struct {
 
 // probe sends GET with "Range: bytes=0-" (§2.1), or "bytes=0-(cap-1)" under a host's
 // request cap (RequestCaps), retrying transient failures and honouring Retry-After. It
-// returns 200, 206 and 416 responses to the caller.
-func (e *Engine) probe(ctx context.Context, f transport.Fetcher, req model.Request) (*transport.Response, error) {
+// returns 200, 206 and 416 responses to the caller. An answer that says the link
+// expired (§7.2 E1, judged with htmlFile: the download may be a web page itself) is
+// ErrLinkExpired, never retried.
+func (e *Engine) probe(ctx context.Context, f transport.Fetcher, req model.Request, htmlFile bool) (*transport.Response, error) {
 	end := cappedEnd(0, -1, requestCap(e.requestCaps(), "", req.URL))
 	var lastErr error
 	for attempt := 0; ; attempt++ {
@@ -41,6 +43,10 @@ func (e *Engine) probe(ctx context.Context, f transport.Fetcher, req model.Reque
 		if err == nil {
 			if resp.Body == nil {
 				resp.Body = http.NoBody
+			}
+			if expired, why := isExpiry(resp, expiryCheck{sentURL: req.URL, probe: true, htmlFile: htmlFile}); expired {
+				closeBody(resp)
+				return nil, fmt.Errorf("probe: %s: %w", why, ErrLinkExpired)
 			}
 			switch resp.StatusCode {
 			case http.StatusOK, http.StatusPartialContent, http.StatusRequestedRangeNotSatisfiable:

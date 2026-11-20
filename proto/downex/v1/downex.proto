@@ -34,6 +34,29 @@ enum MediaOrigin {
   MEDIA_ORIGIN_UNSPECIFIED = 0; // = MANIFEST: every client written before site media
   MEDIA_ORIGIN_MANIFEST = 1; // an HLS/DASH manifest URL (MEDIA-SPEC)
   MEDIA_ORIGIN_SITE = 2; // a web page resolved with yt-dlp
+  MEDIA_ORIGIN_PLAYED = 3; // the files the user's browser played for a video (SITE-MEDIA-SPEC §2.9)
+}
+
+// One file the tab's player fetched for a video (SITE-MEDIA-SPEC §2.9).
+message PlayedResource {
+  string id = 1; // "r1".."r16", unique in its source
+  string url = 2; // the whole file's address (range-in-query removed): http(s), at most 8 KiB, no user information
+  int64 size = 3; // exact total in bytes, 0 = unknown
+  string kind = 4; // "video" | "audio" | "": a hint; the head decides
+  bytes head = 5; // the file's first bytes as the browser read them, at most 256 KiB
+  bool browser = 6; // the head needed the tab: the file is fetched through the browser from the start
+}
+
+// The clicked <video> and the files its tab played (SITE-MEDIA-SPEC §2.9).
+message PlayedSource {
+  repeated PlayedResource resources = 1; // 1-16
+  int64 duration_ms = 2; // the element's duration, 0 = unknown
+  int32 video_width = 3; // the element's picture, 0 = unknown
+  int32 video_height = 4;
+  int32 has_audio = 5; // 1 yes, 0 unknown, -1 no
+  // The durations of the frame's other <video> elements (each 1 ms to 24 h, at most 8): a file
+  // closer to one of them than to the clicked element's is that element's (a feed's neighbour).
+  repeated int64 other_durations_ms = 6;
 }
 
 // One selectable track of a streaming presentation (docs/MEDIA-SPEC.md §1 Track).
@@ -67,6 +90,44 @@ message MediaInfo {
   MediaOrigin origin = 11;
   string site = 12; // SITE: the site's display name, e.g. "YouTube"
   string page_url = 13; // the page (SITE: the address resolved; MANIFEST: the page hint)
+  repeated Chapter chapters = 14; // SITE only: the video's chapters (MEDIA-SPEC §8 C14); never for manifests
+  MediaClip clip = 15; // the part of the video saved (MEDIA-SPEC §8); unset = the whole video
+  // SITE, a page with several videos (SITE-MEDIA-SPEC §3.12): the videos Downex can save, in the
+  // page's order (at most 20; empty for a page with one video), the one this info describes, and
+  // how many other items of the page are not listed (photos, links, items past the 20).
+  repeated MediaItem items = 16;
+  string entry_id = 17; // SITE: the item's id ("" = the page has one video)
+  int32 items_left_out = 18;
+  // SITE (SITE-MEDIA-SPEC §2.8): a probe of a page whose video servers answer only web browsers, or a
+  // download whose bytes the user's browser fetches for Downex.
+  bool browser_fetch = 19;
+}
+
+// One video of a page with several (SITE-MEDIA-SPEC §3.12), named by the site's id of it.
+message MediaItem {
+  string id = 1;
+  string title = 2;
+  int64 duration_ms = 3; // 0 = unknown
+  string thumbnail = 4; // https image of the page's; probes only, never stored ("" = none)
+}
+
+// A chapter of a video (docs/MEDIA-SPEC.md §8 C14).
+message Chapter {
+  int64 start_ms = 1;
+  int64 end_ms = 2;
+  string title = 3;
+}
+
+// A part of a video (clips, docs/MEDIA-SPEC.md §8): [start_ms, end_ms) in presentation time.
+message MediaClip {
+  int64 start_ms = 1; // requested start
+  int64 end_ms = 2; // requested end, exclusive; 0 = to the end
+  string chapter = 3; // title of the chosen chapter ("" = custom times); display only
+  // Set by downexd when the download completes (0/false before):
+  int64 keyframe_ms = 4; // presentation time of the first decoded frame (<= start_ms, or later when there is no earlier keyframe)
+  int64 fetch_start_ms = 5; // what was downloaded
+  int64 fetch_end_ms = 6;
+  bool fetched_whole = 7; // the resource had no index: downloaded in full, cut locally
 }
 
 // Who asked for a download; the daemon applies the confirmation policy to browser hand-offs.
@@ -133,6 +194,64 @@ message Download {
   // the rest, else the probe's size or bit rate × duration of the chosen tracks); a
   // completed download's size is always its file's.
   bool size_approx = 32;
+  // The file check (docs/DESKTOP-SPEC.md §9): omitted when there is nothing to say or
+  // check_downloaded_files is off.
+  FileCheck file_check = 33;
+  // Expired links (docs/ENGINE-SPEC.md §7.2-7.3, docs/DESKTOP-SPEC.md §10). The page the
+  // download was started from (file downloads; "" = unknown): the add's page_url, else the
+  // request's Referer when it names more than an origin. Media downloads: media.page_url.
+  string page_url = 34;
+  // Set on a download awaiting confirmation whose link serves the same file as a download
+  // whose link expired (Settings.renew_links = ASK): the window offers to continue that
+  // one (RenewLink with from_download). Kept in downexd's memory only.
+  RenewOffer renew_offer = 35;
+  // downexd is checking whether this new download's link continues a download whose link
+  // expired; it starts, asks or is removed once the check ends (at most 15 s).
+  bool renew_check = 36;
+  // Bytes adopted from a partial file another program (a browser) left unfinished
+  // (docs/ENGINE-SPEC.md §7.4; 0 = none). Kept after completion; cleared by a restart.
+  int64 rescued_bytes = 37;
+}
+
+// A stopped download that a new link would continue (docs/DESKTOP-SPEC.md §10).
+message RenewOffer {
+  int64 download_id = 1; // the download whose link expired
+  string filename = 2;
+  int64 size = 3;
+  int64 received = 4; // its durable bytes
+  bool name_differs = 5; // the new link names the file differently
+}
+
+// How much a file check has to say (docs/DESKTOP-SPEC.md §9).
+enum FileCheckLevel {
+  FILE_CHECK_LEVEL_UNSPECIFIED = 0; // nothing to say (the field is omitted)
+  FILE_CHECK_LEVEL_NOTE = 1; // a harmless difference, details only
+  FILE_CHECK_LEVEL_CAUTION = 2; // probably not the wanted file (an error page); Open not held
+  FILE_CHECK_LEVEL_DANGER = 3; // the file pretends to be another type; Open asks first
+}
+
+// What a file check looked at (docs/DESKTOP-SPEC.md §9.1).
+enum FileCheckStage {
+  FILE_CHECK_STAGE_UNSPECIFIED = 0;
+  FILE_CHECK_STAGE_NAME = 1; // name, served type and MIME hint only (not stored)
+  FILE_CHECK_STAGE_EARLY = 2; // the first 64 KiB of a running download (kept in memory)
+  FILE_CHECK_STAGE_FINAL = 3; // the completed file, archive listing included (stored)
+}
+
+// docs/DESKTOP-SPEC.md §9. Advisory: it never says a file is safe.
+message FileCheck {
+  FileCheckLevel level = 1;
+  FileCheckStage stage = 2;
+  string reason = 3; // stable code [a-z_]{1,64} (§9.9)
+  string content = 4; // sniffed content id ("pe", "zip", "html"; "" unknown)
+  string content_label = 5; // "Windows program"
+  string claim_label = 6; // what the name (or served type) claims: "MP4 video"; "" none
+  string served_type = 7; // the server's Content-Type media type; "" none
+  string member = 8; // the archive member the reason names (≤ 255 bytes, UTF-8, unescaped)
+  int32 program_members = 9; // programs found inside an archive
+  bool listing_incomplete = 10;
+  string summary = 11; // one or two sentences, the exact texts of §9.6
+  string detail = 12; // the DANGER advice and the stage notes of §9.6; "" for none
 }
 
 // What one worker connection is doing right now (docs/DESKTOP-SPEC.md §7).
@@ -172,6 +291,9 @@ message AddRequest {
   int64 expected_size = 11; // optional size hint (bytes) shown in the confirmation dialog
   string mime = 12; // optional MIME hint used for category selection
   int64 queue_id = 13; // M6: 0 = the main queue
+  // The page the link was found on (http or https, at most 32 KiB; "" = unknown). Stored
+  // for "Open page" of a download whose link expires (docs/DESKTOP-SPEC.md §10).
+  string page_url = 14;
 }
 
 // Confirm completes a download in DOWNLOAD_STATE_AWAITING_CONFIRMATION.
@@ -186,6 +308,10 @@ message ConfirmRequest {
   string video_track = 7; // media downloads: chosen track ids ("" = keep the daemon's default pick)
   string audio_track = 8;
   int64 queue_id = 9; // M6: 0 = keep the current queue
+  MediaClip clip = 10; // media downloads: unset = keep the part; set with start_ms 0 and end_ms 0 = the whole video
+  // SITE media of a page with several videos (SITE-MEDIA-SPEC §3.12): "" = keep the item; another
+  // item's id resolves the page again for it (its tracks, title and part replace the old ones).
+  string entry_id = 11;
 }
 
 // AddMedia adds a streaming-media download for an HLS (.m3u8) or DASH (.mpd) manifest.
@@ -204,10 +330,68 @@ message AddMediaRequest {
   bool start_paused = 10;
   int64 queue_id = 11; // M6: 0 = the main queue
   MediaOrigin origin = 12; // SITE: page_url is the address and manifest_url must be empty
+  MediaClip clip = 13; // unset = the whole video; only start_ms, end_ms and chapter are read (MEDIA-SPEC §8)
+  string entry_id = 14; // SITE: the video of a page with several (SITE-MEDIA-SPEC §3.12); "" = the page's default
+  // SITE: the domain the Cookie header's sign-in is for (SITE-MEDIA-SPEC §6.3): the page's host or a
+  // parent of it that is no public suffix; the cookie file then covers it and its subdomains. "" = the
+  // page's exact host.
+  string cookie_domain = 15;
+  // SITE, source BROWSER (SITE-MEDIA-SPEC §2.8): the caller's browser can fetch the download's bytes
+  // when its video servers answer only browsers; the answer then carries a fetch ticket.
+  bool browser_fetch = 16;
+  // PLAYED, source BROWSER (SITE-MEDIA-SPEC §2.9): the files the tab played; manifest_url empty,
+  // page_url the frame's address (a hint).
+  PlayedSource played = 17;
 }
 
 message AddMediaResponse {
   Download download = 1;
+  string fetch_ticket = 2; // SITE-MEDIA-SPEC §2.8: 32 lowercase hex characters; "" = none
+}
+
+// TakeBrowserFetch waits for a request of the downloads whose fetch tickets are given
+// (SITE-MEDIA-SPEC §2.8) and hands it to the browser.
+message TakeBrowserFetchRequest {
+  repeated string tickets = 1; // 1-64 tickets
+  int32 wait_ms = 2; // 0-25000: how long to wait for a request
+}
+
+message TakeBrowserFetchResponse {
+  BrowserFetch fetch = 1; // unset: none came within the wait
+  repeated string ended_tickets = 2; // given tickets downexd no longer knows
+}
+
+// One request the browser makes for a download (SITE-MEDIA-SPEC §2.8).
+message BrowserFetch {
+  string ticket = 1;
+  string fetch_id = 2;
+  string url = 3; // the format's address; the browser may use its player's address of the same resource
+  int64 start = 4; // first byte
+  int64 end = 5; // last byte, -1 = to the end
+  int64 total = 6; // the resource's exact size, 0 = unknown
+}
+
+// PutBrowserFetch gives downexd what the browser received for a fetch, in order.
+message PutBrowserFetchRequest {
+  string ticket = 1;
+  string fetch_id = 2;
+  int64 seq = 3; // 0, 1, 2, ... per fetch
+  BrowserFetchHead head = 4; // seq 0 only
+  bytes data = 5; // at most 256 KiB
+  bool end = 6; // the body ended
+  string error = 7; // the fetch failed in the browser ("no_tab", a short reason); at most 256 bytes
+}
+
+// The answer's head as the browser received it.
+message BrowserFetchHead {
+  int32 status = 1;
+  string content_type = 2;
+  string content_range = 3;
+  int64 content_length = 4; // -1 = unknown
+}
+
+message PutBrowserFetchResponse {
+  bool stop = 1; // downexd needs no more of this fetch: abort it
 }
 
 // ProbeMedia fetches and parses a manifest and lists its tracks without adding anything.
@@ -221,6 +405,9 @@ message ProbeMediaRequest {
   // (tools_unavailable while they are not ready), never waits behind or delays a user's probe,
   // and fills the same extraction cache a later probe, Add and run use.
   bool prefetch = 5;
+  string entry_id = 6; // SITE: the video of a page with several (SITE-MEDIA-SPEC §3.12); "" = the page's default
+  string cookie_domain = 7; // SITE: as AddMediaRequest.cookie_domain (SITE-MEDIA-SPEC §6.3)
+  PlayedSource played = 8; // PLAYED: as AddMediaRequest.played (SITE-MEDIA-SPEC §2.9)
 }
 
 message ProbeMediaResponse {
@@ -292,6 +479,11 @@ message ResumeRequest {
   optional int32 max_connections = 3;
   optional int64 speed_limit = 4;
   ExistingFile existing_file = 5; // only together with restart (else InvalidArgument)
+  // The first start of a rescue stored paused for the browser relay (DAEMON-SPEC §3
+  // "Rescue"): refused (FailedPrecondition) unless id is such a rescue, never started yet,
+  // created at most 10 minutes ago. With show_progress_window on, its progress window
+  // opens when it starts at once. Not combinable with restart.
+  bool rescue_start = 6;
 }
 
 message ResumeResponse {
@@ -322,7 +514,30 @@ message Event {
     // the first batch once a check has run, then after each automatic check (at most one a day,
     // and one after downexd starts). The window offers an available one in a pop-up.
     UpdateInfo update = 8;
+    // Polite mode (docs/POLITE-SPEC.md §7): Watch without ids only; the first batch ends with
+    // one, later batches carry one when the status changed. Fields 9-19 are left to other features.
+    PoliteStatus polite = 20;
   }
+}
+
+// Polite mode's state (docs/POLITE-SPEC.md §4).
+enum PoliteState {
+  POLITE_STATE_UNSPECIFIED = 0; // an older daemon without Polite mode
+  POLITE_STATE_OFF = 1;
+  POLITE_STATE_IDLE = 2; // on, nothing downloading
+  POLITE_STATE_WATCHING = 3; // on, full speed, line smooth
+  POLITE_STATE_SLOWED = 4; // on, downloads capped at rate_limit
+  POLITE_STATE_MEASURING = 5; // calibration: held at the floor for at most 4 s
+  POLITE_STATE_NO_SIGNAL = 6; // on, but no server answers probes: full speed
+  POLITE_STATE_UNAVAILABLE = 7; // this downexd cannot measure (no prober)
+}
+
+message PoliteStatus {
+  PoliteState state = 1;
+  int64 rate_limit = 2; // bytes/s applied now (SLOWED, MEASURING), else 0
+  int32 delay_ms = 3; // latest line delay over the base; -1 unknown
+  int32 base_ms = 4; // base RTT of the median anchor; -1 unknown
+  google.protobuf.Timestamp since = 5; // when this state began
 }
 
 // WatchResponse batches events; the daemon sends at most 4 batches per second.
@@ -346,6 +561,77 @@ service DownloadService {
   // SetDownloadOptions changes a download's limits; a running download applies the speed limit
   // at once and the connection limit as soon as the engine can (§7).
   rpc SetDownloadOptions(SetDownloadOptionsRequest) returns (SetDownloadOptionsResponse);
+  // RenewLink gives a stopped file download a new link once the new link proves to serve
+  // the same bytes (docs/ENGINE-SPEC.md §7.3, docs/DAEMON-SPEC.md §3). Refusals are
+  // FailedPrecondition with a "<code>: " message prefix and Downex-Error-Code metadata
+  // (renew_mismatch, renew_size, renew_changed, renew_no_ranges, renew_unproven,
+  // renew_name, link_expired, auth_required, ...).
+  rpc RenewLink(RenewLinkRequest) returns (RenewLinkResponse);
+  // Rescue adopts a partial file a browser (or another program) left unfinished and
+  // continues it from its last trusted byte, once the server proves to serve the same file
+  // (docs/ENGINE-SPEC.md §7.4, docs/DAEMON-SPEC.md §3). Refusals carry a "<code>: "
+  // message prefix and Downex-Error-Code metadata (rescue_no_ranges, rescue_size_unknown,
+  // rescue_changed, rescue_unproven, rescue_not_found, rescue_ambiguous, rescue_locked,
+  // rescue_no_access, rescue_empty, link_expired, auth_required, ...).
+  rpc Rescue(RescueRequest) returns (RescueResponse);
+  // TakeBrowserFetch and PutBrowserFetch move a download's requests to the user's browser and its
+  // bytes back (browser-fetched saves, docs/SITE-MEDIA-SPEC.md §2.8). Only the holder of a download's
+  // fetch ticket reaches its requests.
+  rpc TakeBrowserFetch(TakeBrowserFetchRequest) returns (TakeBrowserFetchResponse);
+  rpc PutBrowserFetch(PutBrowserFetchRequest) returns (PutBrowserFetchResponse);
+}
+
+message RenewLinkRequest {
+  int64 id = 1; // a file download that is paused, queued or failed
+  oneof link {
+    string url = 2; // a new link (GET)
+    int64 from_download = 3; // a download awaiting confirmation whose link to use; removed on success
+  }
+  // With url: the headers to send (none = the stored ones, without Cookie, Cookie2 and
+  // Authorization when the new link is on another origin).
+  repeated Header headers = 4;
+  bool allow_name_change = 5; // continue although the new link names the file differently
+  bool restart_if_unproven = 6; // too little to compare: download again from the start
+  bool start = 7; // queue it at once (else it stays paused)
+  string page_url = 8; // optional: the page the new link was found on
+}
+
+message RenewLinkResponse {
+  Download download = 1;
+  bool restarted = 2; // nothing could be kept: it downloads again from byte 0
+  bool name_differs = 3;
+}
+
+// RescueRequest adopts a partial file another program (a browser) left unfinished and
+// continues it from its last trusted byte (docs/ENGINE-SPEC.md §7.4). downexd first proves
+// that the server has the same file (range requests over the partial data, its size, the
+// validators); only then is the partial renamed into the download's part file, in its own
+// folder.
+message RescueRequest {
+  string url = 1; // http(s); GET; redirects followed as for Add
+  repeated Header headers = 2; // as AddRequest.headers (DAEMON-SPEC §4)
+  // Absolute path of the partial file; "" = find it from target_path (BROWSER only).
+  string partial_path = 3;
+  string target_path = 4; // the browser's final path for the file (absolute; BROWSER)
+  int64 bytes_received = 5; // the browser's count of good bytes; 0 = unknown
+  int64 expected_size = 6; // the browser's total; -1 or 0 = unknown
+  string etag = 7; // the original response's ETag ("W/" = weak); "" = unknown
+  string last_modified = 8; // the original response's Last-Modified; "" = unknown
+  string filename = 9; // the final name; "" = from the partial's name (ENGINE-SPEC §7.4 A2)
+  AddSource source = 10; // BROWSER, UI or CLI
+  int64 queue_id = 11; // 0 = the main queue
+  int32 max_connections = 12; // 0 = default
+  int64 speed_limit = 13; // bytes/s, 0 = unlimited
+  // Store it paused: the extension sets it, erases its own entry, then sends Resume with
+  // rescue_start (DAEMON-SPEC §3 "Rescue").
+  bool start_paused = 14;
+  int64 started_at_ms = 15; // when the browser download started (Unix ms); 0 = unknown
+  string page_url = 16; // the page the download was started from ("" = unknown)
+}
+
+message RescueResponse {
+  Download download = 1;
+  int64 rescued_bytes = 2; // bytes kept from the partial file
 }
 
 message SetDownloadOptionsRequest {
@@ -400,6 +686,22 @@ message Settings {
   bool site_media = 24; // default true: resolve video pages with yt-dlp (downloaded on first use)
   bool tools_auto_update = 25; // default true: daily check; updates only Downex's own yt-dlp and Deno
   string tools_channel = 26; // "stable" | "nightly"; "" reads as the default "nightly"
+  // File check (docs/DESKTOP-SPEC.md §9.9)
+  bool check_downloaded_files = 27; // default true: warn when a file is not what its name says
+  // Expired links (docs/DESKTOP-SPEC.md §10): what a new link that serves the same file as
+  // a download whose link expired does.
+  RenewLinks renew_links = 28;
+  // Polite mode (docs/POLITE-SPEC.md §7). Fields 29-39 are left to other features.
+  bool polite_mode = 40; // default false: slow down when downloads make the line laggy
+  int32 polite_target_ms = 41; // extra line delay kept under; 0 = the default 30; else 10..200
+}
+
+// docs/DAEMON-SPEC.md §3 "Automatic matching".
+enum RenewLinks {
+  RENEW_LINKS_UNSPECIFIED = 0; // = AUTO
+  RENEW_LINKS_AUTO = 1; // a matching new link continues the stopped download
+  RENEW_LINKS_ASK = 2; // a matching new link waits for confirmation with an offer
+  RENEW_LINKS_OFF = 3; // new links are never matched
 }
 
 message StatusRequest {}
@@ -418,6 +720,9 @@ message StatusResponse {
   string tools_dir = 9;
   // This build can verify and install updates (an update signing key is built in).
   bool updates_supported = 10;
+  // Polite mode (docs/POLITE-SPEC.md §7); unset from an older daemon. Fields 11-19 are left
+  // to other features.
+  PoliteStatus polite = 20;
 }
 
 message GetSettingsRequest {}

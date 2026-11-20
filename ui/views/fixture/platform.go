@@ -6,6 +6,7 @@ package fixture
 import (
 	"context"
 
+	"downex/ui/core/pageurl"
 	"downex/ui/host"
 	"downex/ui/state/scene"
 	"downex/ui/views"
@@ -73,6 +74,12 @@ func (p *Platform) PickFile(_ context.Context, _, initial string) (string, error
 // OpenExternal is Platform's.
 func (p *Platform) OpenExternal(_ context.Context, url string) error {
 	return p.Mock.OpenExternal(url)
+}
+
+// OpenPage is Platform's: it checks the address and opens nothing.
+func (p *Platform) OpenPage(_ context.Context, url string) error {
+	_, err := pageurl.Check(url)
+	return err
 }
 
 // CopyText is Platform's: it records the text.

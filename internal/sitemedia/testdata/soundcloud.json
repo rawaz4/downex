@@ -1,0 +1,10 @@
+{
+  "id": "100000001",
+  "title": "Example track",
+  "duration": 143.206,
+  "extractor_key": "Soundcloud",
+  "webpage_url": "https://soundcloud.example/artist/track",
+  "formats": [
+    {"format_id": "hls_aac_96k", "ext": "m4a", "acodec": "mp4a.40.2", "vcodec": "none", "abr": 96, "tbr": 96, "protocol": "m3u8_native", "container": "m4a_dash", "audio_ext": "m4a", "video_ext": "none", "resolution": "audio only", "filesize_approx": 1718471, "url": "https://playback.media.example/aac_96k/0001/playlist.m3u8?expires=1794979813&Signature=sig", "http_headers": {"User-Agent": "Mozilla/5.0", "Accept": "text/html", "Accept-Language": "en-us,en;q=0.5", "Sec-Fetch-Mode": "navigate"}}
+  ]
+}

@@ -11,6 +11,7 @@ import {
   type IntersectionEntryLike,
   isTrackerApi,
   MAX_TRACKED_VIDEOS,
+  MENU_VIDEO_MS,
   type ObserverLike,
   type ResizeEntryLike,
   TRACKER_KEY,
@@ -144,7 +145,7 @@ describe('VideoTracker: which videos get a button', () => {
   it.each<[string, VideoProps, [number, number, number] | undefined, boolean]>([
     ['DRM (mediaKeys)', { mediaKeys: {} }, undefined, false],
     ['live (Infinity)', { duration: Number.POSITIVE_INFINITY }, undefined, false],
-    ['a camera or call stream (srcObject)', { srcObject: {} }, undefined, false],
+    ['a camera or call stream (srcObject)', { srcObject: { getTracks: () => [] } }, undefined, false],
     ['too narrow', {}, [199, 360, 1], false],
     ['too low', {}, [640, 111, 1], false],
     ['less than half visible', {}, [640, 360, 0.49], false],
@@ -154,6 +155,8 @@ describe('VideoTracker: which videos get a button', () => {
     ['without any source', { src: '', readyState: 0 }, undefined, false],
     ['MSE (blob:)', { src: 'blob:https://www.example.com/1234' }, undefined, true],
     ['a source known only by its metadata', { src: '', readyState: 1 }, undefined, true],
+    // Media Source Extensions from a worker (Facebook): a MediaSourceHandle, no currentSrc.
+    ['MSE in a worker (a MediaSourceHandle as srcObject)', { src: '', readyState: 4, srcObject: {} }, undefined, true],
   ])('%s', async (_name, props, size, meaningful) => {
     const v = makeVideo(props);
     document.body.append(v);
@@ -163,6 +166,7 @@ describe('VideoTracker: which videos get a button', () => {
     const meta = tracker.videos()[0]!.meta;
     expect(meta.meaningful).toBe(meaningful);
     expect(isFrameVideoMeta(meta)).toBe(true);
+    if (props.srcObject && typeof (props.srcObject as { getTracks?: unknown }).getTracks !== 'function') expect(meta.mse).toBe(true);
   });
 
   it('marks DRM after an encrypted or waitingforkey event and checks again at click time', async () => {
@@ -324,6 +328,102 @@ describe('VideoTracker: which videos get a button', () => {
   });
 });
 
+describe('VideoTracker: decorative videos (§2.5, amended 2026-11-18)', () => {
+  const LOOP: VideoProps = { muted: true, loop: true, duration: 12, src: 'blob:https://www.tiktok.com/1' };
+  const curatedHost = (url: string) => new URL(url).hostname === 'www.tiktok.com';
+
+  it('takes a muted short loop without controls as a video on a curated site’s host, feeds included', async () => {
+    const v = makeVideo(LOOP);
+    document.body.append(v);
+    const { tracker, show, types } = setup({ curatedHost, topFrame: true, location: () => 'https://www.tiktok.com/foryou' });
+    tracker.start();
+    show(v, 405, 720);
+    await flush();
+    const [t] = tracker.videos();
+    expect(t?.meta).toMatchObject({ decorative: false, meaningful: true });
+    expect(t?.quiet).toBe(false);
+    expect(types()).toContain('downex:video-ui');
+  });
+
+  it('asks the host once per address, and follows a navigation to another host', async () => {
+    const v = makeVideo(LOOP);
+    document.body.append(v);
+    let url = 'https://www.tiktok.com/foryou';
+    const asked = vi.fn(curatedHost);
+    const { tracker, show } = setup({ curatedHost: asked, topFrame: true, location: () => url });
+    tracker.start();
+    show(v, 405, 720);
+    tracker.videos();
+    tracker.videos();
+    expect(asked).toHaveBeenCalledTimes(1);
+    url = 'https://landing.example/';
+    expect(tracker.videos()[0]?.meta.decorative).toBe(true);
+    expect(asked).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the rule in an embedded frame on a curated host: a landing page’s background player is quiet', async () => {
+    const v = makeVideo({ ...LOOP, duration: 15, src: 'blob:https://player.vimeo.com/1' });
+    document.body.append(v);
+    const vimeoPlayer = (url: string) => new URL(url).hostname === 'player.vimeo.com';
+    const { tracker, show, types } = setup({
+      curatedHost: vimeoPlayer,
+      topFrame: false,
+      location: () => 'https://player.vimeo.com/video/76979871?background=1&autoplay=1&loop=1&muted=1',
+    });
+    tracker.start();
+    show(v, 1280, 720);
+    await vi.advanceTimersByTimeAsync(3000);
+    const [t] = tracker.videos();
+    expect(t?.meta).toMatchObject({ decorative: true, meaningful: false });
+    expect(t?.quiet).toBe(true);
+    expect(types()).toEqual([]);
+  });
+
+  it('keeps it quiet elsewhere: not meaningful, and the UI is asked for only after a trusted pointer movement', async () => {
+    const v = makeVideo({ ...LOOP, src: 'https://cdn.example.com/loop.mp4' });
+    document.body.append(v);
+    const trusted = new WeakSet<Event>();
+    const { tracker, show, types, reports } = setup({ curatedHost, location: () => 'https://landing.example/', isTrusted: (e) => trusted.has(e) });
+    tracker.start();
+    show(v);
+    await vi.advanceTimersByTimeAsync(3000);
+    const [t] = tracker.videos();
+    expect(t?.meta).toMatchObject({ decorative: true, meaningful: false });
+    expect(t?.quiet).toBe(true);
+    // A landing page nobody points at costs nothing: no state, UI or report.
+    expect(types()).toEqual([]);
+    expect(reports()).toEqual([]);
+    // A page's own synthetic event is not the user.
+    document.dispatchEvent(new Event('pointermove'));
+    await flush();
+    expect(types()).toEqual([]);
+    const move = new Event('pointermove');
+    trusted.add(move);
+    document.dispatchEvent(move);
+    await flush();
+    expect(types()).toEqual(['downex:overlay-state', 'downex:video-ui']);
+  });
+
+  it('is never quiet when protected, live, small or hidden', async () => {
+    const cases: [VideoProps, [number, number, number]][] = [
+      [{ ...LOOP, mediaKeys: {} }, [640, 360, 1]],
+      [{ ...LOOP, duration: Number.POSITIVE_INFINITY }, [640, 360, 1]],
+      [LOOP, [150, 100, 1]],
+      [LOOP, [640, 360, 0.2]],
+    ];
+    for (const [props, size] of cases) {
+      document.body.replaceChildren();
+      const v = makeVideo(props);
+      document.body.append(v);
+      const { tracker, show } = setup({ location: () => 'https://landing.example/' });
+      tracker.start();
+      show(v, ...size);
+      expect(tracker.videos()[0]?.quiet).toBe(false);
+      tracker.destroy();
+    }
+  });
+});
+
 describe('VideoTracker: messages', () => {
   it('sends nothing on a page without a video worth a button', async () => {
     const tiny = makeVideo();
@@ -468,6 +568,176 @@ describe('VideoTracker: messages', () => {
   it('answers undefined when the extension is gone', async () => {
     const { tracker } = setup({ send: async () => Promise.reject(new Error('Extension context invalidated.')) });
     expect(await tracker.api.send({ type: 'downex:overlay-state' })).toBeUndefined();
+  });
+});
+
+describe('VideoTracker: "Show Downex download panel" (§5.1 "Menu")', () => {
+  /** A right-click on `target`; trusted unless said otherwise (the tracker's isTrusted is substituted). */
+  const rightClick = (target: Element, trusted = true) => {
+    const e = new MouseEvent('contextmenu', { bubbles: true, composed: true, cancelable: true });
+    Object.defineProperty(e, 'fake-trusted', { value: trusted });
+    target.dispatchEvent(e);
+    return e;
+  };
+  const isTrusted = (e: Event) => (e as Event & { 'fake-trusted'?: boolean })['fake-trusted'] === true;
+
+  it('opens the panel of the right-clicked video, decorative and on a hidden site included', async () => {
+    const loop = makeVideo({ muted: true, loop: true, duration: 8, src: 'blob:https://www.example.com/1' });
+    document.body.append(loop);
+    const s = setup({ isTrusted }, { button: false, host: 'www.example.com' });
+    s.tracker.start();
+    s.show(loop, 160, 90);
+    await flush();
+    // Not worth a button: no UI asked.
+    expect(s.types()).not.toContain('downex:video-ui');
+    expect(await s.tracker.showPanel()).toBe(false);
+    const e = rightClick(loop);
+    expect(e.defaultPrevented).toBe(false);
+    expect(await s.tracker.showPanel()).toBe(true);
+    const id = s.tracker.api.requested!;
+    expect(s.tracker.videos().find((v) => v.id === id)?.el).toBe(loop);
+    expect(s.events).toContainEqual({ type: 'open', id });
+    await flush();
+    expect(s.types()).toContain('downex:video-ui');
+    // Taken once: the next menu choice needs another right-click.
+    expect(await s.tracker.showPanel()).toBe(false);
+    // Its panel closed: let go, and the UI hears it after the close.
+    s.events.length = 0;
+    s.tracker.api.release(id);
+    expect(s.tracker.api.requested).toBeUndefined();
+    expect(s.events).toEqual([]);
+    await flush();
+    expect(s.events.map((x) => x.type)).toEqual(['state', 'videos']);
+  });
+
+  it('keeps only trusted right-clicks on a video, for 60 s, and only while it is in the page', async () => {
+    const v = makeVideo();
+    const other = document.createElement('div');
+    document.body.append(v, other);
+    const s = setup({ isTrusted });
+    s.tracker.start();
+    rightClick(v, false);
+    expect(await s.tracker.showPanel()).toBe(false);
+    rightClick(v);
+    rightClick(other);
+    expect(await s.tracker.showPanel()).toBe(false);
+    rightClick(v);
+    await vi.advanceTimersByTimeAsync(MENU_VIDEO_MS + 1);
+    expect(await s.tracker.showPanel()).toBe(false);
+    rightClick(v);
+    v.remove();
+    expect(await s.tracker.showPanel()).toBe(false);
+  });
+
+  it('takes the tracked video under the pointer when the event names no video (a closed shadow root)', async () => {
+    const v = makeVideo();
+    v.getBoundingClientRect = () => ({ left: 10, top: 10, right: 330, bottom: 190, width: 320, height: 180 }) as DOMRect;
+    const host = document.createElement('div');
+    document.body.append(v, host);
+    const s = setup({ isTrusted });
+    s.tracker.start();
+    const at = (x: number, y: number) => {
+      const e = new MouseEvent('contextmenu', { bubbles: true, composed: true, clientX: x, clientY: y });
+      Object.defineProperty(e, 'fake-trusted', { value: true });
+      host.dispatchEvent(e);
+    };
+    at(500, 500);
+    expect(await s.tracker.showPanel()).toBe(false);
+    at(100, 100);
+    expect(await s.tracker.showPanel()).toBe(true);
+    expect(s.tracker.videos().find((x) => x.id === s.tracker.api.requested)?.el).toBe(v);
+  });
+
+  it('finds a video in an open shadow root and makes room at the cap', async () => {
+    for (let i = 0; i < MAX_TRACKED_VIDEOS; i++) document.body.append(makeVideo());
+    const host = document.createElement('div');
+    document.body.append(host);
+    const inner = makeVideo({ src: 'blob:https://www.example.com/2' });
+    host.attachShadow({ mode: 'open' }).append(inner);
+    const s = setup({ isTrusted });
+    s.tracker.start();
+    expect(s.tracker.trackedCount).toBe(MAX_TRACKED_VIDEOS);
+    rightClick(inner);
+    expect(await s.tracker.showPanel()).toBe(true);
+    expect(s.tracker.trackedCount).toBe(MAX_TRACKED_VIDEOS);
+    expect(s.tracker.videos().find((x) => x.id === s.tracker.api.requested)?.el).toBe(inner);
+  });
+
+  it('answers false and asks again next time when the overlay UI could not be put into the frame', async () => {
+    const v = makeVideo();
+    document.body.append(v);
+    // As the background answers on a hidden site before it knew of the menu's request.
+    let uiOk = false;
+    const sent: string[] = [];
+    const s = setup({
+      isTrusted,
+      send: async (msg) => {
+        sent.push(msg.type);
+        if (msg.type === 'downex:overlay-state') return { button: false, host: 'www.example.com' };
+        if (msg.type === 'downex:video-ui') return { ok: uiOk };
+        return undefined;
+      },
+    });
+    s.tracker.start();
+    s.show(v);
+    await flush();
+    rightClick(v);
+    expect(await s.tracker.showPanel()).toBe(false);
+    expect(s.tracker.api.requested).toBeUndefined();
+    expect(s.events.some((e) => e.type === 'open')).toBe(false);
+    expect(sent.filter((t) => t === 'downex:video-ui')).toHaveLength(1);
+    // The next menu choice asks again, and opens the panel once the UI is in.
+    uiOk = true;
+    rightClick(v);
+    expect(await s.tracker.showPanel()).toBe(true);
+    expect(sent.filter((t) => t === 'downex:video-ui')).toHaveLength(2);
+    const id = s.tracker.api.requested!;
+    expect(s.events).toContainEqual({ type: 'open', id });
+    // Once in, the UI is not asked for again.
+    s.tracker.api.release(id);
+    rightClick(v);
+    expect(await s.tracker.showPanel()).toBe(true);
+    expect(sent.filter((t) => t === 'downex:video-ui')).toHaveLength(2);
+  });
+
+  it('finds an untracked video in a closed shadow root under the pointer when the menu item is chosen', async () => {
+    const host = document.createElement('player-shell');
+    document.body.append(host);
+    const root = host.attachShadow({ mode: 'closed' });
+    const inner = makeVideo({ src: 'blob:https://www.example.com/3' });
+    inner.getBoundingClientRect = () => ({ left: 0, top: 0, right: 640, bottom: 360, width: 640, height: 360 }) as DOMRect;
+    root.append(inner);
+    const s = setup({ isTrusted, shadowRoot: (el) => (el === host ? root : el.shadowRoot) });
+    s.tracker.start();
+    // Never played, so never tracked: the event names only the host.
+    expect(s.tracker.trackedCount).toBe(0);
+    const at = (x: number, y: number) => {
+      const e = new MouseEvent('contextmenu', { bubbles: true, composed: true, clientX: x, clientY: y });
+      Object.defineProperty(e, 'fake-trusted', { value: true });
+      host.dispatchEvent(e);
+    };
+    at(100, 100);
+    expect(await s.tracker.showPanel()).toBe(true);
+    expect(s.tracker.videos().find((x) => x.id === s.tracker.api.requested)?.el).toBe(inner);
+    // Beside it, nothing.
+    s.tracker.api.release(s.tracker.api.requested!);
+    at(900, 500);
+    expect(await s.tracker.showPanel()).toBe(false);
+  });
+
+  it('is answered through onFrameMessage too, and never after the extension went away', async () => {
+    const v = makeVideo();
+    document.body.append(v);
+    const s = setup({ isTrusted });
+    s.tracker.start();
+    rightClick(v);
+    s.tracker.onFrameMessage({ type: 'downex:show-panel' });
+    expect(s.tracker.api.requested).toBeDefined();
+    await flush();
+    rightClick(v);
+    s.tracker.destroy();
+    expect(await s.tracker.showPanel()).toBe(false);
+    expect(s.tracker.api.requested).toBeUndefined();
   });
 });
 

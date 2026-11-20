@@ -28,6 +28,9 @@ const minBatchInterval = 250 * time.Millisecond
 // ends with a tools event, and a later batch ends with one after the status changed. Once an
 // automatic update check has run it streams its result (docs/M6-SPEC.md §4): the first batch
 // ends with an update event, and a later batch ends with one after each automatic check.
+// It streams Polite mode's status (docs/POLITE-SPEC.md §7): the first batch ends with a
+// polite event (after tools and update), and a later batch ends with one after the status
+// changed.
 //
 // Watch returns when ctx ends, send fails, or the manager shuts down, which ends the
 // stream with CodeUnavailable after a last batch. A slow send only delays this
@@ -109,6 +112,7 @@ func (m *Manager) snapshot(ctx context.Context, filter map[model.DownloadID]bool
 		}
 		tools := m.toolsEvent() // read outside m.mu: Config.Tools has locks of its own
 		upd := m.updateEvent()
+		pol := m.politeEvent()
 		out := make([]*downexv1.Event, len(all))
 		for i, d := range all {
 			out[i] = &downexv1.Event{Kind: &downexv1.Event_Snapshot{Snapshot: d}}
@@ -127,7 +131,7 @@ func (m *Manager) snapshot(ctx context.Context, filter map[model.DownloadID]bool
 		if upd != nil {
 			out = append(out, upd)
 		}
-		return out, nil
+		return append(out, pol), nil
 	}
 	ids := make([]model.DownloadID, 0, len(filter))
 	for id := range filter {
@@ -150,8 +154,9 @@ func (m *Manager) snapshot(ctx context.Context, filter map[model.DownloadID]bool
 }
 
 // batchEvents renders pending changes as events: downloads, then queues, then
-// post-queue actions, each ordered by id, then the tools status, then the update check. An update of a download
-// or queue that no longer exists is dropped: its removal is (or was) reported.
+// post-queue actions, each ordered by id, then the tools status, then the update check,
+// then Polite mode's status. An update of a download or queue that no longer exists is
+// dropped: its removal is (or was) reported.
 func (m *Manager) batchEvents(b pendingBatch) []*downexv1.Event {
 	if b.empty() {
 		return nil
@@ -206,6 +211,9 @@ func (m *Manager) batchEvents(b pendingBatch) []*downexv1.Event {
 	}
 	if b.update != nil {
 		out = append(out, &downexv1.Event{Kind: &downexv1.Event_Update{Update: b.update}})
+	}
+	if b.polite {
+		out = append(out, m.politeEvent())
 	}
 	return out
 }

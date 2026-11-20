@@ -122,6 +122,14 @@
 
         <!-- Downloads: what was handed to Downex and how it was answered; no live progress. -->
         <section id="panel-downloads" class="panel" role="tabpanel" aria-labelledby="tab-downloads" hidden>
+          <!-- Downloads that failed in the browser and Downex can finish (BROWSER-SPEC §6); shown only
+               while it has rows and the relay serves rescues. -->
+          <section id="failed-section" class="failed" aria-labelledby="failed-heading" hidden>
+            <div class="pp-sec">
+              <h2 id="failed-heading">Failed in the browser</h2>
+            </div>
+            <ol id="failed" class="history" aria-labelledby="failed-heading"></ol>
+          </section>
           <div class="pp-sec">
             <h2 id="history-heading">Recent hand-offs</h2>
             <span id="history-scope" class="aside"></span>

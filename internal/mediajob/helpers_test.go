@@ -228,30 +228,44 @@ type fakeAssembler struct {
 	mu        sync.Mutex
 	calls     int
 	inputs    []remux.Input
+	windows   []remux.Window
 	container string
+	// cut, when set, answers a call with its window instead of joining (a part's
+	// assembly: remux.ErrNoKeyframe, a result).
+	cut func(w remux.Window) (remux.Result, error)
 }
 
-func (a *fakeAssembler) assemble(ctx context.Context, inputs []remux.Input, outPath string) (string, error) {
+func (a *fakeAssembler) assemble(ctx context.Context, inputs []remux.Input, outPath string, w remux.Window) (remux.Result, error) {
 	a.mu.Lock()
 	a.calls++
 	a.inputs = append([]remux.Input(nil), inputs...)
+	a.windows = append(a.windows, w)
 	container := cmp.Or(a.container, "mp4")
+	cut := a.cut
 	a.mu.Unlock()
+	res := remux.Result{Container: container, Exact: true}
+	if cut != nil {
+		var err error
+		if res, err = cut(w); err != nil {
+			return remux.Result{}, err
+		}
+		res.Container = container
+	}
 	var out bytes.Buffer
 	for _, in := range inputs {
 		paths := in.Fragments
-		if in.Container == "fmp4" {
+		if in.Container == "fmp4" && in.Init != "" {
 			paths = append([]string{in.Init}, paths...)
 		}
 		for _, p := range paths {
 			b, err := os.ReadFile(p)
 			if err != nil {
-				return "", err
+				return remux.Result{}, err
 			}
 			out.Write(b)
 		}
 	}
-	return container, os.WriteFile(outPath, out.Bytes(), 0o600)
+	return res, os.WriteFile(outPath, out.Bytes(), 0o600)
 }
 
 func (a *fakeAssembler) callCount() int {

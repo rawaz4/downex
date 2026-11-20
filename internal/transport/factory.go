@@ -22,6 +22,7 @@ type HTTPFactory struct {
 	base     *http.Transport // template cloned by NewSlot; never used for requests
 	proxyTLS *tls.Config     // TLS with HTTPS proxies (shared by the slots' routers)
 	now      func() time.Time
+	peers    *PeerTable // every slot's live connections (docs/POLITE-SPEC.md rule 1)
 }
 
 var _ Factory = (*HTTPFactory)(nil)
@@ -87,8 +88,12 @@ func newHTTPFactory(opts HTTPOptions, roots *x509.CertPool) (*HTTPFactory, error
 		NextProtos:         []string{"http/1.1"},
 		ClientSessionCache: tls.NewLRUClientSessionCache(tlsSessionCacheSize),
 	}
-	return &HTTPFactory{opts: opts, resolver: resolver, base: base, proxyTLS: proxyTLS, now: time.Now}, nil
+	return &HTTPFactory{opts: opts, resolver: resolver, base: base, proxyTLS: proxyTLS, now: time.Now, peers: NewPeerTable()}, nil
 }
+
+// Peers returns the table of the remote addresses the factory's slots hold live
+// connections to (Polite mode's anchors).
+func (f *HTTPFactory) Peers() *PeerTable { return f.peers }
 
 // Options returns the effective options after defaults were applied.
 func (f *HTTPFactory) Options() HTTPOptions { return f.opts }
@@ -97,7 +102,7 @@ func (f *HTTPFactory) Options() HTTPOptions { return f.opts }
 func (f *HTTPFactory) NewSlot() Fetcher {
 	t := f.base.Clone()
 	dialer := &net.Dialer{Timeout: f.opts.DialTimeout, KeepAlive: tcpKeepAlive}
-	rt := newRouter(f.resolver, dialer, f.opts, f.proxyTLS)
+	rt := newRouter(f.resolver, dialer, f.opts, f.proxyTLS, f.peers)
 	t.Proxy = rt.proxyFunc
 	t.DialContext = pinnedDial(rt.dialContext) // direct dials keep a WithNetwork family
 	return &httpFetcher{

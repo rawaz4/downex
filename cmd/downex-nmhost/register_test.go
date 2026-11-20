@@ -132,8 +132,8 @@ func TestRegisterWritesManifestsAndKeys(t *testing.T) {
 					t.Errorf("%s manifest: %+v", b, m)
 				}
 				if b == "firefox" {
-					// the permanent AMO ID first, then the one of copies loaded by hand before the listing
-					if !slices.Equal(m.AllowedExtensions, []string{"extension@downex.app", "browser@downex.local"}) || m.AllowedOrigins != nil {
+					// the permanent AMO ID only: browser@downex.local is not an ID Downex owns
+					if !slices.Equal(m.AllowedExtensions, []string{"extension@downex.app"}) || m.AllowedOrigins != nil {
 						t.Errorf("firefox manifest: %+v", m)
 					}
 				} else if !slices.Equal(m.AllowedOrigins, []string{"chrome-extension://" + testChromeID + "/"}) || m.AllowedExtensions != nil {
@@ -389,6 +389,50 @@ func TestRegisterKeep(t *testing.T) {
 	if !strings.Contains(out.String(), "Nothing to change") {
 		t.Errorf("a second --keep changed something:\n%s", out.String())
 	}
+
+	// A manifest written by an earlier Downex that allowed browser@downex.local (an ID Downex
+	// does not own): --keep drops it, keeping the other IDs, and leaves the result alone after.
+	legacy := o
+	legacy.firefoxIDs = []string{"extension@downex.app", "browser@downex.local", "kept@example.org"}
+	if err := writeFileAtomic(firefox, manifestFor("firefox", legacy)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := register(inst, k, &out); err != nil {
+		t.Fatal(err)
+	}
+	if m := readManifest(t, firefox); !slices.Equal(m.AllowedExtensions, []string{"extension@downex.app", "kept@example.org"}) {
+		t.Errorf("--keep on a manifest allowing browser@downex.local: firefox %+v", m)
+	}
+	// As many IDs after the drop as before (one dropped, one added) is a change too.
+	legacy.firefoxIDs = []string{"browser@downex.local"}
+	if err := writeFileAtomic(firefox, manifestFor("firefox", legacy)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := register(inst, k, &out); err != nil {
+		t.Fatal(err)
+	}
+	if m := readManifest(t, firefox); !slices.Equal(m.AllowedExtensions, []string{"extension@downex.app"}) {
+		t.Errorf("--keep replacing browser@downex.local: firefox %+v", m)
+	}
+	out.Reset()
+	if err := register(inst, k, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Nothing to change") {
+		t.Errorf("--keep after dropping browser@downex.local changed something:\n%s", out.String())
+	}
+	// Named with --firefox-extension-id it is still written: the user's choice, never a default.
+	named := k
+	named.firefoxIDs = []string{"extension@downex.app", "browser@downex.local"}
+	out.Reset()
+	if err := register(inst, named, &out); err != nil {
+		t.Fatal(err)
+	}
+	if m := readManifest(t, firefox); !slices.Equal(m.AllowedExtensions, named.firefoxIDs) {
+		t.Errorf("--keep --firefox-extension-id browser@downex.local: firefox %+v", m)
+	}
 	// Without --keep, register writes exactly the built-in IDs again, as before.
 	out.Reset()
 	if err := register(inst, o, &out); err != nil {
@@ -506,10 +550,10 @@ func TestRegisterCommandRefusesWithoutChromeID(t *testing.T) {
 			t.Fatalf("bad firefox id (%s): exit %d, stderr %s", browsers, code, stderr.String())
 		}
 	}
-	// Firefox: the AMO ID and the hand-loaded copies' ID by default, the flag's IDs instead.
+	// Firefox: the AMO ID by default, the flag's IDs instead.
 	stdout.Reset()
 	if code := runRegister([]string{"--browsers", "firefox", "--dry-run"}, &stdout, &stderr); code != exitOK ||
-		!strings.Contains(stdout.String(), "Firefox add-on IDs: extension@downex.app, browser@downex.local\n") {
+		!strings.Contains(stdout.String(), "Firefox add-on IDs: extension@downex.app\n") {
 		t.Fatalf("default firefox ids: exit %d\n%s%s", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()

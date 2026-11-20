@@ -189,8 +189,19 @@ export const MAX_HIDDEN_SITE_CHARS = 253;
 export interface VideoOptions {
   /** "Show a Download button over videos": YouTube and every other site. */
   videoButton: boolean;
-  /** "Send my sign-in cookies when a video needs it": probe and add carry the page's Cookie. */
+  /**
+   * "Use my sign-in for videos that need it" (SITE-MEDIA-SPEC §6.3): a YouTube probe or add the
+   * user clicked that Downex answers `auth_required` is asked once more with the site's cookies.
+   * Off by default since the owner's "never rely on login" (2026-11-18); a stored value is kept.
+   * Never used for any other site.
+   */
   useSignInForVideos: boolean;
+  /**
+   * "Watch videos as they play" (SITE-MEDIA-SPEC §2.9), on by default: each tab's played media
+   * files are remembered (addresses, sizes, never contents) so that Download saves the video the
+   * user sees. Off: nothing is recorded, and panels have no Played source.
+   */
+  watchPlayed: boolean;
   /**
    * "Prepare video qualities while you watch": after 1.5 s on a video of a site that allows it
    * in a visible tab, its qualities are got in the background, so Download shows them at once
@@ -208,6 +219,7 @@ export interface VideoOptions {
 export const DEFAULT_VIDEO_OPTIONS: Readonly<VideoOptions> = Object.freeze({
   videoButton: true,
   useSignInForVideos: false,
+  watchPlayed: true,
   videoPrefetch: true,
   hiddenSites: Object.freeze([]) as readonly string[] as string[],
 });
@@ -225,7 +237,7 @@ function hiddenSitePattern(entry: string): string | undefined {
 /** Stored video options; a missing or malformed field reads as its default. */
 export function parseVideoOptions(raw: unknown): VideoOptions {
   const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
-  const flag = (k: 'videoButton' | 'useSignInForVideos' | 'videoPrefetch'): boolean => {
+  const flag = (k: 'videoButton' | 'useSignInForVideos' | 'videoPrefetch' | 'watchPlayed'): boolean => {
     const v = r[k];
     return typeof v === 'boolean' ? v : DEFAULT_VIDEO_OPTIONS[k];
   };
@@ -240,6 +252,7 @@ export function parseVideoOptions(raw: unknown): VideoOptions {
   return {
     videoButton: flag('videoButton'),
     useSignInForVideos: flag('useSignInForVideos'),
+    watchPlayed: flag('watchPlayed'),
     videoPrefetch: flag('videoPrefetch'),
     hiddenSites: [...hiddenSites],
   };

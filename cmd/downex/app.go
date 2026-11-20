@@ -38,13 +38,16 @@ Usage:
   downex media <manifest-url> [--list [--json]] [--video ID] [--audio ID] [-o dir] [--name file]
                [-H "Name: value"]... [--queue q] [--paused] [--wait]
   downex media --site <page-url> [--list [--json]] [--video ID] [--audio ID] [-o dir] [--name file]
-               [-H "Cookie: ..."] [-H "Referer: url"] [--queue q] [--paused] [--wait]
+               [-H "Cookie: ..." [--cookie-domain d]] [-H "Referer: url"] [--queue q] [--paused] [--wait]
   downex ls [--json]
   downex watch [id...]
   downex pause <id>
   downex resume <id> [--restart [--replace]] [-c connections] [--limit rate] [--wait]
   downex set <id> [--limit rate] [-c connections]
   downex rm <id> [--delete-file]
+  downex renew <id> <url> [-H "Name: value"]... [--name-ok] [--restart-if-needed] [--later] [--wait]
+  downex rescue <partial-file> <url> [-H "Name: value"]... [--name file] [-c connections] [--limit rate]
+                [--queue q] [--paused] [--wait]
   downex confirm <id> [-o dir] [--name file] [--video ID] [--audio ID] [--queue q] [--later] [--wait]
   downex queue ls|create|update|rm|start|stop|move|schedule ...   (downex help queue)
   downex cancel-post <queue>
@@ -58,22 +61,26 @@ Usage:
                   [--progress-window on|off] [--complete-dialog on|off] [--clipboard on|off]
                   [--mark-files on|off] [--av-scan on|off] [--av-command path] [--av-args args]
                   [--update-feed url] [--auto-update on|off] [--site-media on|off]
-                  [--tools-auto-update on|off] [--tools-channel stable|nightly] [--json]
+                  [--tools-auto-update on|off] [--tools-channel stable|nightly] [--check-files on|off]
+                  [--renew-links auto|ask|off] [--polite on|off] [--polite-target ms] [--json]
   downex daemon start|stop|status [--json]
 
   downex get <url> [-o dir] [-c connections] [--limit rate] [-H "Name: value"]... [--name file] [--restart]
   downex resume <id> --local [--restart [--replace]] [-c connections] [--limit rate]
+  downex renew <id> <url> --local [-H "Name: value"]... [--name-ok] [--restart-if-needed] [--later]
   downex rm <id> --local [--delete-file]
   downex info <id> [--json]
+  downex check <file|id> [--json]
   downex help [command]
   downex --version
 
-add, media, ls, watch, pause, resume, set, rm, confirm, queue, cancel-post, proxy, login, update,
+add, media, ls, watch, pause, resume, set, rm, renew, rescue, confirm, queue, cancel-post, proxy, login, update,
 tools, settings and daemon talk to downexd, the per-user background process that runs downloads. They
 start it when it is not running (it is looked up next to downex, in Downex.app the menu-bar agent
 first, or at $DOWNEX_DAEMON), except ls, which then reads the download database directly, and
 "daemon stop" and "daemon status". info reads the database and adds the live connections of a
-download that a running downexd runs.
+download that a running downexd runs. check reads a file (or a completed download's file) and says
+whether it is what its name says; it never starts downexd and never changes the file.
 
 Every download belongs to a queue (--queue takes a queue id or name; default: the main queue,
 which always runs). Other queues start their downloads only while they run: "downex queue start",
@@ -87,8 +94,16 @@ resolves it with yt-dlp, downloaded with Deno on first use ("downex tools" shows
 saves the video as one .mp4; --list shows one MP4 video per quality (4K, 1080p, ...) and
 --video picks one.
 
-get runs one download in the foreground without downexd, for scripting; resume and rm
-with --local do the same for an existing download (only while downexd is not running).
+get runs one download in the foreground without downexd, for scripting; resume, renew and
+rm with --local do the same for an existing download (only while downexd is not running).
+
+A download whose link stopped working (expired, revoked, or now leading to a web page) fails
+as "link expired" and keeps its data. renew gives it a new link: the new server's bytes are
+compared with those already downloaded first, and it continues only when they are the same.
+
+rescue finishes a download a browser left unfinished from its partial file (.crdownload or
+.part): downexd checks that the server still has the same file, then continues from the bytes
+already saved, in the partial file's folder.
 
 Global flags (before the command; the commands accept them too):
   --db path        download database (default: <user config directory>/Downex/downex.db);
@@ -241,8 +256,14 @@ func (a *app) command(name string) func(context.Context, []string) error {
 		return a.watch
 	case "info":
 		return a.info
+	case "check":
+		return a.check
 	case "rm", "remove":
 		return a.rm
+	case "renew":
+		return a.renew
+	case "rescue":
+		return a.rescue
 	case "confirm":
 		return a.confirm
 	case "set":

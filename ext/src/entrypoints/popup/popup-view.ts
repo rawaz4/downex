@@ -5,6 +5,7 @@
 
 import type { HandoffRecord } from '../../lib/history';
 import type { VideoOptions } from '../../lib/options-form';
+import type { PoliteState } from '../../lib/protocol';
 import { type CaptureRules, withSiteExcluded } from '../../lib/rules';
 import {
   addedTone,
@@ -16,7 +17,7 @@ import {
   recordResult,
   recordResultDetail,
 } from '../../lib/ui-format';
-import type { QualityRow } from '../../lib/video-picker';
+import { type QualityRow, RECOMMENDED_TEXT } from '../../lib/video-picker';
 import type { SelectMenuOption } from './select-menu';
 
 /** A connection label drawn as a headline, its reason and the host-missing or host-refused fix. */
@@ -128,13 +129,20 @@ export function daemonLine(connection: Label | undefined, daemon: Label): { text
   return daemon;
 }
 
-/** The chip's tooltip: the relay's line, then the daemon's ("Connected (Downex 0.7.3). Daemon running: …"). */
-export function statusTooltip(connection: Label | undefined, daemon: Label | undefined): string {
+/** The tooltip's sentence while Polite mode slows downloads (docs/POLITE-SPEC.md §8). */
+export const POLITE_SLOWED = 'Polite: slowed to keep the line smooth.';
+
+/**
+ * The chip's tooltip: the relay's line, then the daemon's ("Connected (Downex 0.7.3). Daemon
+ * running: …"), then Polite mode's while it slows downloads. The chip's text never changes for it.
+ */
+export function statusTooltip(connection: Label | undefined, daemon: Label | undefined, polite?: PoliteState): string {
   if (!connection) return 'Checking connection…';
   const hint = setupHint(connection);
   const relay = hint ? connection.text.slice(0, -hint.length).trimEnd() : connection.text;
   if (!daemon) return relay;
-  return `${relay.replace(/[.]$/, '')}. ${daemonLine(connection, daemon).text}`;
+  const line = `${relay.replace(/[.]$/, '')}. ${daemonLine(connection, daemon).text}`;
+  return polite === 'slowed' ? `${line.replace(/[.]$/, '')}. ${POLITE_SLOWED}` : line;
 }
 
 /** What replaces the page's videos while Downex cannot be reached (`popup-offline.png`). */
@@ -216,6 +224,8 @@ export function addedMark(text: string): { tone: MarkTone; glyph: MarkGlyph } {
 /** A history row's mark, matching recordResult's text (and addedMark for the same message). */
 export function handoffMark(rec: HandoffRecord): { tone: MarkTone; glyph: MarkGlyph } {
   if (!rec.ok) return { tone: 'error', glyph: 'failed' };
+  if (rec.source === 'rescue') return { tone: 'ok', glyph: 'inbox' };
+  if (rec.renewCheck) return { tone: 'info', glyph: 'awaiting' };
   if (rec.awaiting === false) return { tone: 'ok', glyph: 'inbox' };
   if (rec.duplicate) return { tone: 'warn', glyph: 'copy' };
   return { tone: 'info', glyph: 'awaiting' };
@@ -240,7 +250,15 @@ const PILL_TEXT: Readonly<Record<MarkTone, string>> = {
   error: 'Not sent',
 };
 
+/** The pill of a hand-off Downex checks against its downloads whose link expired (DESKTOP-SPEC §10). */
+export const RENEW_CHECK_PILL = 'Checking in Downex';
+export const RENEW_CHECK_TITLE = 'Downex is checking whether this link continues a stopped download.';
+
 export function handoffPill(rec: HandoffRecord): HandoffPill {
+  if (rec.ok && rec.source === 'rescue') {
+    return { text: recordResult(rec), tone: 'ok', title: `${recordResult(rec)}. ${recordResultDetail(rec) ?? ''}`.trim(), note: '' };
+  }
+  if (rec.ok && rec.renewCheck) return { text: RENEW_CHECK_PILL, tone: 'info', title: RENEW_CHECK_TITLE, note: '' };
   const { tone } = handoffMark(rec);
   const result = recordResult(rec);
   const detail = recordResultDetail(rec);
@@ -281,15 +299,29 @@ export function shortQuality(name: string): string {
   return name.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim() || name;
 }
 
-/** A video card's sub-line: "YouTube · up to 4K · MP4", "Vimeo · Embedded · MP4". */
-export function videoSubline(site: string, embedded: boolean, best: string): string {
-  return [site, embedded ? 'Embedded' : '', best ? `up to ${shortQuality(best)}` : '', 'MP4'].filter((p) => p !== '').join(' · ');
+/**
+ * What a video row's list note says beyond the MP4 note, which the quality select says (siteNote,
+ * SITE-MEDIA-SPEC §2.8, §6.3: the sign-in used, the browser fetch); "" when nothing.
+ */
+export function listNoteExtra(note: string, mp4Note: string): string {
+  return note.replace(mp4Note, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * A video card's sub-line: "YouTube · up to 4K · MP4", "Vimeo · Embedded · MP4"; an audio page's
+ * "SoundCloud · M4A" (SITE-MEDIA-SPEC §3.13: `fileType`, no best quality).
+ */
+export function videoSubline(site: string, embedded: boolean, best: string, fileType = 'MP4'): string {
+  return [site, embedded ? 'Embedded' : '', best ? `up to ${shortQuality(best)}` : '', fileType].filter((p) => p !== '').join(' · ');
 }
 
 /** The quality rows as the select lists them: the class's name, then its codecs and size. */
-export function qualityOptions(rows: readonly Pick<QualityRow, 'id' | 'quality' | 'codecs' | 'size' | 'picture'>[]): SelectMenuOption[] {
+export function qualityOptions(
+  rows: readonly (Pick<QualityRow, 'id' | 'quality' | 'codecs' | 'size' | 'picture'> & { recommended?: boolean })[],
+): SelectMenuOption[] {
   return rows.map((r) => {
-    const o: { value: string; label: string; detail?: string; meta?: string; title?: string } = { value: r.id, label: r.quality };
+    const o: { value: string; label: string; detail?: string; meta?: string; title?: string; badge?: string } = { value: r.id, label: r.quality };
+    if (r.recommended) o.badge = RECOMMENDED_TEXT;
     if (r.codecs) o.detail = r.codecs;
     if (r.size) o.meta = keepUnits(r.size);
     if (r.picture) o.title = r.picture;

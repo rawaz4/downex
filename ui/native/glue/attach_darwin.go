@@ -70,6 +70,7 @@ func (g *Glue) Pickers() views.Pickers {
 		PickFolder:   g.dlg.PickFolder,
 		PickFile:     g.dlg.PickFile,
 		OpenExternal: mac.OpenExternal,
+		OpenPage:     mac.OpenPage,
 		CopyText:     views.WindowClipboard(g.kw),
 	}
 }

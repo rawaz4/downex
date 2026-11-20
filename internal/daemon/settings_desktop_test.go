@@ -14,7 +14,7 @@ import (
 
 func TestDefaultDesktopSettings(t *testing.T) {
 	d := DefaultDesktopSettings()
-	want := DesktopSettings{MarkDownloadedFiles: true, AVScanArgs: "[File]"}
+	want := DesktopSettings{MarkDownloadedFiles: true, AVScanArgs: "[File]", CheckFiles: true}
 	if d != want {
 		t.Fatalf("DefaultDesktopSettings = %+v, want %+v", d, want)
 	}
@@ -26,11 +26,12 @@ func TestDesktopSettingsJSON(t *testing.T) {
 		want       DesktopSettings
 	}{
 		{"empty object", `{}`, DefaultDesktopSettings()},
-		{"marking off", `{"mark_downloaded_files": false}`, DesktopSettings{AVScanArgs: "[File]"}},
-		{"clipboard on", `{"clipboard_monitor": true}`, DesktopSettings{ClipboardMonitor: true, MarkDownloadedFiles: true, AVScanArgs: "[File]"}},
+		{"marking off", `{"mark_downloaded_files": false}`, DesktopSettings{AVScanArgs: "[File]", CheckFiles: true}},
+		{"check off", `{"check_files": false}`, DesktopSettings{MarkDownloadedFiles: true, AVScanArgs: "[File]"}},
+		{"clipboard on", `{"clipboard_monitor": true}`, DesktopSettings{ClipboardMonitor: true, MarkDownloadedFiles: true, AVScanArgs: "[File]", CheckFiles: true}},
 		{"everything", `{"clipboard_monitor":true,"mark_downloaded_files":false,"av_scan_enabled":true,"av_scan_command":"/s","av_scan_args":"-q [File]","unknown":1}`,
-			DesktopSettings{ClipboardMonitor: true, AVScanEnabled: true, AVScanCommand: "/s", AVScanArgs: "-q [File]"}},
-		{"explicit empty args", `{"av_scan_args": ""}`, DesktopSettings{MarkDownloadedFiles: true}},
+			DesktopSettings{ClipboardMonitor: true, AVScanEnabled: true, AVScanCommand: "/s", AVScanArgs: "-q [File]", CheckFiles: true}},
+		{"explicit empty args", `{"av_scan_args": ""}`, DesktopSettings{MarkDownloadedFiles: true, CheckFiles: true}},
 	} {
 		var d DesktopSettings
 		if err := json.Unmarshal([]byte(tc.json), &d); err != nil {
@@ -54,7 +55,7 @@ func TestDesktopSettingsJSON(t *testing.T) {
 	if err := json.Unmarshal(data, &out); err != nil || out != in {
 		t.Fatalf("round trip = %+v, %v; want %+v", out, err, in)
 	}
-	for _, key := range []string{`"clipboard_monitor"`, `"mark_downloaded_files"`, `"av_scan_enabled"`, `"av_scan_command"`, `"av_scan_args"`} {
+	for _, key := range []string{`"clipboard_monitor"`, `"mark_downloaded_files"`, `"av_scan_enabled"`, `"av_scan_command"`, `"av_scan_args"`, `"check_files"`} {
 		if !strings.Contains(string(data), key) {
 			t.Errorf("encoded settings lack %s: %s", key, data)
 		}

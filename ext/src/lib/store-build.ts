@@ -54,9 +54,8 @@ export const STORE_LINK_MESSAGE = 'Downex can’t take this link from the browse
 export const STORE_OPTION_HINTS: Readonly<Record<string, string>> = {
   'video-button-hint': "On the sites you visit. The toolbar menu lists a page's videos either way.",
   'video-prefetch-hint':
-    'After you stay 1.5 seconds on a video of Vimeo, X, TikTok, Dailymotion, Reddit, Twitch or Streamable, ' +
+    'After you stay 1.5 seconds on a video of Vimeo, X, TikTok, Dailymotion, Twitch or Streamable, ' +
     'Downex gets its qualities in the background, so Download lists them at once. It runs only while the ' +
     'Download button is shown on that site, Downex is running and its video tools are set up: one video at ' +
-    'a time, at most about one a minute. It never sends your sign-in cookies, so it pauses while sending ' +
-    'them is allowed.',
+    'a time, at most about one a minute. It never sends your sign-in cookies.',
 };

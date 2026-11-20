@@ -87,8 +87,11 @@ func runProduct(o options, args []string) error {
 				b.asked = time.Now()
 			}
 			open := openMain
-			if gw.View.IsProgress() {
+			switch {
+			case gw.View.IsProgress():
 				open = openProgress
+			case gw.View.IsConfirm():
+				open = openConfirm
 			}
 			w, err := open(a, b, wo)
 			shootLater(w)

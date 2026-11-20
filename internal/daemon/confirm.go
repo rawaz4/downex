@@ -37,6 +37,13 @@ import (
 // waits until that queue runs. max_connections and speed_limit, when set, are stored as
 // with Resume. A download that is not awaiting confirmation is FailedPrecondition; to
 // cancel one, Remove it.
+//
+// entry_id (docs/SITE-MEDIA-SPEC.md §3.12), for a site download of a page with several
+// videos, names another of its items: the page is resolved again for it (probeSite, with
+// the download's Referer and cookie) and its tracks, title, chapters and item replace the
+// old ones; its part is the one the request gives (none: the whole video), and a
+// proposed name follows the new item. "" or the recorded item keeps it; any other
+// download refuses it (InvalidArgument).
 func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*downexv1.Download, error) {
 	id := model.DownloadID(r.GetId())
 	var maxConn *int
@@ -65,6 +72,14 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 	}
+	clip, err := parseClip(r.GetClip())
+	if err != nil {
+		return nil, err
+	}
+	entry := r.GetEntryId()
+	if err := validate.EntryID(entry); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	m.mu.Lock()
 	s := m.settings
 	m.mu.Unlock()
@@ -79,6 +94,7 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 		}
 	}
 
+	m.endCheck(id, true)
 	e, err := m.acquire(ctx, id)
 	if err != nil {
 		return nil, err
@@ -105,17 +121,48 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 	}
 	m.mu.Unlock()
 
+	clipChanged, itemName := false, ""
+	switch {
+	case entry == "" || (rec.Kind == model.KindMedia && rec.Media != nil && entry == rec.Media.EntryID):
+	case rec.Kind != model.KindMedia || !isSite(rec.Media):
+		return nil, connect.NewError(connect.CodeInvalidArgument, errEntryNotSite)
+	default:
+		// Another item of the page: resolved again, its media replaces the old one.
+		signIn := m.siteCookies.get(rec.ID)
+		med, err := m.siteMedia(ctx, siteRequest{pageURL: rec.Request.URL, cookie: signIn.cookie, cookieDomain: signIn.domain,
+			referer: rec.Request.Headers.Get("Referer"), video: video, audio: audio, entry: entry})
+		if err != nil {
+			return nil, err
+		}
+		for i := range med.Items {
+			med.Items[i].Thumbnail = ""
+		}
+		med.Title = cmp.Or(med.Title, rec.Media.Title)
+		rec.Media = med
+		itemName = siteFileName("", siteTitle(med), "", rec.Request.URL, med.Container)
+	}
 	if rec.Kind == model.KindMedia {
 		if err := selectMediaTracks(&rec, video, audio); err != nil {
 			return nil, err
 		}
-		if isSite(rec.Media) {
+		if r.GetClip() != nil && rec.Media != nil {
+			// The part: set means a change (start 0 and end 0 = the whole video,
+			// docs/MEDIA-SPEC.md §8 C1).
+			med := rec.Media.Clone()
+			if clipChanged, err = applyClip(med, clip); err != nil {
+				return nil, err
+			}
+			rec.Media = med
+		}
+		if isPageVideo(rec.Media) {
 			// Any offered MP4 quality: the container (and so the name's .mp4) stays, the
-			// size follows the pick (docs/SITE-MEDIA-SPEC.md §3.3).
-			rec.ExpectedSize = siteExpectedSize(rec.Media)
+			// size follows the pick (docs/SITE-MEDIA-SPEC.md §3.3) and the part.
+			rec.ExpectedSize = clipExpectedSize(rec.Media, siteExpectedSize(rec.Media))
 		}
 	} else if video != "" || audio != "" {
 		return nil, errInvalid("video_track and audio_track apply only to media downloads")
+	} else if r.GetClip() != nil {
+		return nil, clipError(errClipFile)
 	}
 	if dir != "" {
 		if err := s.checkConfirmedDir(dir, rec.Dir); err != nil {
@@ -129,10 +176,23 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 		rec.Dir = dir
 	}
 	if name != "" {
+		if name != rec.Filename { // the user's own name: the proposed one's hidden characters are gone (§9.5 N1)
+			rec.NameControls = false
+		}
 		rec.Filename = name
 		if rec.Kind == model.KindMedia && rec.Media != nil {
 			rec.Filename = mediaFileName(name, "", "", rec.Media.Container)
 		}
+	} else if itemName != "" {
+		// The proposal follows the new item (and its part).
+		rec.Filename = itemName
+		if c := clipOf(rec.Media); !c.IsZero() {
+			rec.Filename = clipFileName(rec.Filename, c)
+		}
+		rec.NameControls = false
+	} else if clipChanged && rec.Filename != "" {
+		// The proposal follows the new part: its suffix replaced (media.ClipName, C19).
+		rec.Filename = clipFileName(rec.Filename, clipOf(rec.Media))
 	}
 	if rec.Filename != "" {
 		if rec.Filename, err = m.freeName(ctx, rec.Dir, rec.Filename, rec.ID); err != nil {
@@ -181,6 +241,7 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 
 	m.mu.Lock()
 	e.rec = rec
+	e.offer = nil // "Start download": downloaded separately (docs/DESKTOP-SPEC.md §10)
 	if rec.State == model.StateQueued && !m.closed {
 		m.enqueueLocked(e.id)
 	}
@@ -224,6 +285,15 @@ func (m *Manager) PauseAll(ctx context.Context) (int, error) {
 	queued := make([]model.DownloadID, 0, len(m.waiting))
 	for id := range m.waiting {
 		queued = append(queued, id)
+	}
+	// A queued add held while its link is checked (renew.go) would be queued after the
+	// check: Pause ends the check and pauses it.
+	for id, e := range m.entries {
+		if e.check != nil && e.rec.State == model.StateQueued {
+			if _, ok := m.waiting[id]; !ok {
+				queued = append(queued, id)
+			}
+		}
 	}
 	slices.Sort(queued)
 	var running []model.DownloadID
@@ -481,7 +551,14 @@ func (c *confirmer) flush() {
 // oldest first) and reports them.
 func (c *confirmer) launchFor(ds []*downexv1.Download) {
 	oldest := slices.MinFunc(ds, func(a, b *downexv1.Download) int { return cmp.Compare(a.GetId(), b.GetId()) })
-	err := c.launch(oldest.GetId())
+	launch := c.launch
+	// One the user just clicked in the browser shows its confirmation above the browser.
+	if browser := slices.ContainsFunc(ds, func(d *downexv1.Download) bool {
+		return d.GetSource() == downexv1.AddSource_ADD_SOURCE_BROWSER
+	}); browser && c.m.cfg.ShowBrowserAdd != nil {
+		launch = func(id int64) error { return c.m.cfg.ShowBrowserAdd(id, AddConfirm) }
+	}
+	err := launch(oldest.GetId())
 	if err != nil {
 		c.m.log.Warn("cannot open the confirmation window", "download", oldest.GetId(), "err", err)
 	}

@@ -284,3 +284,31 @@ func TestAddMediaRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestAddRenewCheck: add forwards pageUrl to the daemon, and added says renewCheck when
+// downexd checks first whether the link continues a download whose link expired
+// (docs/BROWSER-SPEC.md §2).
+func TestAddRenewCheck(t *testing.T) {
+	be := &fakeBackend{state: downexv1.DownloadState_DOWNLOAD_STATE_QUEUED}
+	s := startSession(t, be)
+	for _, renew := range []bool{true, false} {
+		be.mu.Lock()
+		be.renew = renew
+		be.mu.Unlock()
+		s.send(map[string]any{"id": fmt.Sprint("r", renew), "type": "add", "url": "https://cdn.example/f.zip?sig=1",
+			"pageUrl": "https://pages.example/files?id=7"})
+		m := s.recv()
+		if m["type"] != "added" || m["renewCheck"] != renew {
+			t.Fatalf("added = %v, want renewCheck %v", m, renew)
+		}
+	}
+	be.mu.Lock()
+	page := be.adds[0].GetPageUrl()
+	be.mu.Unlock()
+	if page != "https://pages.example/files?id=7" {
+		t.Fatalf("page_url = %q", page)
+	}
+	if err := s.closeInput(); err != nil {
+		t.Fatal(err)
+	}
+}

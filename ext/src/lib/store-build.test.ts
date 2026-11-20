@@ -91,7 +91,7 @@ describe('store build', () => {
     expect(findEntry(tab, frames)).toMatchObject({ ok: false, error: { code: 'unsupported_page' } });
     expect(tabTarget(tab, frames, key)).toMatchObject({ ok: false, error: { code: 'expired' } });
     const probed = () => ({ result: { ok: true as const, value: { type: 'videoInfo' } as never } });
-    expect(tabVideoEntries(tab, frames, probed, none)).toEqual([]);
+    expect(tabVideoEntries(tab, frames, probed, none, true)).toEqual([]);
     // Overlay panels: neither the page's frame nor another frame of the tab offers its address.
     expect(frameVideo(tab, tab.url, 0, frames)).toBeUndefined();
     expect(frameVideo(tab, ad.url, 2, frames)).toBeUndefined();

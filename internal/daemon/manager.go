@@ -10,13 +10,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"downex/internal/browserfetch"
 	"downex/internal/dlock"
 	"downex/internal/dlview"
 	"downex/internal/engine"
+	"downex/internal/filecheck"
 	"downex/internal/limiter"
 	"downex/internal/model"
 	"downex/internal/notify"
 	"downex/internal/platform"
+	"downex/internal/polite"
 	"downex/internal/store"
 	"downex/internal/transport"
 )
@@ -83,6 +86,15 @@ type Config struct {
 	// marked with completion_dialog completes or fails while show_complete_dialog is on
 	// (the window then shows the download complete dialog, §8). nil: there is no window.
 	OpenProgress func(id int64) error
+	// ShowBrowserAdd shows the window of a download the user just started in the browser
+	// (source browser) above the browser, without stealing the keyboard focus when the
+	// system does not grant it (docs/DESKTOP-SPEC.md §7 "Above the browser"): w is the
+	// progress window, the confirmation, or the main window when neither opens
+	// (show_progress_window off, or the add waits in its queue). downexd starts the UI
+	// with "--raise". It replaces OpenProgress and OpenConfirmation for such a download;
+	// nil: they are used as for other sources, and nothing shows the main window. Never
+	// called for the download complete dialog (§8) or a clipboard add.
+	ShowBrowserAdd func(id int64, w AddWindow) error
 	// Now reads the clock that times the runs of downloads (started_at and active_ms);
 	// nil selects time.Now. Tests pass a fake clock.
 	Now func() time.Time
@@ -127,6 +139,9 @@ type Config struct {
 	// ProbeMedia with origin SITE, and the runs of site downloads;
 	// docs/SITE-MEDIA-SPEC.md). nil: site media is unavailable (media_unsupported).
 	Site SiteMedia
+	// Played saves the videos the user's browser played (docs/SITE-MEDIA-SPEC.md §2.9);
+	// nil refuses them (media_unsupported).
+	Played PlayedMedia
 	// Tools manages the yt-dlp and Deno copies Site runs (docs/SITE-MEDIA-SPEC.md §4): the
 	// Manager configures it from the settings at start and on every change, waits for it
 	// (Ensure) before resolving a page, serves GetTools and InstallTools with it and
@@ -134,6 +149,14 @@ type Config struct {
 	// StartTools (the user's own daemon). nil: no tools manager; Site finds its tools
 	// itself, and GetTools and InstallTools are unavailable.
 	Tools Tools
+	// PoliteProber sends Polite mode's probes and Peers lists the addresses downloads are
+	// connected to (docs/POLITE-SPEC.md; downexd passes polite.NewSystemProber() and its
+	// transport factory's PeerTable). Polite mode ticks on Clock. Without either, the
+	// polite settings are only stored and Polite mode reports UNAVAILABLE while on.
+	PoliteProber polite.Prober
+	Peers        PeerSource
+	// PoliteLoopback makes loopback addresses eligible anchors (end-to-end tests only).
+	PoliteLoopback bool
 }
 
 // Manager owns the download queue of one daemon: the shared engine, the global speed
@@ -159,8 +182,14 @@ type Manager struct {
 	mediaMu    sync.Mutex // serialises the name reservations of media downloads (freeName + create)
 	// siteCookies holds the Cookie headers of site downloads, in memory only (site.go).
 	siteCookies siteCookies
+	// browser keeps the fetch tickets of site downloads a browser fetches for, and the
+	// requests their runs hand to it (browser-fetched saves, docs/SITE-MEDIA-SPEC.md §2.8).
+	browser *browserfetch.Broker
 	// toolsCancel ends the subscription to Config.Tools' changes (nil without it).
 	toolsCancel func()
+	// polite is Polite mode (polite.go): the polite level of the limiter chain and its
+	// monitor.
+	polite politeState
 
 	// Queues (docs/M6-SPEC.md §1; queue.go). queueMu serialises the queue operations
 	// that write the store (it is taken before mu, never while holding it).
@@ -179,9 +208,13 @@ type Manager struct {
 	base       context.Context // ends when Shutdown starts: bounds post-processing scans
 	baseCancel context.CancelFunc
 
-	mu        sync.Mutex
-	entries   map[model.DownloadID]*entry
-	removed   map[model.DownloadID]struct{} // ids whose records are gone (ids are never reused)
+	mu      sync.Mutex
+	entries map[model.DownloadID]*entry
+	removed map[model.DownloadID]struct{} // ids whose records are gone (ids are never reused)
+	// rescuing holds the ids of records a Rescue is adopting (rescue.go): no List or
+	// lookup indexes them until it returns.
+	rescuing  map[model.DownloadID]struct{}
+	rescues   rescueLocks // one rescue per partial path at a time
 	queues    map[model.QueueID]*queueState
 	waiting   map[model.DownloadID]struct{} // queued downloads waiting to start (in their queue's order)
 	active    map[model.DownloadID]*entry   // entries with a run, including runs that are stopping
@@ -265,6 +298,19 @@ type entry struct {
 	pendMax    *int   // max_connections to store when the current run stops
 	pendSpeed  *int64 // speed_limit to store when the current run stops
 	pendDialog *bool  // completion_dialog to store when the current run stops
+	// early is the EARLY file check of the current or last run (docs/DESKTOP-SPEC.md
+	// §9.1): set by checkEarly while that run is the entry's run, cleared when a run
+	// starts; never stored.
+	early *model.FileCheck
+	// Expired links (renew.go): check is the hold of a new add whose link is being
+	// checked against downloads whose link expired; offer an awaiting add's offer to
+	// continue one of them instead. Both in memory only.
+	check *renewCheck
+	offer *renewOffer
+	// rescueWait is when a rescue stored paused for the browser relay was made: its first
+	// start is ResumeRequest.rescue_start (rescue.go), until RescueStartWindow has passed.
+	// In memory only (zero = none).
+	rescueWait time.Time
 }
 
 func newEntry(rec model.Download) *entry {
@@ -309,9 +355,10 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		cfg: cfg, st: cfg.Store, log: cfg.Logger, hub: newHub(), started: time.Now(), now: cfg.Now,
 		qstore: qs, clock: cfg.Clock, schedKick: make(chan struct{}, 1), schedDone: make(chan struct{}),
 		entries: make(map[model.DownloadID]*entry), removed: make(map[model.DownloadID]struct{}),
-		queues: make(map[model.QueueID]*queueState), waiting: make(map[model.DownloadID]struct{}),
+		rescuing: make(map[model.DownloadID]struct{}),
+		queues:   make(map[model.QueueID]*queueState), waiting: make(map[model.DownloadID]struct{}),
 		active: make(map[model.DownloadID]*entry), netKick: make(chan struct{}, 1), post: cfg.PostProcess,
-		awakeKick: make(chan struct{}, 1),
+		awakeKick: make(chan struct{}, 1), browser: browserfetch.New(),
 	}
 	m.base, m.baseCancel = context.WithCancel(context.Background())
 	if m.post == nil {
@@ -327,6 +374,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	}
 	m.settings = s
 	m.global = limiter.New(s.GlobalSpeedLimit)
+	m.newPolite()
 	m.confirm = &confirmer{m: m, launch: cfg.OpenConfirmation, interval: confirmLaunchInterval}
 	if cfg.LaunchAtLogin != nil {
 		if err := cfg.LaunchAtLogin(s.LaunchAtLogin); err != nil {
@@ -370,6 +418,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	if cfg.Tools != nil {
 		m.startToolsSettings()
 	}
+	m.startPolite()
 	return m, nil
 }
 
@@ -397,6 +446,13 @@ func (m *Manager) recover(ctx context.Context) error {
 		}
 		if e.received, err = m.storedBytes(ctx, &e.rec); err != nil {
 			return fmt.Errorf("daemon: load download %d: %w", e.id, err)
+		}
+		if med := e.rec.Media; med != nil && med.FetchTicket != "" && e.rec.State != model.StateCompleted {
+			// The browser that added it may still hold its ticket: it serves the download
+			// again (docs/SITE-MEDIA-SPEC.md §2.8, amendment 2026-11-19).
+			if err := m.browser.Restore(e.id, med.FetchTicket); err != nil {
+				m.log.Warn("cannot restore the fetch ticket of a download", "download", int64(e.id), "err", err)
+			}
 		}
 		switch e.rec.State {
 		case model.StateProbing, model.StateDownloading:
@@ -502,7 +558,8 @@ func (m *Manager) startLocked(e *entry, now time.Time) bool {
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		lim: newChainLink(e.rec.SpeedLimit, q.lim), lock: lk, recheck: e.recheck, started: m.now(),
 	}
-	e.run, e.recheck, e.deferUntil = r, false, time.Time{}
+	r.lim.setMeter(&m.polite.rx)
+	e.run, e.recheck, e.deferUntil, e.early = r, false, time.Time{}, nil
 	m.active[e.id] = e
 	m.running++
 	m.runs++
@@ -517,6 +574,7 @@ func (m *Manager) startLocked(e *entry, now time.Time) bool {
 	m.wg.Add(1)
 	go m.runDownload(e, r)
 	m.hub.publish(e.id, kindUpdated)
+	m.politeWake()
 	return true
 }
 
@@ -542,7 +600,13 @@ func (m *Manager) runDownload(e *entry, r *run) {
 		return
 	}
 	onProgress := func(p engine.Progress) {
+		head := p.Head
+		p.Head = nil // the stored progress never keeps the file's bytes
 		r.progress.Store(&p)
+		if head != nil {
+			m.wg.Add(1)
+			go m.checkEarly(e, r, head)
+		}
 		if !r.refreshed.Swap(true) {
 			m.wg.Add(1)
 			go m.refreshLive(e, r)
@@ -589,6 +653,45 @@ func (m *Manager) refreshLive(e *entry, r *run) {
 		}
 	}
 	m.mu.Unlock()
+	m.hub.publish(e.id, kindUpdated)
+}
+
+// checkEarly runs the EARLY file check of run r on head, the file's first bytes
+// (engine.Progress.Head), and keeps the result with the entry while r is its run
+// (docs/DESKTOP-SPEC.md §9.1). The record is read again for the name and served type
+// the probe stored. Nothing happens while check_downloaded_files is off.
+func (m *Manager) checkEarly(e *entry, r *run, head []byte) {
+	defer m.wg.Done()
+	m.mu.Lock()
+	on := m.settings.Desktop.CheckFiles
+	m.mu.Unlock()
+	if !on {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	rec, err := m.st.GetDownload(ctx, e.id)
+	cancel()
+	if err != nil {
+		m.log.Debug("cannot read the download for its early file check", "download", int64(e.id), "err", err)
+		return
+	}
+	served := rec.ServedType
+	if served == "" {
+		served = rec.MIME
+	}
+	fc := filecheck.CheckHead(rec.Filename, rec.NameControls, served, head)
+	m.mu.Lock()
+	current := e.run == r && !r.finalizing
+	if current {
+		e.early = fc
+	}
+	m.mu.Unlock()
+	if !current {
+		return
+	}
+	if fc != nil {
+		m.log.Info("early file check", "download", int64(e.id), "level", int(fc.Level), "reason", fc.Reason, "content", fc.Content)
+	}
 	m.hub.publish(e.id, kindUpdated)
 }
 
@@ -678,6 +781,11 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 			post = m.postProcess(rec)
 		}
 	}
+	// Never from the cached copy (stale): its checkpoint can lag the stored one, so resumable
+	// fragments would look dead.
+	if !gone && !stale && !skipped && in != intentRemove && before != model.StateFailed && rec.State == model.StateFailed {
+		m.dropDeadParts(rec) // before the lock goes, so no new run is using them
+	}
 	r.lock.Release()
 
 	// The run ended the download: completed or failed (not removed, paused or requeued).
@@ -691,6 +799,7 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 	q := m.queueOfLocked(e)
 	if ended && rec.State == model.StateCompleted {
 		q.completed++
+		m.dropOffersLocked(e.id)
 	}
 	if gone { // deleted by another process
 		m.forgetLocked(e.id)
@@ -713,6 +822,9 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 		case model.StateCompleted:
 			pd := m.protoLocked(e)
 			m.notify(Notice{Kind: NoticeCompleted, Download: pd})
+			if text, ok := post.FileCheckNotice(notify.DisplayName(pd), m.settings.NotifyOnComplete); ok {
+				m.notify(Notice{Kind: NoticeFileCheck, Download: pd, Text: text, Level: post.Check.Level})
+			}
 			if post.Alarming() {
 				m.notify(Notice{Kind: NoticeScanProblem, Download: pd, Text: post.NotificationText(notify.DisplayName(pd))})
 			}
@@ -857,6 +969,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 func (m *Manager) shutdown(ctx context.Context) error {
+	m.stopPolite() // no probe and no cap while the downloads pause
 	m.mu.Lock()
 	m.closed = true
 	close(m.schedDone) // the scheduler, the network updates and the post-queue countdowns end

@@ -20,6 +20,9 @@ type Pickers struct {
 	PickFile func(ctx context.Context, title, start string) (string, error)
 	// OpenExternal opens an https address in the system's browser.
 	OpenExternal func(ctx context.Context, url string) error
+	// OpenPage opens a download's page, an http or https address (pageurl.Check), in the
+	// system's browser (docs/DESKTOP-SPEC.md §10).
+	OpenPage func(ctx context.Context, url string) error
 	// CopyText puts text on the clipboard.
 	CopyText func(ctx context.Context, text string) error
 }
@@ -104,6 +107,14 @@ func (p *HostPlatform) OpenExternal(ctx context.Context, url string) error {
 		return unimplemented("opening the browser")
 	}
 	return p.Pickers.OpenExternal(ctx, url)
+}
+
+// OpenPage is Platform's.
+func (p *HostPlatform) OpenPage(ctx context.Context, url string) error {
+	if p.Pickers.OpenPage == nil {
+		return unimplemented("opening the browser")
+	}
+	return p.Pickers.OpenPage(ctx, url)
 }
 
 // CopyText is Platform's.

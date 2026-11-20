@@ -35,6 +35,34 @@ const (
 	// CodeAuthRequired: the server (401) or proxy (407) wants credentials that neither the
 	// URL nor a site login (docs/M6-SPEC.md §2) gave, or it rejected them.
 	CodeAuthRequired = "auth_required"
+	// CodeLinkExpired: the link stopped working (expired, revoked, or it now leads to a web
+	// page; docs/ENGINE-SPEC.md §7.2). The data received so far is kept: RenewLink gives
+	// the download a new link.
+	CodeLinkExpired = "link_expired"
+
+	// Refusals of RenewLink (docs/ENGINE-SPEC.md §7.3), never stored on a download: the
+	// message starts with the code and ErrorCodeMeta carries it. RenewLink also refuses
+	// with link_expired, auth_required, http_status, network and tls.
+	CodeRenewMismatch = "renew_mismatch"  // the new link serves other bytes
+	CodeRenewSize     = "renew_size"      // the new link's file has another size
+	CodeRenewChanged  = "renew_changed"   // the new link's server reports another version
+	CodeRenewNoRanges = "renew_no_ranges" // the new link's server sends only whole files
+	CodeRenewUnproven = "renew_unproven"  // too little can be compared (restart_if_unproven)
+	CodeRenewName     = "renew_name"      // the new link names the file differently (allow_name_change)
+
+	// Refusals of Rescue (docs/ENGINE-SPEC.md §7.4, docs/DAEMON-SPEC.md §3 "Rescue"), never
+	// stored on a download: the message starts with the code and ErrorCodeMeta carries it.
+	// Rescue also refuses with link_expired, auth_required, http_status, network, tls and
+	// disk_full. rescue_empty is InvalidArgument, the others FailedPrecondition.
+	CodeRescueNoRanges    = "rescue_no_ranges"    // the server sends only whole files
+	CodeRescueSizeUnknown = "rescue_size_unknown" // the server does not say how big the file is
+	CodeRescueChanged     = "rescue_changed"      // the server's file is not the one the partial holds
+	CodeRescueUnproven    = "rescue_unproven"     // the partial holds too little that tells files apart
+	CodeRescueNotFound    = "rescue_not_found"    // the partial file is gone
+	CodeRescueAmbiguous   = "rescue_ambiguous"    // more than one unfinished browser file could be it
+	CodeRescueLocked      = "rescue_locked"       // another program still writes or holds the partial
+	CodeRescueNoAccess    = "rescue_no_access"    // downexd may not open the partial (macOS: privacy settings)
+	CodeRescueEmpty       = "rescue_empty"        // the partial file holds nothing to keep
 
 	// Media downloads (docs/MEDIA-SPEC.md §2, §6); also the codes of refused AddMedia and
 	// ProbeMedia calls (see ErrorCodeMeta).
@@ -42,6 +70,7 @@ const (
 	CodeLive             = "live"              // a live presentation (it has no end to download)
 	CodeMediaUnsupported = "media_unsupported" // a stream or track combination that cannot be saved yet
 	CodeMediaInvalid     = "media_invalid"     // a malformed or oversized manifest, or a track it does not have
+	CodeClipInvalid      = "clip_invalid"      // a part of a video that cannot be saved (docs/MEDIA-SPEC.md §8 C2)
 
 	// Site media (docs/SITE-MEDIA-SPEC.md §3.2): video pages resolved with yt-dlp. They
 	// also use encrypted, live, media_unsupported, media_invalid and auth_required.
@@ -52,6 +81,9 @@ const (
 	CodeToolsInstalling  = "tools_installing"  // retry: yt-dlp and Deno are being downloaded
 	CodeToolsUnavailable = "tools_unavailable" // yt-dlp/Deno cannot be set up, or this daemon never downloads them
 	CodeSiteMediaOff     = "site_media_off"    // Settings.site_media is off
+	// CodeNotFoundYet: no file of the clicked video was played yet (docs/SITE-MEDIA-SPEC.md
+	// §2.9); the extension keeps waiting for it.
+	CodeNotFoundYet = "not_found_yet"
 )
 
 // sentinelCode is the code of the errors that wrap err.
@@ -92,6 +124,8 @@ func mediaErrorCode(err error) string {
 		return CodeEncrypted
 	case errors.Is(err, media.ErrLive):
 		return CodeLive
+	case errors.Is(err, media.ErrClip):
+		return CodeClipInvalid
 	case errors.Is(err, ErrMediaUnsupported), errors.Is(err, errors.ErrUnsupported):
 		return CodeMediaUnsupported
 	case errors.Is(err, media.ErrMalformed), errors.Is(err, media.ErrTooLarge), errors.Is(err, media.ErrNotFound):
@@ -120,6 +154,9 @@ var mediaMessageCodes = []struct{ text, code string }{
 	{"response ended early", CodeNetwork},
 	{"mediajob: disk full", CodeDiskFull},                 // mediajob.ErrDiskFull: the free-space check, ENOSPC
 	{errors.ErrUnsupported.Error(), CodeMediaUnsupported}, // "unsupported operation" (the assembler)
+	// mediajob.ErrContentCoded: coded bytes where plain ones were asked for (after the
+	// unsupported coding of a manifest, which matches the entry above).
+	{"response has a content coding", CodeHTTPStatus},
 }
 
 // mediaCodeFromMessage is codeFromMessage for a media download's failure.
@@ -144,6 +181,8 @@ func ErrorCode(err error) string {
 	}
 	var status *engine.StatusError
 	switch {
+	case errors.Is(err, engine.ErrLinkExpired):
+		return CodeLinkExpired
 	case errors.Is(err, engine.ErrAuthRequired):
 		return CodeAuthRequired
 	case errors.Is(err, engine.ErrValidatorChanged), errors.Is(err, engine.ErrCorruptCheckpoint):
@@ -220,6 +259,7 @@ func codeFromMessage(msg string) string {
 		err  error
 		code string
 	}{
+		{engine.ErrLinkExpired, CodeLinkExpired},
 		{transport.ErrAuthRequired, CodeAuthRequired},
 		{media.ErrEncrypted, CodeEncrypted},
 		{media.ErrLive, CodeLive},

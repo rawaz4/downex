@@ -1,0 +1,7 @@
+{"id": "7000000000000000001", "title": "Example short clip", "extractor_key": "TikTok", "duration": 6, "formats": [
+  {"format_id": "audio", "ext": "mp4", "protocol": "https", "vcodec": "none", "acodec": "mp4", "vbr": 0, "url": "https://media.example/7000000000000000001/0.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+  {"format_id": "bytevc1_540p_520000-0", "ext": "mp4", "protocol": "https", "vcodec": "bytevc1", "acodec": "aac", "width": 576, "height": 1024, "tbr": 520, "filesize": 391000, "dynamic_range": "SDR", "url": "https://media.example/7000000000000000001/4.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+  {"format_id": "download", "ext": "mp4", "protocol": "https", "vcodec": "h264", "acodec": "aac", "format_note": "watermarked", "dynamic_range": "SDR", "url": "https://media.example/7000000000000000001/1.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+  {"format_id": "h264_540p_875617-0", "ext": "mp4", "protocol": "https", "vcodec": "h264", "acodec": "aac", "width": 576, "height": 1024, "tbr": 875, "filesize": 658136, "dynamic_range": "SDR", "url": "https://media.example/7000000000000000001/2.mp4", "http_headers": {"Referer": "https://www.example.com/"}},
+  {"format_id": "h264_540p_875617-1", "ext": "mp4", "protocol": "https", "vcodec": "h264", "acodec": "aac", "width": 576, "height": 1024, "tbr": 875, "filesize": 658136, "dynamic_range": "SDR", "url": "https://media.example/7000000000000000001/3.mp4", "http_headers": {"Referer": "https://www.example.com/"}}
+]}

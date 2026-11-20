@@ -15,6 +15,9 @@ import { makeDownload } from './testing';
 describe('extensionOf', () => {
   it.each([
     ['movie.MP4', 'mp4'],
+    ['Show #37 (1h41m01s-1h57m22s).mp4', 'mp4'],
+    ['game#1.exe', 'exe'],
+    ['what?.pdf', 'pdf'],
     ['archive.tar.gz', 'gz'],
     ['.bashrc', ''],
     ['file.', ''],
