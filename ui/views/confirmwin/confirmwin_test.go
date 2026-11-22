@@ -44,7 +44,13 @@ func newRig(t *testing.T, o viewstest.Options, ids func(*viewstest.Harness) []in
 	no := false
 	o.Frameless = &no
 	r := &rig{}
-	o.Scene = func(so *scene.Options) { so.OnOpenProgressWindow = func(id int64) { r.opened = append(r.opened, id) } }
+	scenes := o.Scene
+	o.Scene = func(so *scene.Options) {
+		if scenes != nil {
+			scenes(so)
+		}
+		so.OnOpenProgressWindow = func(id int64) { r.opened = append(r.opened, id) }
+	}
 	r.h = viewstest.New(t, o)
 	r.s = confirmwin.New(r.h.App, confirmwin.Options{
 		IDs:   ids(r.h),
@@ -272,11 +278,9 @@ func TestTheWindowPaintsTheDialogGround(t *testing.T) {
 	}
 }
 
-// Start download confirms it, asks for its progress window and only then closes the window
-// (nothing else waits): a process whose last window this is must not end before the progress
-// window opens.
-func TestStartDownloadOpensTheProgressWindowThenClosesTheWindow(t *testing.T) {
-	r := newRig(t, viewstest.Options{Fixture: "confirm-file"}, oldest)
+// showProgressWindow turns show_progress_window on.
+func (r *rig) showProgressWindow(t *testing.T) {
+	t.Helper()
 	ctx, cancel := r.h.App.CallContext()
 	defer cancel()
 	got, err := r.h.Mock.GetSettings(ctx)
@@ -289,6 +293,39 @@ func TestStartDownloadOpensTheProgressWindowThenClosesTheWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.h.Main.LoadSettings()
+}
+
+// Start download confirms it with progress_window and closes the window: downexd opens the
+// download's progress window itself, above the browser (progress_window_opening), so this
+// window opens none.
+func TestStartDownloadLeavesTheProgressWindowToDownexd(t *testing.T) {
+	r := newRig(t, viewstest.Options{Fixture: "confirm-file"}, oldest)
+	r.showProgressWindow(t)
+	c := r.s.Current()
+	id := c.Download().GetId()
+	press(t, c.Card(), "Start download")
+	r.settle()
+	if r.closed != 1 {
+		t.Fatalf("closed %d times", r.closed)
+	}
+	d, _ := r.h.Main.Downloads.Get(id)
+	if views.IsAwaiting(d.GetState()) {
+		t.Fatal("the download still awaits confirmation")
+	}
+	if w := r.h.Mock.Window(); !slices.Equal(w.DaemonOpened, []int64{id}) {
+		t.Fatalf("downexd opened %v, want %d's progress window", w.DaemonOpened, id)
+	}
+	if len(r.opened) != 0 {
+		t.Fatalf("the window opened progress windows %v too", r.opened)
+	}
+}
+
+// With a downexd that does not open it (an older one), Start download asks for the progress
+// window itself, above the browser, and only then closes the window (nothing else waits): a
+// process whose last window this is must not end before the progress window opens.
+func TestStartDownloadOpensTheProgressWindowThenClosesTheWindow(t *testing.T) {
+	r := newRig(t, viewstest.Options{Fixture: "confirm-file", Scene: func(so *scene.Options) { so.OldDaemon = true }}, oldest)
+	r.showProgressWindow(t)
 	c := r.s.Current()
 	id := c.Download().GetId()
 	press(t, c.Card(), "Start download")
@@ -302,6 +339,9 @@ func TestStartDownloadOpensTheProgressWindowThenClosesTheWindow(t *testing.T) {
 	}
 	if !slices.Equal(r.opened, []int64{id}) {
 		t.Fatalf("progress windows %v, want %d's", r.opened, id)
+	}
+	if w := r.h.Mock.Window(); !slices.Equal(w.Raised, []int64{id}) || len(w.DaemonOpened) != 0 {
+		t.Fatalf("raised %v, opened by downexd %v: want %d's above the browser, by this window", w.Raised, w.DaemonOpened, id)
 	}
 	if r.openedAtClose != 1 {
 		t.Fatal("the window closed before it asked for the progress window")
@@ -390,12 +430,97 @@ func TestConfirmedElsewhereClosesTheWindow(t *testing.T) {
 	id := r.s.Current().Download().GetId()
 	ctx, cancel := r.h.App.CallContext()
 	defer cancel()
-	if _, err := r.h.Main.Downloads.Confirm(ctx, &downexv1.ConfirmRequest{Id: id}); err != nil {
+	if _, _, err := r.h.Main.Downloads.Confirm(ctx, &downexv1.ConfirmRequest{Id: id}); err != nil {
 		t.Fatal(err)
 	}
 	r.settle()
 	if r.closed != 1 {
 		t.Fatalf("closed %d times", r.closed)
+	}
+}
+
+// closingRig is a window over fixture whose host hears it closing (Options.Closing) and takes
+// the requests that come after (Options.Reopen); log is what the window told the host, in
+// order: "closing", "close", "reopen [ids]".
+type closingRig struct {
+	h   *viewstest.Harness
+	s   *confirmwin.Screen
+	log []string
+}
+
+func newClosingRig(t *testing.T, fixture string) *closingRig {
+	t.Helper()
+	no := false
+	r := &closingRig{}
+	r.h = viewstest.New(t, viewstest.Options{
+		Fixture: fixture, Width: host.ConfirmWidth, Height: host.ConfirmHeight, Frameless: &no,
+	})
+	r.s = confirmwin.New(r.h.App, confirmwin.Options{
+		IDs:     oldest(r.h),
+		Closing: func() { r.log = append(r.log, "closing") },
+		Close:   func() { r.log = append(r.log, "close") },
+		Reopen:  func(ids []int64) { r.log = append(r.log, fmt.Sprint("reopen ", ids)) },
+		Resize:  func(kit.Size) {},
+		MaxSize: func(kit.Size) {},
+	})
+	t.Cleanup(r.s.Dispose)
+	r.h.Show(r.s)
+	r.settle()
+	return r
+}
+
+func (r *closingRig) settle() {
+	for range 4 {
+		r.h.Settle()
+		r.h.Advance(700 * time.Millisecond)
+	}
+}
+
+// The window tells the host it is closing before it closes, once: a start that comes while
+// the close is on its way then opens a new window (the host's) rather than reaching this one.
+func TestTheWindowSaysItClosesBeforeItCloses(t *testing.T) {
+	r := newClosingRig(t, "confirm-file")
+	press(t, r.s.Current().Card(), "Download later")
+	r.settle()
+	if want := []string{"closing", "close"}; !slices.Equal(r.log, want) {
+		t.Fatalf("the window told the host %q, want %q", r.log, want)
+	}
+}
+
+// A request that reaches the window after it began to close (a start the host handed it just
+// before) is not dropped: it goes to Reopen, for a new window, with the downloads still
+// awaiting confirmation (a repeat once, a download confirmed meanwhile and invalid ids not),
+// and this window shows nothing more.
+func TestARequestAfterTheCloseGoesToANewWindow(t *testing.T) {
+	r := newClosingRig(t, "confirm-file-waiting")
+	all := awaiting(r.h)
+	if len(all) < 3 {
+		t.Fatalf("awaiting %v", all)
+	}
+	r.h.Key(kit.KeyEscape, 0)
+	r.settle()
+	if !r.s.Closed() || !slices.Equal(r.log, []string{"closing", "close"}) {
+		t.Fatalf("Escape: closed %v, told %q", r.s.Closed(), r.log)
+	}
+	ctx, cancel := r.h.App.CallContext()
+	defer cancel()
+	if _, _, err := r.h.Main.Downloads.Confirm(ctx, &downexv1.ConfirmRequest{Id: all[0]}); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	r.s.Request([]int64{all[0], all[2], 0, all[1], all[2]})
+	r.settle()
+	want := []string{"closing", "close", fmt.Sprint("reopen ", []int64{all[2], all[1]})}
+	if !slices.Equal(r.log, want) {
+		t.Fatalf("the window told the host %q, want %q", r.log, want)
+	}
+	if r.s.Current() != nil {
+		t.Fatal("the closed window showed a dialog")
+	}
+	// A download not listed yet (its event has not come) is asked for too.
+	r.s.Request([]int64{1 << 40})
+	if got := r.log[len(r.log)-1]; got != fmt.Sprint("reopen ", []int64{1 << 40}) {
+		t.Fatalf("an unlisted download: the window told the host %q", got)
 	}
 }
 

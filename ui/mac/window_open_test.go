@@ -99,6 +99,33 @@ func TestWheelLineIsWebKitsStep(t *testing.T) {
 	}
 }
 
+// The click that brings a window forward from another app reaches the content only of a
+// window asked AcceptsFirstMouse (the Confirm download and progress windows); a window's
+// default, the main window's, keeps the Mac's rule: that click only brings it forward.
+func TestFirstMouseIsTheWindowsOption(t *testing.T) {
+	a := testApp(t)
+	for _, on := range []bool{false, true} {
+		var w *Window
+		var err error
+		mainDo(func() {
+			w, err = a.NewWindow(&recRoot{ground: kit.RGBA(220, 220, 220, 1)},
+				WindowOptions{Title: "first mouse", Size: kit.Size{W: 300, H: 200}, NoActivate: true, AcceptsFirstMouse: on})
+		})
+		if err != nil {
+			t.Fatalf("NewWindow: %v", err)
+		}
+		var got bool
+		mainDo(func() {
+			got = popuptest.AcceptsFirstMouse(w.ns)
+			w.Close()
+		})
+		pump(100 * time.Millisecond)
+		if got != on {
+			t.Errorf("AcceptsFirstMouse %v: the content view takes the first click: %v", on, got)
+		}
+	}
+}
+
 // ---- helper processes ------------------------------------------------------------------
 
 const windowHelperEnv = "DXW_WINDOW_HELPER"

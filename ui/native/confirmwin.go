@@ -56,7 +56,11 @@ func openConfirm(a *osApp, b *backend, o options) (*osWindow, error) {
 		// b.confirm's request runs, and the window must not close on an empty queue then.
 		IDs:    []int64{b.view.Confirm},
 		OnShow: b.gw.ConfirmShown,
-		Close:  func() { _ = kw.Post(kw.Close) },
+		// A start the host would hand this window while its close is on its way opens a new
+		// Confirm download window instead; one that reached it just before goes there too.
+		Closing: b.gw.MarkClosing,
+		Reopen:  b.gw.ReopenConfirm,
+		Close:   func() { _ = kw.Post(kw.Close) },
 	})
 	scope.Add(screen)
 	b.later(stores.Dispose)
@@ -88,6 +92,9 @@ func openConfirm(a *osApp, b *backend, o options) (*osWindow, error) {
 		b.attach(w, kw) // the folder picker, later starts, the theme followed
 	}
 	stores.Start()
+	// Before the session starts: downexd's quit event (the user quit Downex: the tray's Quit,
+	// the menu-bar icon's Quit, ⌘Q) closes this window too, as it does the others.
+	b.post = kw.Post
 	if b.start != nil {
 		b.start()
 	}

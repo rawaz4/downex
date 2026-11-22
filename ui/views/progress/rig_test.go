@@ -353,6 +353,7 @@ type rigOptions struct {
 	motion      bool
 	setup       func(*fakeAPI)
 	noResize    bool
+	started     bool // the window opens as its download starts (Options.Started, "--started")
 }
 
 // settings is ProgressWindow.test.ts's SETTINGS.
@@ -413,7 +414,7 @@ func newRigWith(t testing.TB, api *fakeAPI, id int64, o rigOptions) *rig {
 		return context.WithTimeout(context.Background(), 30*time.Second)
 	}
 	pw, err := New(Options{
-		ID: id, Daemon: api, Events: &api.events, Platform: &fakePlatform{f: api},
+		ID: id, Started: o.started, Daemon: api, Events: &api.events, Platform: &fakePlatform{f: api},
 		Caps: host.Capabilities{OpenWith: !o.noOpenWith}, Storage: r.storage, Clock: r.wall, Call: call, Go: statetest.Sync,
 		FixedTheme: &choice, SystemDark: &systemLight, StatusInterval: o.statusEvery, ApplyDelay: o.applyDelay,
 		Frame: func() kit.Size { return frame },

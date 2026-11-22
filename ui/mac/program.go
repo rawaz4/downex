@@ -100,6 +100,31 @@ func (w *Window) BringToFront(activate bool) bool {
 	return true
 }
 
+// RaiseWindow puts w in front of other apps' windows without activating the application: the
+// window of a download the user just started in the browser ("--raise"), which macOS 14+ may
+// not let activate. The application is unhidden, and w deminiaturised, moved to the active
+// Space and ordered front at once; then, for seconds, it is ordered front again each time an
+// app that is not Downex becomes active (the browser, which macOS activates again once
+// Downex.app, where the Confirm download window was, has ended), until w becomes key or
+// closes. A later call starts its seconds again. Main thread.
+func RaiseWindow(w *Window, seconds float64) {
+	if w == nil || w.closed {
+		return
+	}
+	C.dxgWindowRaise(w.ns, C.double(seconds))
+}
+
+// RaiseState reports whether RaiseWindow still follows the other apps' activations for the
+// window, and whether the window moves to the active Space (tests and tools). Main thread.
+func (w *Window) RaiseState() (following, activeSpace bool) {
+	if w.closed {
+		return false, false
+	}
+	var f, s C.bool
+	C.dxgWindowRaiseState(w.ns, &f, &s)
+	return bool(f), bool(s)
+}
+
 // CloseNow closes the window at once without a CloseEvent (the end of the session), unless a
 // call into its root is in progress (one of its modal dialogs is open): then it reports false
 // and the window stays.

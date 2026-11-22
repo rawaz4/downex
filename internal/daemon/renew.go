@@ -75,6 +75,8 @@ func (w *renewWin) release() {
 // where it stopped, queued (start) or paused. Nothing changes when the proof fails:
 // the refusal is FailedPrecondition with a "<code>: " message prefix and the code as
 // ErrorCodeMeta (renew_*, link_expired, auth_required, http_status, network, tls).
+// progress_window with start: downexd opens the download's progress window itself when it
+// starts now, as Confirm does (progress_window_opening in the answer).
 func (m *Manager) RenewLink(ctx context.Context, r *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
 	id := model.DownloadID(r.GetId())
 	page, err := parsePageURL(r.GetPageUrl())
@@ -82,8 +84,9 @@ func (m *Manager) RenewLink(ctx context.Context, r *downexv1.RenewLinkRequest) (
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	var (
-		req  model.Request
-		from model.DownloadID
+		req     model.Request
+		from    model.DownloadID
+		fromSrc model.Source
 	)
 	switch link := r.GetLink().(type) {
 	case *downexv1.RenewLinkRequest_Url:
@@ -120,6 +123,7 @@ func (m *Manager) RenewLink(ctx context.Context, r *downexv1.RenewLinkRequest) (
 		m.mu.Lock()
 		ok := src.run == nil && src.rec.State == model.StateAwaitingConfirmation && src.rec.Kind == model.KindFile
 		fromReq, fromPage := src.rec.Request, src.rec.PageURL
+		fromSrc = src.rec.Source
 		m.mu.Unlock()
 		if !ok {
 			return nil, errPrecondition("download %d is not a new file download awaiting confirmation", from)
@@ -186,21 +190,35 @@ func (m *Manager) RenewLink(ctx context.Context, r *downexv1.RenewLinkRequest) (
 	}
 
 	sctx := context.WithoutCancel(ctx)
-	pd := m.afterRenewal(sctx, e, r.GetStart())
+	// The progress window of a renewal that starts now (the Confirm download dialog's
+	// "Continue that download"): downexd opens it, from the source of the add whose link it
+	// took (a browser add's comes above the browser).
+	source := stored.Source
+	if src != nil {
+		source = fromSrc
+	}
+	pd, launch := m.afterRenewal(sctx, e, r.GetStart(), r.GetStart() && r.GetProgressWindow(), source)
 	m.hub.publish(e.id, kindUpdated)
+	if launch != nil {
+		go launch()
+	}
 	if src != nil {
 		if err := m.removeAcquired(sctx, src, true); err != nil {
 			m.log.Warn("cannot remove the download whose link continued another", "download", int64(from), "err", err)
 		}
 	}
 	m.log.Info("download renewed", "download", int64(id), "host", hostOf(req.URL), "restarted", proof.Fresh,
-		"compared_bytes", proof.Compared, "from_download", int64(from))
-	return &downexv1.RenewLinkResponse{Download: pd, Restarted: proof.Fresh, NameDiffers: proof.NameDiffers}, nil
+		"compared_bytes", proof.Compared, "from_download", int64(from), "opening", launch != nil)
+	return &downexv1.RenewLinkResponse{Download: pd, Restarted: proof.Fresh, NameDiffers: proof.NameDiffers,
+		ProgressWindowOpening: launch != nil}, nil
 }
 
 // afterRenewal re-reads e's record after engine.Renew stored it, queues it when it was
 // started (queue) and returns it as clients see it. Offers to continue e are dropped.
-func (m *Manager) afterRenewal(ctx context.Context, e *entry, queue bool) *downexv1.Download {
+// window: its progress window opens when it starts now (show_progress_window on and a
+// window to open): the run is marked, and launch, non-nil then, opens the window from
+// source src; the caller runs it on a goroutine of its own (showProgressLocked).
+func (m *Manager) afterRenewal(ctx context.Context, e *entry, queue, window bool, src model.Source) (pd *downexv1.Download, launch func()) {
 	rec, err := m.st.GetDownload(ctx, e.id)
 	var received int64
 	if err == nil {
@@ -226,7 +244,10 @@ func (m *Manager) afterRenewal(ctx context.Context, e *entry, queue bool) *downe
 	m.unparkLocked(e)
 	m.dropOffersLocked(e.id)
 	m.scheduleLocked()
-	return m.protoLocked(e)
+	if window && e.run != nil && !m.closed && m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil {
+		launch = m.showProgressLocked(e, src)
+	}
+	return m.protoLocked(e), launch
 }
 
 // hostOf is rawURL's host for logs (never its path or query).
@@ -491,6 +512,7 @@ func (m *Manager) applyRenewal(e *entry, c *renewCheck, win *renewWin) bool {
 	m.mu.Lock()
 	p := win.proof
 	p.PageURL = e.rec.PageURL
+	src := e.rec.Source
 	m.mu.Unlock()
 	if err := m.eng.Renew(ctx, old.id, p, true); err != nil {
 		m.log.Warn("cannot continue the download with the new link", "download", int64(old.id), "err", err)
@@ -498,18 +520,12 @@ func (m *Manager) applyRenewal(e *entry, c *renewCheck, win *renewWin) bool {
 	}
 	win.lk.Release() // before the scheduler may start it
 	win.lk = nil
-	m.afterRenewal(ctx, old, true)
-	m.mu.Lock()
 	// Its progress window opens when the add's would have (a hand-off that starts now).
-	show := !c.awaiting && handOff(e.rec.Source) && old.run != nil && !m.closed &&
-		m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil
-	src := e.rec.Source
+	_, launch := m.afterRenewal(ctx, old, true, !c.awaiting && handOff(src), src)
+	m.mu.Lock()
 	pdOld := m.protoLocked(old)
 	m.notify(Notice{Kind: NoticeLinkRenewed, Download: pdOld})
 	e.check, e.parked = nil, false
-	if show {
-		m.wg.Add(1)
-	}
 	m.mu.Unlock()
 	releaseOp(old)
 	m.hub.publish(old.id, kindUpdated)
@@ -518,13 +534,8 @@ func (m *Manager) applyRenewal(e *entry, c *renewCheck, win *renewWin) bool {
 	}
 	m.log.Info("download renewed", "download", int64(old.id), "host", hostOf(c.req.URL), "restarted", false,
 		"compared_bytes", p.Compared, "from_download", int64(e.id))
-	if show {
-		go func() {
-			defer m.wg.Done()
-			if err := m.openProgressFor(int64(old.id), src); err != nil {
-				m.log.Warn("cannot open the progress window", "download", int64(old.id), "err", err)
-			}
-		}()
+	if launch != nil {
+		go launch()
 	}
 	return true
 }
@@ -584,7 +595,8 @@ func (m *Manager) releaseCheck(e *entry, c *renewCheck) {
 		e.check, e.parked = nil, false
 	}
 	current := m.entries[e.id] == e && !m.closed
-	ask, show := false, false
+	ask := false
+	var launch func()
 	src := e.rec.Source
 	// A queued add always goes back into the queue and the scheduler runs (a quiet end
 	// too: the operation that ended the check may refuse it or change nothing, and then
@@ -596,8 +608,10 @@ func (m *Manager) releaseCheck(e *entry, c *renewCheck) {
 			if _, waiting := m.waiting[e.id]; !waiting {
 				m.enqueueLocked(e.id)
 				m.scheduleLocked()
-				show = !c.ended && !c.awaiting && handOff(e.rec.Source) && e.run != nil &&
-					m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil
+				if !c.ended && !c.awaiting && handOff(e.rec.Source) && e.run != nil &&
+					m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil {
+					launch = m.showProgressLocked(e, src)
+				}
 			}
 		case model.StateAwaitingConfirmation:
 			ask = !c.quiet
@@ -607,26 +621,21 @@ func (m *Manager) releaseCheck(e *entry, c *renewCheck) {
 	if current {
 		pd = m.protoLocked(e)
 	}
-	if ask || show {
+	if ask {
 		m.wg.Add(1)
 	}
 	m.mu.Unlock()
 	if !current {
-		return
+		return // nothing to ask or show (a launch is made only for the entry indexed now)
 	}
 	m.hub.publish(e.id, kindUpdated)
-	switch {
-	case ask:
+	if launch != nil {
+		go launch()
+	}
+	if ask {
 		go func() {
 			defer m.wg.Done()
 			m.confirm.request(pd)
-		}()
-	case show:
-		go func() {
-			defer m.wg.Done()
-			if err := m.openProgressFor(int64(e.id), src); err != nil {
-				m.log.Warn("cannot open the progress window", "download", int64(e.id), "err", err)
-			}
 		}()
 	}
 }

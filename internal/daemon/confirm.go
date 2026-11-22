@@ -44,7 +44,15 @@ import (
 // old ones; its part is the one the request gives (none: the whole video), and a
 // proposed name follows the new item. "" or the recorded item keeps it; any other
 // download refuses it (InvalidArgument).
-func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*downexv1.Download, error) {
+//
+// progress_window with start (docs/DESKTOP-SPEC.md §7): downexd opens the download's
+// progress window itself, above the browser for a browser download, while
+// show_progress_window is on and a window can open (Config.OpenProgress): at once when it
+// starts now, its run marked windowed (§8), and also when it waits in its queue (the
+// window shows it queued, and its run is windowed as it starts). The answer's
+// progress_window_opening says so; the caller then opens no window. A launch that fails
+// takes the mark back, so the outcome goes to the tray instead.
+func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*downexv1.ConfirmResponse, error) {
 	id := model.DownloadID(r.GetId())
 	var maxConn *int
 	if r.MaxConnections != nil {
@@ -246,16 +254,27 @@ func (m *Manager) Confirm(ctx context.Context, r *downexv1.ConfirmRequest) (*dow
 		m.enqueueLocked(e.id)
 	}
 	m.scheduleLocked()
-	// The confirming window opens the progress window of a download that starts now: it is
-	// marked at once, so the outcome never depends on that window's own mark arriving first.
-	if r.GetProgressWindow() && e.run != nil && !m.closed && m.settings.ShowProgressWindow {
-		m.markWindowedLocked(e)
+	// The progress window after Start is downexd's to open: it is marked and launched here,
+	// where the start is known, so the outcome never depends on another window's request.
+	want := r.GetStart() && r.GetProgressWindow() && !m.closed &&
+		m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil
+	var launch func()
+	switch {
+	case want && e.run != nil: // starts now
+		launch = m.showProgressLocked(e, rec.Source)
+	case want && e.rec.State == model.StateQueued: // waits in its queue: shown queued
+		e.next = nextLaunched
+		launch = m.launchLocked(e.id, rec.Source, nil)
 	}
 	pd := m.protoLocked(e)
 	m.mu.Unlock()
 	m.hub.publish(e.id, kindUpdated)
-	m.log.Info("download confirmed", "download", int64(id), "dir", rec.Dir, "start", r.GetStart(), "queue", int64(queue))
-	return pd, nil
+	if launch != nil {
+		go launch()
+	}
+	m.log.Info("download confirmed", "download", int64(id), "dir", rec.Dir, "start", r.GetStart(), "queue", int64(queue),
+		"progress_window", r.GetProgressWindow(), "opening", launch != nil)
+	return &downexv1.ConfirmResponse{Download: pd, ProgressWindowOpening: launch != nil}, nil
 }
 
 // checkConfirmedDir validates dir (absolute and clean), the folder a confirmation chose

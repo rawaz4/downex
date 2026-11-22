@@ -87,11 +87,13 @@ resumable downloads, browser capture, media grabbing and scheduling.
 - Go 1.27+, Node 24 LTS + pnpm, Git, Wails v2 CLI, WebView2 (Windows) / webkit2gtk-4.1 (Linux).
 - Later: buf (protobuf), NSIS + WiX v5, GoReleaser + nfpm, flatpak-builder, an Ubuntu 22.04/24.04
   test machine or WSL2 distro.
-- Release: no paid code signing (the Windows Setup is unsigned, macOS builds are ad-hoc signed);
-  the extension is in no browser store yet and is loaded by hand in every browser (unpacked in
-  Chrome, Edge, Brave and Chromium, as a temporary add-on in Firefox); listings on
-  addons.mozilla.org and Edge Add-ons are planned, a Chrome Web Store listing is not. Later: CI
-  on GitHub Actions.
+- Release: no paid code signing (the Windows Setup is unsigned, macOS builds are ad-hoc signed).
+  The extension is listed on the Chrome Web Store (the store build, without the YouTube button,
+  which the store does not allow; Edge, Brave and Chromium install it from there too) and on
+  Firefox Add-ons (with the YouTube button), and Downex explains those first; the full Chromium
+  copy with the YouTube button still ships in the installation's `extension\chrome-mv3` folder for
+  Load unpacked (BROWSER-SPEC §1, "Store first", amendment 2026-11-22). Later: CI on GitHub
+  Actions.
 
 ## 4. Milestones
 | Milestone | Scope | Status |

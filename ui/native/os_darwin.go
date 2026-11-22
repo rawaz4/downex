@@ -38,12 +38,21 @@ type windowSpec struct {
 // openWindow opens root's window on a as ws says (-noactivate shows it without activating;
 // -render and -dpi have no meaning here: Core Graphics draws at the screen's scale).
 func openWindow(a *osApp, root kit.Root, ws windowSpec, o options, b *backend) (*osWindow, error) {
-	wo := mac.WindowOptions{Title: ws.Title, Size: ws.Size, MinSize: ws.MinSize, NoActivate: o.noActivate}
+	wo := mac.WindowOptions{
+		Title: ws.Title, Size: ws.Size, MinSize: ws.MinSize, NoActivate: o.noActivate,
+		AcceptsFirstMouse: acceptsFirstMouse(ws, b.view),
+	}
 	if ws.Maximized {
 		return a.NewMaximizedWindow(root, wo)
 	}
 	return a.NewWindow(root, wo)
 }
+
+// acceptsFirstMouse: the standalone Confirm download window (a Dialog) and the progress
+// windows open over the browser the user is in, so the click that brings them forward also
+// presses what it lands on ("Start download", Pause); the main window's only brings it
+// forward, as the Mac's windows do.
+func acceptsFirstMouse(ws windowSpec, v host.View) bool { return ws.Dialog || v.IsProgress() }
 
 // progressFrames are the frames the progress window's first size and its minimum leave out.
 // Today's Mac window (Wails) made the window with a content rect of 520 × 300 and the

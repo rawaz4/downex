@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"downex/ui/kit"
 	"downex/ui/views"
 	"downex/ui/views/settings"
 	"downex/ui/views/viewstest"
@@ -36,6 +37,22 @@ func TestSkinShots(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := viewstest.WritePNG(filepath.Join(dir, name+"-"+theme+"-"+pg+".png"), img); err != nil {
+					t.Fatal(err)
+				}
+				if pg != "integration" {
+					continue
+				}
+				// Integration again with "Advanced: install from the folder" open.
+				fold := find(d.Card(), func(e *kit.Element) bool { return e.Semantics.AutomationID == "integration-folder-steps" })
+				if fold == nil {
+					t.Fatal("no folder steps disclosure")
+				}
+				h.Click(fold)
+				h.Settle()
+				if img, err = h.Render(); err != nil {
+					t.Fatal(err)
+				}
+				if err := viewstest.WritePNG(filepath.Join(dir, name+"-"+theme+"-integration-open.png"), img); err != nil {
 					t.Fatal(err)
 				}
 			}

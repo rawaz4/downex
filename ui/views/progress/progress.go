@@ -20,6 +20,10 @@ import (
 type Options struct {
 	// ID is the download the window shows (host.View.Progress).
 	ID int64
+	// Started: the window opens as its download starts (host.View.Started, downexd's
+	// "--started"): it shows the progress for at least MinProgressView before the
+	// completion view, even of a download that completed at once (docs/DESKTOP-SPEC.md §7).
+	Started bool
 	// Daemon is downexd (host.Session.Daemon); Events the bridge's batches (a state.Hub
 	// that host.Session.Start feeds).
 	Daemon host.Daemon

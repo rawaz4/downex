@@ -64,10 +64,14 @@ func TestWindowsInstaller(t *testing.T) {
 	signed := map[string]sig{}
 	var st starts
 	in := NewInstaller(System{
-		GOOS:          "windows",
-		Layout:        func() (client.Layout, error) { return client.Layout{Exe: exe, Dir: dir}, nil },
-		StartDetached: st.start,
-		Getenv:        noEnv,
+		GOOS:   "windows",
+		Layout: func() (client.Layout, error) { return client.Layout{Exe: exe, Dir: dir}, nil },
+		StartDetached: func(string, ...string) error {
+			t.Error("the Windows installer starts Setup with its whole command line (StartDetachedCommandLine)")
+			return errors.New("no")
+		},
+		StartDetachedCommandLine: func(exe, cmdLine string) error { return st.start(exe, cmdLine) },
+		Getenv:                   noEnv,
 		Authenticode: func(p string) (Signer, error) {
 			if r, ok := signed[p]; ok {
 				return r.signer, r.err
@@ -105,8 +109,10 @@ func TestWindowsInstaller(t *testing.T) {
 	if err := staged.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.get(); len(got) != 1 || !slices.Equal(got[0], []string{setup, "/S", "/RELAUNCH"}) {
-		t.Errorf("started %q, want [%s /S /RELAUNCH]", got, setup)
+	// Setup replaces the running installation's folder: /D= last and unquoted.
+	want := []string{setup, `"` + setup + `" /S /RELAUNCH /D=` + dir}
+	if got := st.get(); len(got) != 1 || !slices.Equal(got[0], want) {
+		t.Errorf("started %q, want %q", got, want)
 	}
 
 	// A signed downexd needs a Setup validly signed by the same publisher: the same
@@ -146,6 +152,89 @@ func TestWindowsInstaller(t *testing.T) {
 	staged, _ = in.Stage(ctx, setup, v)
 	if err := staged.Commit(); err == nil {
 		t.Error("a failed start was not reported")
+	}
+}
+
+// TestSetupCommandLine: the folder goes last after /D=, unquoted also with spaces (NSIS
+// reads it so); a path that a command line cannot carry is refused.
+func TestSetupCommandLine(t *testing.T) {
+	root := t.TempDir()
+	setup := filepath.Join(root, "updates", "Downex-Setup-2.0.0.exe")
+	dir := filepath.Join(root, "John Doe", "Programs", "Downex")
+	got, err := setupCommandLine(setup, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"` + setup + `" /S /RELAUNCH /D=` + dir; got != want {
+		t.Errorf("command line %q, want %q", got, want)
+	}
+	for _, bad := range [][2]string{
+		{setup, "Programs\\Downex"},
+		{"Downex-Setup-2.0.0.exe", dir},
+		{setup, dir + "\"x"},
+		{setup, dir + "\r\n/S"},
+	} {
+		if _, err := setupCommandLine(bad[0], bad[1]); !errors.Is(err, ErrNotUpdatable) {
+			t.Errorf("setupCommandLine(%q, %q) = %v, want ErrNotUpdatable", bad[0], bad[1], err)
+		}
+	}
+}
+
+// TestMacCleanLeftovers: staging folders that an install cut short left next to Downex.app
+// (each with a whole Downex.app) go once they are old; a fresh one (an install that may be
+// running), other names and files stay, and so does the installed bundle.
+func TestMacCleanLeftovers(t *testing.T) {
+	f := newMacFixture(t)
+	old := time.Now().Add(-2 * staleStaging)
+	dir := func(name string, mtime time.Time) string {
+		t.Helper()
+		p := filepath.Join(f.apps, name)
+		writeBundle(t, filepath.Join(p, macAppName), "new")
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	gone := []string{dir(".downex-update-123456", old), dir(".downex-update-77.old", old)}
+	kept := []string{dir(".downex-update-999", time.Now()), dir(".downex-update-x1", old), dir("Other.app", old), f.bundle}
+	file := filepath.Join(f.apps, ".downex-update-555")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kept = append(kept, file)
+
+	in, ok := f.installer().(Leftovers)
+	if !ok {
+		t.Fatal("the macOS installer cannot clean leftovers")
+	}
+	// Finding them removes nothing (the daemon finds them while it holds off installs and
+	// removes them after).
+	found := in.FindLeftovers()
+	slices.Sort(found)
+	if want := slices.Sorted(slices.Values(gone)); !slices.Equal(found, want) {
+		t.Errorf("found %q, want %q", found, want)
+	}
+	for _, p := range gone {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("finding removed %s: %v", p, err)
+		}
+	}
+	in.RemoveLeftovers(found)
+	for _, p := range gone {
+		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is still there (%v)", p, err)
+		}
+	}
+	for _, p := range kept {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("%s was removed: %v", p, err)
+		}
+	}
+	if mark(f.bundle) != "old" {
+		t.Error("the installed bundle changed")
+	}
+	if _, ok := NewInstaller(System{GOOS: "windows"}).(Leftovers); ok {
+		t.Error("the Windows installer claims leftovers of its own (Setup and CleanDir handle them)")
 	}
 }
 

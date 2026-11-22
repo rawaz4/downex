@@ -278,6 +278,55 @@ func TestBrowserHandOffAwaitsConfirmation(t *testing.T) {
 	h.stop(d)
 }
 
+// A browser hand-off confirmed with Start by a window that asks for the progress window
+// (ConfirmRequest.progress_window, as the Confirm download window does): downexd starts the
+// progress window itself, above the browser and as the download starts ("--progress <id>
+// --raise --started"), says so in its answer, and its completion opens the download complete
+// dialog in that window ("--progress <id> --raise"), nothing else (DESKTOP-SPEC §7, §8).
+func TestBrowserHandOffConfirmedStartOpensItsProgressWindow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	const size, seed = 1<<20 + 13, 404
+	srv := newServer(t, testserver.Options{Size: size, Seed: seed, ETag: `"c5"`})
+	inst := h.newDesktopInstall()
+	d := h.startDaemonFrom(inst.downexd, inst.env)
+	h.waitReady(d)
+	h.setDefaultDir(h.out)
+
+	id := h.handOff(map[string]any{"url": srv.URL + "/files/started.zip", "size": size})
+	if call := inst.waitUICall(t); !slices.Equal(call.Args, []string{"--confirm", idArg(id), "--raise"}) {
+		t.Fatalf("confirmation window started with %q", call.Args)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rpcCallTimeout)
+	defer cancel()
+	res, err := h.dl.Confirm(ctx, connect.NewRequest(&downexv1.ConfirmRequest{Id: id, Start: true, ProgressWindow: true}))
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if !res.Msg.GetProgressWindowOpening() || !res.Msg.GetDownload().GetCompletionDialog() {
+		t.Fatalf("confirm answered %v", res.Msg)
+	}
+	h.waitCompleted(id)
+	checkFile(t, filepath.Join(h.out, "Archives", "started.zip"), seed, size)
+	deadline := time.Now().Add(10 * time.Second)
+	for len(inst.uiCalls(t)) < 3 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond) // a late extra start would show up now
+	n := idArg(id)
+	want := [][]string{{"--confirm", n, "--raise"}, {"--progress", n, "--raise", "--started"}, {"--progress", n, "--raise"}}
+	calls := inst.uiCalls(t)
+	if got := callArgs(calls); !equalCalls(got, want) {
+		t.Fatalf("window starts %q, want %q", got, want)
+	}
+	for _, c := range calls {
+		if c.Endpoint != h.endpoint {
+			t.Errorf("window started on endpoint %q, want %q", c.Endpoint, h.endpoint)
+		}
+	}
+	h.stop(d)
+}
+
 // With confirm_browser_downloads off ("downex settings --confirm-browser off") a
 // hand-off is queued at once: no confirmation is asked for, and the MIME hint chooses
 // the category folder when neither the name nor the URL tells. With show_progress_window
@@ -333,9 +382,11 @@ func TestBrowserHandOffWithoutConfirmation(t *testing.T) {
 	wid := h.handOff(map[string]any{"url": srv3.URL + "/files/shown.zip", "size": size})
 	dl = h.waitCompleted(wid)
 	checkFile(t, filepath.Join(h.out, "Archives", "shown.zip"), seed+2, size)
+	// As the download starts: "--started" (the window shows the progress for a moment even
+	// when it completed at once, DESKTOP-SPEC §7).
 	call := inst.waitUICall(t)
-	if !slices.Equal(call.Args, []string{"--progress", idArg(wid), "--raise"}) || call.Endpoint != h.endpoint {
-		t.Fatalf("window started with %q on endpoint %q, want [--progress %d --raise] on %q (earlier downloads: %d, %d)",
+	if !slices.Equal(call.Args, []string{"--progress", idArg(wid), "--raise", "--started"}) || call.Endpoint != h.endpoint {
+		t.Fatalf("window started with %q on endpoint %q, want [--progress %d --raise --started] on %q (earlier downloads: %d, %d)",
 			call.Args, call.Endpoint, wid, h.endpoint, id, cid)
 	}
 	// downexd marked the hand-off when it opened its window: its completion opens the download

@@ -884,7 +884,7 @@ func (c *Confirm) confirm(start bool) {
 	confirmFn := c.o.Confirm
 	if confirmFn == nil {
 		confirmFn = func(ctx context.Context, r *downexv1.ConfirmRequest) error {
-			_, err := c.app.Main.Downloads.Confirm(ctx, r)
+			_, _, err := c.app.Main.Downloads.Confirm(ctx, r)
 			return err
 		}
 	}
@@ -917,7 +917,10 @@ func (c *Confirm) offerCard(o *downexv1.RenewOffer) *views.Note {
 }
 
 // continueOld is "Continue that download": RenewLink of the stopped download from this one
-// (started, another name accepted); the dialog then closes with the success toast.
+// (started, another name accepted); the dialog then closes with the success toast. With
+// show_progress_window on, the continued download's progress window opens when it starts
+// now: downexd opens it (RenewLinkRequest.progress_window); a downexd that says it does not
+// leaves it to this dialog, before it closes (openProgress).
 func (c *Confirm) continueOld(old int64) {
 	if c.busy != "" || c.tooSoon() || c.gone {
 		return
@@ -929,13 +932,18 @@ func (c *Confirm) continueOld(old int64) {
 	if renew == nil {
 		renew = c.app.Main.Downloads.RenewLink
 	}
+	window := c.settings.GetShowProgressWindow()
 	req := &downexv1.RenewLinkRequest{Id: old, Link: &downexv1.RenewLinkRequest_FromDownload{FromDownload: c.download.GetId()},
-		Start: true, AllowNameChange: true}
+		Start: true, AllowNameChange: true, ProgressWindow: window}
 	name := c.download.GetRenewOffer().GetFilename()
 	c.goFn(func() {
 		ctx, cancel := c.app.CallContext()
 		defer cancel()
 		resp, err := renew(ctx, req)
+		var openErr error
+		if err == nil && window && !resp.GetProgressWindowOpening() && views.StartsNow(resp.GetDownload()) {
+			openErr = c.openProgress(resp.GetDownload().GetId())
+		}
 		c.app.UI(func() {
 			if c.gone {
 				return
@@ -949,9 +957,23 @@ func (c *Confirm) continueOld(old int64) {
 			}
 			c.refresh()
 			c.app.Success(display.RenewedToast(name, resp.GetRestarted()))
+			if openErr != nil {
+				c.app.Error("Could not open the progress window of " + text.Isolate(name) + ": " +
+					text.Isolate(views.ErrorMessage(openErr)))
+			}
 			c.done()
 		})
 	})
+}
+
+// openProgress opens the progress window of download id that downexd does not open itself,
+// off the UI thread: above the browser from the standalone Confirm download window of a
+// browser download (ConfirmOptions.Window), else as any other.
+func (c *Confirm) openProgress(id int64) error {
+	if c.o.Window && c.download.GetSource() == downexv1.AddSource_ADD_SOURCE_BROWSER {
+		return c.app.Platform.OpenProgressWindowRaised(id)
+	}
+	return c.app.Platform.OpenProgressWindow(id)
 }
 
 func (c *Confirm) moveFn() func(ctx context.Context, q int64) error {

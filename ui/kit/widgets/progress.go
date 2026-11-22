@@ -64,6 +64,7 @@ func NewProgressBar(label string, small bool) *ProgressBar {
 	b.pct.Style.Flex = kit.FlexNone
 	b.pct.Semantics.Role = kit.RoleText
 	b.eased.OnChange = b.shownChanged
+	b.eased.Glide = true // a download's progress moves smoothly between its reports
 	b.Add(b.bar, b.pct)
 	return b
 }
@@ -353,6 +354,118 @@ type SegmentBar struct {
 	hatch     *hatchAnim
 	lastWidth kit.DIP
 	stops     [4]kit.GradientStop
+
+	// The glide (adopt): while a download streams, each cell's fill moves at an even pace from
+	// what was drawn to the new report over the time since the previous report, so the bar
+	// advances smoothly rather than in steps.
+	glide      *segGlide
+	glideFrom  []SegCell
+	glideTo    []SegCell
+	glideStart time.Time
+	glideDur   time.Duration
+	lastReport time.Time
+	drawn      []SegCell // scratch for Paint
+}
+
+// segGlide redraws a SegmentBar while its glide runs.
+type segGlide struct {
+	s    *SegmentBar
+	dead bool
+}
+
+// Step is kit.Animation's.
+func (g *segGlide) Step(now time.Time) bool {
+	if g.dead {
+		return false
+	}
+	g.s.Invalidate()
+	if !now.Before(g.s.glideStart.Add(g.s.glideDur)) {
+		g.s.glide = nil
+		return false
+	}
+	return true
+}
+
+// Finish is kit.Animation's: the glide ends at its target.
+func (g *segGlide) Finish() {
+	if !g.dead {
+		g.dead = true
+		if g.s.glide == g {
+			g.s.glide = nil
+		}
+		g.s.Invalidate()
+	}
+}
+
+// adopt makes next the cells to draw, gliding to them when they continue a streaming download
+// (same cells, nothing going back, something gone forward, the last report recent enough).
+func (s *SegmentBar) adopt(next []SegCell) {
+	w := s.Window()
+	var now time.Time
+	if w != nil {
+		now = w.Now()
+	}
+	since := now.Sub(s.lastReport)
+	glide := w != nil && w.MotionOK() && !s.lastReport.IsZero() && since > 0 && since < 2*time.Second &&
+		s.state == BarDownloading && len(next) > 0 && len(next) == len(s.cells)
+	var from []SegCell
+	if glide {
+		// A fresh buffer: cellsAt reads glideFrom while it fills this one.
+		from = s.cellsAt(now, make([]SegCell, 0, len(next)))
+		forward := false
+		for i, c := range next {
+			p := from[i]
+			if c.Indeterminate || p.Indeterminate || c.Fraction < p.Fraction-1e-9 {
+				glide = false
+				break
+			}
+			if c.Fraction > p.Fraction {
+				forward = true
+			}
+		}
+		glide = glide && forward
+	}
+	if !now.IsZero() {
+		s.lastReport = now
+	}
+	if !glide {
+		s.stopGlide()
+		s.cells = next
+		return
+	}
+	s.glideFrom = from
+	s.glideTo = append(s.glideTo[:0], next...)
+	s.glideStart, s.glideDur = now, kit.GlideDuration(since)
+	s.cells = next
+	if s.glide == nil {
+		s.glide = &segGlide{s: s}
+		w.Animate(s.glide)
+	}
+}
+
+func (s *SegmentBar) stopGlide() {
+	if s.glide != nil {
+		s.glide.dead = true
+		s.glide = nil
+	}
+}
+
+// cellsAt appends to buf the cells as drawn at now: the glide's position while it runs, else
+// the cells themselves.
+func (s *SegmentBar) cellsAt(now time.Time, buf []SegCell) []SegCell {
+	buf = append(buf, s.cells...)
+	if s.glide == nil || s.glideDur <= 0 || len(s.glideFrom) != len(buf) || len(s.glideTo) != len(buf) {
+		return buf
+	}
+	t := float64(now.Sub(s.glideStart)) / float64(s.glideDur)
+	if t >= 1 || t < 0 {
+		return buf
+	}
+	for i := range buf {
+		f, to := s.glideFrom[i].Fraction, s.glideTo[i].Fraction
+		buf[i].Fraction = f + (to-f)*t
+	}
+	return buf
 }
 
 // NewSegmentBar makes a bar of a size.
@@ -377,7 +490,7 @@ func NewSegmentBar(size SegSize) *SegmentBar {
 func (s *SegmentBar) Set(cells []SegCell, state BarState) {
 	s.Fixed, s.state = cells, state
 	if s.Cells == nil {
-		s.cells = cells
+		s.adopt(cells)
 	}
 	s.Invalidate()
 	s.syncHatch()
@@ -385,6 +498,15 @@ func (s *SegmentBar) Set(cells []SegCell, state BarState) {
 
 // Shown are the cells drawn in the last layout.
 func (s *SegmentBar) Shown() []SegCell { return s.cells }
+
+// Drawn are the cells as drawn now: while a glide runs, the fills on their way to Shown.
+func (s *SegmentBar) Drawn() []SegCell {
+	w := s.Window()
+	if w == nil {
+		return s.cells
+	}
+	return s.cellsAt(w.Now(), nil)
+}
 
 func (s *SegmentBar) radius() kit.DIP {
 	if s.Size == SegCompact || s.Size == SegMini {
@@ -404,6 +526,7 @@ func (s *SegmentBar) LayoutContent(ctx *kit.LayoutContext, box kit.Rect) {
 	s.rtl = ctx.RTL
 	if s.Cells != nil && (box.Width() != s.lastWidth || s.cells == nil) {
 		s.lastWidth = box.Width()
+		s.stopGlide() // a new width gives other cells
 		s.cells = s.Cells(box.Width())
 		s.syncHatch()
 	}
@@ -436,6 +559,7 @@ func (s *SegmentBar) Attached() { s.Window().Defer(s.syncHatch) }
 
 // Detached is kit.Detacher's.
 func (s *SegmentBar) Detached() {
+	s.stopGlide()
 	if s.hatch != nil {
 		s.hatch.dead = true
 		s.hatch = nil
@@ -469,7 +593,14 @@ func (s *SegmentBar) Paint(p *kit.PaintContext) {
 	if s.hatch != nil {
 		phase = s.hatch.phase(s.Window())
 	}
-	for i, c := range s.cells {
+	cells := s.cells
+	if s.glide != nil {
+		if w := s.Window(); w != nil {
+			s.drawn = s.cellsAt(w.Now(), s.drawn[:0])
+			cells = s.drawn
+		}
+	}
+	for i, c := range cells {
 		j := i
 		if s.rtl {
 			j = n - 1 - i

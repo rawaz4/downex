@@ -76,6 +76,10 @@ type ResumeOptions struct {
 	ExistingFile   downexv1.ExistingFile
 	MaxConnections *int32
 	SpeedLimit     *int64
+	// ProgressWindow: the caller shows the download's progress window for this run (the main
+	// window's single resume that opens one), so downexd marks the run at once
+	// (ResumeRequest.progress_window, DESKTOP-SPEC §8).
+	ProgressWindow bool
 }
 
 // The choice for a completed download's file when it is downloaded again.
@@ -1126,7 +1130,8 @@ func (s *DownloadsStore) Pause(ctx context.Context, ids []int64) []Outcome {
 }
 
 func resumeRequest(id int64, o ResumeOptions) *downexv1.ResumeRequest {
-	return &downexv1.ResumeRequest{Id: id, Restart: o.Restart, ExistingFile: o.ExistingFile, MaxConnections: o.MaxConnections, SpeedLimit: o.SpeedLimit}
+	return &downexv1.ResumeRequest{Id: id, Restart: o.Restart, ExistingFile: o.ExistingFile, MaxConnections: o.MaxConnections,
+		SpeedLimit: o.SpeedLimit, ProgressWindow: o.ProgressWindow}
 }
 
 // Resume resumes the resumable ones of ids.
@@ -1264,15 +1269,17 @@ func (s *DownloadsStore) ProbeMedia(ctx context.Context, req *downexv1.ProbeMedi
 	return resp.GetMedia(), nil
 }
 
-// Confirm confirms a download awaiting confirmation.
-func (s *DownloadsStore) Confirm(ctx context.Context, req *downexv1.ConfirmRequest) (*Download, error) {
+// Confirm confirms a download awaiting confirmation. opening reports that downexd opens the
+// download's progress window itself (ConfirmResponse.progress_window_opening, asked for with
+// ConfirmRequest.progress_window): the caller then opens none (DESKTOP-SPEC §7).
+func (s *DownloadsStore) Confirm(ctx context.Context, req *downexv1.ConfirmRequest) (d *Download, opening bool, err error) {
 	resp, err := answer(s, func() (*downexv1.ConfirmResponse, error) {
 		return s.daemon.Confirm(ctx, req)
 	}, (*downexv1.ConfirmResponse).GetDownload)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return resp.GetDownload(), nil
+	return resp.GetDownload(), resp.GetProgressWindowOpening(), nil
 }
 
 // Rescue finishes a download a browser left unfinished from its partial file

@@ -262,11 +262,7 @@ func (u *updateService) run(notices <-chan Notice, unsubscribe func()) {
 			}
 		}
 	}
-	for _, dir := range append([]string{u.cfg.DataDir}, u.cfg.OldDataDirs...) {
-		if dir != "" {
-			update.CleanDir(filepath.Join(dir, updatesDirName))
-		}
-	}
+	u.cleanPackages()
 
 	var stopTimer func() bool
 	arm := func(at time.Time) {
@@ -310,6 +306,8 @@ func (u *updateService) run(notices <-chan Notice, unsubscribe func()) {
 				arm(next)
 				continue
 			}
+			// A package the start could not remove goes now (cleanPackages).
+			u.cleanPackages()
 			last = u.cfg.now()
 			wait := u.cfg.interval
 			if !u.autoCheck(ctx) {
@@ -326,6 +324,42 @@ func (u *updateService) run(notices <-chan Notice, unsubscribe func()) {
 		case <-u.stop:
 			return
 		}
+	}
+}
+
+// cleanPackages removes the packages and partial downloads that an earlier update left in
+// the updates folders (update.CleanDir) and what an install cut short left beside the
+// installation (update.Leftovers), unless an install is running or has committed: its
+// files are in use. It runs at the start and before each automatic check, because at the
+// start the Setup that has just installed this daemon and started it is usually still
+// running, and Windows keeps the file of a running program; it goes a little later.
+//
+// It holds jobMu (so that no install starts) only while it removes the packages, a few
+// files whose names a new install would download to again, and while it lists the
+// installer's leftovers. Removing those, whole Downex.app copies, takes longer and comes
+// after, so that an InstallUpdate does not wait for it.
+func (u *updateService) cleanPackages() {
+	var (
+		left     []string
+		leftover update.Leftovers
+	)
+	u.jobMu.Lock()
+	if u.job != nil {
+		u.jobMu.Unlock()
+		return
+	}
+	for _, dir := range append([]string{u.cfg.DataDir}, u.cfg.OldDataDirs...) {
+		if dir != "" {
+			update.CleanDir(filepath.Join(dir, updatesDirName))
+		}
+	}
+	// The installer's own leftovers (macOS: a staged Downex.app next to the installed one).
+	if l, ok := u.installer.(update.Leftovers); ok {
+		leftover, left = l, l.FindLeftovers()
+	}
+	u.jobMu.Unlock()
+	if len(left) > 0 {
+		leftover.RemoveLeftovers(left)
 	}
 }
 

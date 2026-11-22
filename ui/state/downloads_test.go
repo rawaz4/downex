@@ -280,8 +280,8 @@ func TestDownloadsConfirmsAWaitingDownload(t *testing.T) {
 	if !slices.Equal(ids(s.Awaiting()), []int64{2, 1}) || s.Counts().Statuses[categories.Awaiting] != 2 {
 		t.Fatal(ids(s.Awaiting()))
 	}
-	if _, err := s.Confirm(ctx, &downexv1.ConfirmRequest{Id: 2, Dir: "/data"}); err != nil {
-		t.Fatal(err)
+	if _, opening, err := s.Confirm(ctx, &downexv1.ConfirmRequest{Id: 2, Dir: "/data"}); err != nil || opening {
+		t.Fatal(opening, err)
 	}
 	if d, _ := s.Get(2); d.GetState() != state.StatePaused || d.GetDir() != "/data" {
 		t.Fatal(d)
@@ -289,14 +289,19 @@ func TestDownloadsConfirmsAWaitingDownload(t *testing.T) {
 	if !slices.Equal(ids(s.Awaiting()), []int64{1}) {
 		t.Fatal(ids(s.Awaiting()))
 	}
-	if _, err := s.Confirm(ctx, &downexv1.ConfirmRequest{Id: 2, Start: true}); err == nil || !strings.Contains(err.Error(), "not awaiting") {
+	if _, _, err := s.Confirm(ctx, &downexv1.ConfirmRequest{Id: 2, Start: true}); err == nil || !strings.Contains(err.Error(), "not awaiting") {
 		t.Fatal(err)
 	}
 	// restart never applies to a download that has not started
 	if out := s.Restart(ctx, []int64{1}, 0); len(out) != 0 {
 		t.Fatal(out)
 	}
-	_ = f
+	// downexd says it opens the progress window of a Start itself: the store passes it on.
+	f.SetOpensProgressWindows(true)
+	d, opening, err := s.Confirm(ctx, &downexv1.ConfirmRequest{Id: 1, Start: true, ProgressWindow: true})
+	if err != nil || !opening || d.GetState() != state.StateQueued {
+		t.Fatal(d, opening, err)
+	}
 }
 
 func TestDownloadsActsOnlyOnVisibleSelectedRows(t *testing.T) {

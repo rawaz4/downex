@@ -48,11 +48,23 @@ const (
 	// "--raise" (downexd's Config.ShowBrowserAdd; docs/DESKTOP-SPEC.md §7 "Above the
 	// browser").
 	RaiseFlag = "raise"
+	// StartedFlag tells a progress window that it opens as its download starts (downexd's
+	// launch after a confirmation's Start, a hand-off that starts at once, a rescue's or a
+	// renewal's first start): "--progress <id> --started". A download that completes at
+	// once still shows its progress for a moment before its completion (docs/DESKTOP-SPEC.md
+	// §7). Without it (a reopen from the main window, the tray, or the outcome of a run,
+	// §8) the window shows what the download is at.
+	StartedFlag = "started"
 )
 
 // RaiseArg reports a "--raise" (or "-raise") option in args (without the program name).
-func RaiseArg(args []string) bool {
-	return slices.ContainsFunc(args, func(a string) bool { return a == "--"+RaiseFlag || a == "-"+RaiseFlag })
+func RaiseArg(args []string) bool { return hasFlag(args, RaiseFlag) }
+
+// StartedArg reports a "--started" (or "-started") option in args (without the program name).
+func StartedArg(args []string) bool { return hasFlag(args, StartedFlag) }
+
+func hasFlag(args []string, flag string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return a == "--"+flag || a == "-"+flag })
 }
 
 // The progress window's sizes (DESKTOP-SPEC §7), in DIPs. It grows to its expanded
@@ -74,10 +86,12 @@ const (
 
 // View is what one window shows: the main window (Progress and Confirm 0), the progress
 // window of download Progress, or the standalone Confirm download window that asks first
-// about download Confirm (docs/DESKTOP-SPEC.md §1).
+// about download Confirm (docs/DESKTOP-SPEC.md §1). Started marks a progress window that
+// opens as its download starts (StartedFlag).
 type View struct {
 	Progress int64
 	Confirm  int64
+	Started  bool
 }
 
 // IsProgress reports a progress window.
@@ -94,9 +108,10 @@ func (v View) IsMain() bool { return !v.IsProgress() && !v.IsConfirm() }
 // Confirm download window for "--confirm <id> --raise" (a download the user just started in
 // the browser: downexd's Config.ShowBrowserAdd; the main window is not shown); else the main
 // window (which shows the "--confirm <id>" of a start without "--raise" in its own dialog).
+// A progress window's "--started" sets Started.
 func ViewOf(args []string) View {
 	if ids := IDArgs(args, ProgressFlag); len(ids) > 0 {
-		return View{Progress: ids[0]}
+		return View{Progress: ids[0], Started: StartedArg(args)}
 	}
 	if ids := ConfirmArgs(args); len(ids) > 0 && RaiseArg(args) {
 		return View{Confirm: ids[0]}
@@ -317,6 +332,23 @@ func StartProgressWindow(id int64) error {
 	}
 	AllowForegroundHandoff()
 	return platform.StartApp(exe, "--"+ProgressFlag, strconv.FormatInt(id, 10))
+}
+
+// StartRaisedProgressWindow starts "<program> --progress <id> --raise" as
+// StartProgressWindow does: the progress window of a download the user just started in the
+// browser, which comes above the browser even when the system does not grant it the
+// foreground (RaiseFlag). When the window process runs already, the new process hands the
+// request over to it, raise included.
+func StartRaisedProgressWindow(id int64) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate this program: %w", err)
+	}
+	if l, err := client.FindLayout(func() (string, error) { return exe, nil }); err == nil {
+		exe = ProgressProgram(l, exe, regularFile)
+	}
+	AllowForegroundHandoff()
+	return platform.StartApp(exe, "--"+ProgressFlag, strconv.FormatInt(id, 10), "--"+RaiseFlag)
 }
 
 // ProgressProgram returns the program that shows the progress windows of this one (exe,

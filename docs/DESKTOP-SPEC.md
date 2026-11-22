@@ -192,19 +192,43 @@
   into `%LOCALAPPDATA%\Programs\Downex`; Start-menu shortcut "Downex" → `downex-ui.exe`; optional desktop
   shortcut; HKCU Uninstall entry (DisplayName "Downex", Publisher "Downex", version, size, icon).
 - After copying: `downex-nmhost.exe register` (current user) and start `downexd --background`.
-- Upgrade: stop the UI and `downex daemon stop` before replacing files.
-- Uninstall: stop UI + daemon, `downex-nmhost.exe unregister`, remove the Run entry, shortcuts, files and
+- Upgrade: Setup installs into the folder its Uninstall entry names (`InstallLocation`) or, for the
+  in-app update, the running installation's folder (`/S /RELAUNCH /D=<folder>`, M6-SPEC §4). It stops
+  the UI and `downex daemon stop` of that folder, renames the programs aside (`<name>.old`), writes
+  the new files in place and deletes the aside copies (one still in use goes with the next Setup or
+  the uninstaller), and removes extension files the new version no longer ships. An installation
+  the Uninstall entry names in another folder is removed with its own uninstaller, keeping the
+  user's data, so one installation remains; the same folder spelt another way (8.3 name, junction,
+  subst drive) is recognised by a marker file (`.downex-setup-same`, a stale one deleted first) and
+  never uninstalled. A Setup that fails after it stopped Downex puts the aside programs back and
+  starts the daemon (and, after an in-app update, the window) again whenever that folder held a
+  Downex (its `downexd.exe`) before, also when nothing was set aside yet and whatever the Uninstall
+  entry names. One that fails before it stopped anything (a folder it cannot write to) starts
+  nothing.
+- Uninstall: stop UI + daemon, `downex-nmhost.exe unregister`, remove the Run entry, shortcuts, files
+  (with Setup's marker files `.downex-setup-same` and `.downex-setup-test`, should one be left) and
   the Uninstall key; ask before deleting user data (`%APPDATA%\Downex`, logs).
-- The browser extension cannot be installed silently outside the browser stores; the installer's finish
-  page links to instructions for loading `extension\chrome-mv3` (dev builds) until store listings exist.
+- Setup cannot install the browser extension (browsers do not let programs do it). The finish page
+  points to the Chrome Web Store and Firefox Add-ons listings (Settings → Integration has both
+  buttons) and links to `EXTENSION.txt`, which explains them first and then, under "Advanced: install
+  from the folder", loading the full copy in `extension\chrome-mv3` (with the YouTube button) unpacked
+  (BROWSER-SPEC §1, "Store first").
 
 ## 7. Per-download progress window
 A small window per download (one per download id; reopening focuses the existing one) that shows the
 live state of that download, in Downex's own visual style.
 
 **When it opens** (only while `Settings.show_progress_window` is true):
-- the user clicks **Start download** in the confirmation dialog, or adds a download in the main window
-  without "start paused";
+- (1.1.2) the user clicks **Start download** in the confirmation dialog (the standalone Confirm download
+  window or the main window's dialog) or **Continue that download** on its offer card (§10.3): the
+  dialog asks for the window (`ConfirmRequest.progress_window`, `RenewLinkRequest.progress_window`) and
+  downexd opens it itself, at once, where the start is known, above the browser for a browser download.
+  It opens it also when the confirmed download waits in its queue (`max_concurrent_downloads`, a queue):
+  the window shows it queued, and the run shows there when it starts. The answer says so
+  (`progress_window_opening`), and the dialog opens nothing. Only a downexd that does not (an older one,
+  one without a window next to it) leaves it to the dialog, as before: when the download starts now,
+  from the Confirm download window with `--raise`;
+- the user adds a download in the main window without "start paused";
 - a browser hand-off starts at once (confirmation off) — the daemon opens it;
 - (0.8.2) the user resumes or restarts **exactly one** download in the main window (the toolbar, its row's
   action, Space, the context menu, the details pane, the command palette, or the Restart / Download
@@ -214,16 +238,24 @@ live state of that download, in Downex's own visual style.
   confirmation) in the main list, or chooses "Show progress" from its context menu (this works
   regardless of the setting).
 Queued/scheduled downloads that start later (including a hand-off queued behind
-`max_concurrent_downloads`), CLI downloads, adds of several URLs at once, PauseAll/ResumeAll, resuming
-or restarting several selected downloads, queue and scheduler starts, automatic retries, and Resume or
-Retry inside an already open progress window never open windows.
+`max_concurrent_downloads` without a confirmation; a confirmed Start is the exception above), CLI
+downloads, adds of several URLs at once, PauseAll/ResumeAll, resuming or restarting several selected
+downloads, queue and scheduler starts, automatic retries, and Resume or Retry inside an already open
+progress window never open windows.
+
+**As the download starts (1.1.2):** a window that downexd opens as the download starts (a confirmed
+Start, a hand-off that starts at once, a rescue's or a renewal's first start) gets `--started`
+(`downex-ui --progress <id> --raise --started`). It shows the progress view for at least 1.2 s before the
+completion view, even when the download completed before the window read it, so that a download of a
+few hundred milliseconds is seen downloading and then complete, not only complete. Any other opening
+(from the main window, the tray, the §8 dialog of a run's outcome) shows what the download is at.
 
 **Above the browser:** a download the user starts in the browser (source browser: an add, a media or
 video add, a played video, a rescue) shows its window at once above the window the user works in:
 its progress window while `show_progress_window` is on and it starts at once, its standalone Confirm
 download window (§1) while `confirm_browser_downloads` is on. Otherwise (both off, or the add waits in its
 queue) nothing shows: the main window is never shown, restored or brought forward for a browser add.
-downexd starts these with `--raise` (`downex-ui --progress <id> --raise`, `--confirm <id> --raise`);
+downexd starts these with `--raise` (`downex-ui --progress <id> --raise --started`, `--confirm <id> --raise`);
 only such a start raises a window, and so does the download complete dialog (§8) of a browser download
 whose progress window showed that run. A clipboard add, a CLI or window add, and the complete dialog of
 any other run never do: they open as before, and Windows only flashes their taskbar button when the user is busy
@@ -311,11 +343,20 @@ connections of a download that a running daemon is downloading.
 ## 8. Download complete dialog
 The completion view of §7, extended so it also appears when the progress window was closed.
 
-- **Who gets it:** downloads the user started interactively — any download whose progress window was
-  opened at least once (the UI marks it via `SetDownloadOptions{completion_dialog: true}`; persisted
-  as `Download.completion_dialog`). downexd marks it itself, at the start of the run, when it opens
-  the progress window (§7) or when a confirmation says its window opens it
-  (`ConfirmRequest.progress_window`), so a quick download or failure never outruns the window's mark. Queue/scheduled/CLI downloads only get the tray notification.
+- **Who gets it (1.1.2):** a run whose progress window was shown or asked for — the dialog is the
+  run's, not the download's. downexd marks the run (`windowed`) when it opens the progress window as
+  the run starts (§7: a confirmed Start, a hand-off that starts at once, a rescue's or a renewal's first
+  start), so a quick download or failure never outruns a window's mark; when a progress window marks it
+  while it runs (`SetDownloadOptions{completion_dialog: true}`: the window sends it once when it opens,
+  and again for each later run it sees start); when a window was open on the stopped or queued
+  download before the run started (the same call while it is stopped marks its next run); and when the
+  window's own Resume or Retry, or the main window's single resume that opens the window, starts it
+  (`ResumeRequest.progress_window`). The mark is persisted as `Download.completion_dialog` (a window
+  was opened), but a later run of that download without a window (queue, scheduler, CLI, a retry from
+  elsewhere) only gets the tray notification, as every queue/scheduled/CLI download does. When downexd
+  cannot launch the window it opened, it takes the mark back: the outcome is a tray notification, never
+  a lone complete dialog. The outcome of a windowed run shows in its window, above the browser for a
+  browser download, and the tray stays quiet about it.
   Nothing pops up while `Settings.show_complete_dialog` is off.
 - **Closing the progress window (X) only closes the window**: the download keeps running in the daemon.
   **Cancel** still means pause + close.

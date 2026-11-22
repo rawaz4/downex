@@ -409,6 +409,88 @@ void dxgWindowFront(void *p, bool activate) {
 	}
 }
 
+// ---- raise over the browser ---------------------------------------------------------
+
+// DXGRaise is a window's following of dxgWindowRaise: its observers, until stop.
+@interface DXGRaise : NSObject
+@property(nonatomic, strong) id activation; // NSWorkspace's notification center
+@property(nonatomic, strong) id becameKey;  // NSNotificationCenter's
+@property(nonatomic, strong) id willClose;  // NSNotificationCenter's
+- (void)stop;
+@end
+
+@implementation DXGRaise
+- (void)stop {
+	if (self.activation) [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self.activation];
+	if (self.becameKey) [[NSNotificationCenter defaultCenter] removeObserver:self.becameKey];
+	if (self.willClose) [[NSNotificationCenter defaultCenter] removeObserver:self.willClose];
+	self.activation = nil;
+	self.becameKey = nil;
+	self.willClose = nil;
+}
+@end
+
+static const char dxgRaiseKey = 0;
+
+// dxgRaiseEnd ends w's following (dxgWindowRaise), if any.
+static void dxgRaiseEnd(NSWindow *w) {
+	DXGRaise *r = objc_getAssociatedObject(w, &dxgRaiseKey);
+	if (r == nil) return;
+	[r stop];
+	objc_setAssociatedObject(w, &dxgRaiseKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// dxgIsDownex reports an app of Downex's own bundles (com.downex.app, .progress, .agent):
+// one the user opened (the main window) is not covered by the raised window.
+static bool dxgIsDownex(NSRunningApplication *app) {
+	return app.processIdentifier == getpid() || [app.bundleIdentifier hasPrefix:@"com.downex."];
+}
+
+void dxgWindowRaise(void *p, double seconds) {
+	NSWindow *w = (__bridge NSWindow *)p;
+	dxgRaiseEnd(w);
+	if ([NSApp isHidden]) [NSApp unhideWithoutActivation];
+	if (w.isMiniaturized) [w deminiaturize:nil];
+	// To the Space the user is on (the browser's), not the one the window was last shown on.
+	w.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+	[w orderFrontRegardless];
+	if (seconds <= 0 || w.isKeyWindow) return;
+	// The app that opened the window (Downex.app, the Confirm download window's, which ends
+	// after Start) hands the activation back to the browser, which then comes over the window:
+	// each activation of another app puts it in front again while it follows.
+	DXGRaise *r = [DXGRaise new];
+	__weak NSWindow *weak = w;
+	r.activation = [[[NSWorkspace sharedWorkspace] notificationCenter]
+		addObserverForName:NSWorkspaceDidActivateApplicationNotification object:nil
+		queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+			NSWindow *s = weak;
+			if (s == nil || !s.isVisible || s.isMiniaturized || s.isKeyWindow) return;
+			NSRunningApplication *app = n.userInfo[NSWorkspaceApplicationKey];
+			if (app == nil || dxgIsDownex(app)) return;
+			[s orderFrontRegardless];
+		}];
+	// The user is in the window (it became key), or it is gone: nothing more to follow.
+	r.becameKey = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification
+		object:w queue:nil usingBlock:^(NSNotification *n) { dxgRaiseEnd(n.object); }];
+	r.willClose = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
+		object:w queue:nil usingBlock:^(NSNotification *n) { dxgRaiseEnd(n.object); }];
+	objc_setAssociatedObject(w, &dxgRaiseKey, r, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	// r is held to the end, so that its observers go even when the window is gone by then.
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		[r stop];
+		NSWindow *s = weak;
+		if (s != nil && objc_getAssociatedObject(s, &dxgRaiseKey) == r) {
+			objc_setAssociatedObject(s, &dxgRaiseKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		}
+	});
+}
+
+void dxgWindowRaiseState(void *p, bool *following, bool *activeSpace) {
+	NSWindow *w = (__bridge NSWindow *)p;
+	*following = objc_getAssociatedObject(w, &dxgRaiseKey) != nil;
+	*activeSpace = (w.collectionBehavior & NSWindowCollectionBehaviorMoveToActiveSpace) != 0;
+}
+
 long dxgWindowNumber(void *p) { return (long)((__bridge NSWindow *)p).windowNumber; }
 
 bool dxgWindowFullScreen(void *p) {

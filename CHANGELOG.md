@@ -5,6 +5,53 @@ All notable changes to Downex are listed here, newest first. Versions follow
 
 ## Unreleased
 
+## 1.1.2 - 2026-11-22
+
+A bug-fix release: the progress window right after Start, a smooth progress bar, the browser
+extension from its store, and updates that replace exactly your installation.
+
+### Changed
+
+- **Add the browser extension from its store.** Settings → Integration, Setup's last page, the
+  guide Setup links to and the README now start with **Add to Chrome** (Chrome Web Store, for
+  Chrome, Edge, Brave and Chromium) and **Add to Firefox** (Firefox Add-ons). Store copies update
+  themselves. The Chrome Web Store copy has no YouTube button, which the store does not allow:
+  **Want the YouTube button in Chrome?** opens the guide at downex.app/chrome-youtube, and the
+  full copy in Downex's folder (Load unpacked, Copy path, Open folder) is under **Advanced: install
+  from the folder**. The Firefox Add-ons copy has the YouTube button. Keep one copy per browser.
+- **Smooth progress.** The green progress bar of a download, in the list and in its progress
+  window, now moves smoothly at the download's pace between updates instead of in steps (not
+  while the system asks for reduced motion).
+
+### Fixed
+
+- **The progress window opens right after Start.** When you click **Start download**, Downex
+  itself opens the download's progress window at once, above the browser, also when the download
+  has to wait in its queue: the window then shows it waiting until its turn comes.
+- **Fast downloads show their progress.** A download that finishes in a moment shows its progress
+  for at least a moment before the download complete view.
+- **The download complete dialog only where you watched.** It appears only for a download whose
+  progress window was shown, never as a lone dialog for one you did not watch.
+- **No browser download is lost while the Confirm window closes.** A download the browser hands
+  over just as the Confirm download window closes now opens a new Confirm download window instead
+  of being dropped.
+- **Quit closes the Confirm download window too.** Quit in the tray (Windows) or the menu-bar icon
+  (macOS), and ⌘Q on macOS, now also close a Confirm download window that is open on its own.
+- **macOS: windows come above the browser.** The Confirm download and progress windows of a
+  browser download open above the browser and stay there, and they take the first click, so one
+  click on **Start download** is enough.
+- **The Chrome extension waits for Downex to reconnect.** When the extension's connection to
+  Downex is restarting (for example right after the browser woke the extension up), a download
+  waits a moment for it instead of staying in the browser. (Chrome, Edge, Brave and Chromium.)
+- **Downex keeps its browser registration up to date.** A few seconds after it starts, Downex
+  refreshes its registration with the browsers, so a newly added copy of the extension, such as
+  the Chrome Web Store one, connects without **Register with browsers again**.
+- **Updates replace exactly the Downex you run.** From this version on, an update on Windows
+  installs into the folder Downex runs from, also when that is not the usual folder, and removes
+  an installation in another folder, so one Downex remains. If the update cannot finish, the
+  earlier version starts again. Downloaded update packages, and on macOS the copies of Downex.app
+  an interrupted update left behind, are removed afterwards, so no old copies stay.
+
 ## 1.1.1 - 2026-11-20
 
 A bug-fix release: smoother updates, a cleaner Confirm download window, and Quit that closes all

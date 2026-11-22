@@ -75,6 +75,18 @@ func (r *noticeRecorder) has(kind NoticeKind, id int64) bool {
 	return false
 }
 
+// inWindow reports a notice of kind for download id left to its progress window.
+func (r *noticeRecorder) inWindow(kind NoticeKind, id int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range r.seen {
+		if n.Kind == kind && n.Download.GetId() == id && n.InWindow {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *harness) gone(id int64) bool {
 	_, err := h.dl.Get(ctxT(h.t), connect.NewRequest(&downexv1.GetRequest{Id: id}))
 	return connectCode(err) == connect.CodeNotFound
@@ -82,7 +94,8 @@ func (h *harness) gone(id int64) bool {
 
 // TestRenewAutoMatch: a browser hand-off of a fresh link to the same file is held while
 // it is checked, then removed, and the download whose link expired continues with its
-// link, opens its progress window and is announced (A4, A5, A7).
+// link, opens its progress window and is announced (A4, A5, A7); its outcome shows in that
+// window (the run is windowed, docs/DESKTOP-SPEC.md §8).
 func TestRenewAutoMatch(t *testing.T) {
 	t.Parallel()
 	var opened sync.Map
@@ -112,16 +125,46 @@ func TestRenewAutoMatch(t *testing.T) {
 	if _, ok := opened.Load(n.GetId()); ok {
 		t.Fatal("the held add's progress window was opened")
 	}
+	waitUntil(t, "the outcome in its window", func() bool { return notices.inWindow(NoticeCompleted, old.GetId()) })
+}
+
+// TestRenewNoMatchHandOffShowsItsWindow: a browser hand-off held for the check that matches
+// nothing starts as an add would: its progress window opens as it starts, and its outcome
+// shows there (A9, docs/DESKTOP-SPEC.md §7, §8).
+func TestRenewNoMatchHandOffShowsItsWindow(t *testing.T) {
+	t.Parallel()
+	windows := &launcher{}
+	h := newHarness(t, harnessOptions{openProgress: windows.open,
+		settings: func(s *downexv1.Settings) { s.ConfirmBrowserDownloads = false }})
+	notices := recordNotices(t, h.m)
+	srv := renewServer(t, 6)
+	old := expiredDownload(t, h, srv, "/tool.zip")
+	other := serve(t, testserver.Options{Size: renewSize, Seed: 7})
+
+	n := h.add(&downexv1.AddRequest{Url: other.URL + "/tool.zip", Source: downexv1.AddSource_ADD_SOURCE_BROWSER})
+	if !n.GetRenewCheck() {
+		t.Fatal("the add was not checked")
+	}
+	checkFile(t, h.waitCompleted(n.GetId()), 7, renewSize)
+	waitLaunches(t, windows, n.GetId(), n.GetId())
+	waitUntil(t, "the outcome in its window", func() bool { return notices.inWindow(NoticeCompleted, n.GetId()) })
+	if got := h.get(old.GetId()); got.GetErrorCode() != CodeLinkExpired {
+		t.Fatalf("the stopped download changed: %v", got)
+	}
 }
 
 // TestRenewAskMode: with renew_links ask, a matching hand-off awaits confirmation with
 // an offer; RenewLink from it continues the stopped download and removes it (A8, R2).
+// With progress_window downexd opens the continued download's progress window itself and
+// says so.
 func TestRenewAskMode(t *testing.T) {
 	t.Parallel()
 	var asked sync.Map
+	windows := &launcher{}
 	h := newHarness(t, harnessOptions{
 		settings:         func(s *downexv1.Settings) { s.RenewLinks = downexv1.RenewLinks_RENEW_LINKS_ASK },
 		openConfirmation: func(id int64) error { asked.Store(id, true); return nil },
+		openProgress:     windows.open,
 	})
 	srv := renewServer(t, 2)
 	old := expiredDownload(t, h, srv, "/movie.mkv")
@@ -138,7 +181,7 @@ func TestRenewAskMode(t *testing.T) {
 
 	res, err := h.dl.RenewLink(ctxT(t), connect.NewRequest(&downexv1.RenewLinkRequest{
 		Id: old.GetId(), Link: &downexv1.RenewLinkRequest_FromDownload{FromDownload: n.GetId()}, Start: true,
-		AllowNameChange: true,
+		AllowNameChange: true, ProgressWindow: true,
 	}))
 	if err != nil {
 		t.Fatalf("RenewLink(from_download) = %v", err)
@@ -146,10 +189,15 @@ func TestRenewAskMode(t *testing.T) {
 	if res.Msg.GetRestarted() || res.Msg.GetDownload().GetState() == downexv1.DownloadState_DOWNLOAD_STATE_FAILED {
 		t.Fatalf("response = %v", res.Msg)
 	}
+	if !res.Msg.GetProgressWindowOpening() {
+		t.Fatalf("progress_window_opening unset: %v", res.Msg)
+	}
 	if !h.gone(n.GetId()) {
 		t.Fatal("the awaiting download was not removed")
 	}
 	checkFile(t, h.waitCompleted(old.GetId()), 2, renewSize)
+	// Its window as it starts, then the download complete dialog in it.
+	waitLaunches(t, windows, old.GetId(), old.GetId())
 }
 
 // TestRenewNoMatch: another file under the same name and size is downloaded on its own;

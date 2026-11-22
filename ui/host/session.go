@@ -36,6 +36,7 @@ type Session struct {
 	minBackoff time.Duration
 	maxBackoff time.Duration
 	openWindow func(id int64) error
+	openRaised func(id int64) error
 	env        func(string) string
 
 	ctx    context.Context // ended by Close
@@ -67,6 +68,10 @@ type SessionOptions struct {
 	MinBackoff, MaxBackoff time.Duration
 	// OpenWindow starts the progress window of a download (StartProgressWindow when nil).
 	OpenWindow func(id int64) error
+	// OpenRaisedWindow starts the progress window of a download the user just started in
+	// the browser, above the browser ("--progress <id> --raise"; StartRaisedProgressWindow
+	// when nil, which a running window process takes over).
+	OpenRaisedWindow func(id int64) error
 	// FreeSpace reads the bytes free on the volume of an absolute folder
 	// (platform.FreeSpace when nil).
 	FreeSpace func(dir string) (int64, error)
@@ -96,6 +101,10 @@ func NewSession(o SessionOptions) *Session {
 	if open == nil {
 		open = StartProgressWindow
 	}
+	openRaised := o.OpenRaisedWindow
+	if openRaised == nil {
+		openRaised = StartRaisedProgressWindow
+	}
 	env := o.Env
 	if env == nil {
 		env = getenv
@@ -111,6 +120,7 @@ func NewSession(o SessionOptions) *Session {
 		minBackoff: o.MinBackoff,
 		maxBackoff: o.MaxBackoff,
 		openWindow: open,
+		openRaised: openRaised,
 		env:        env,
 		ctx:        ctx,
 		cancel:     cancel,
@@ -233,6 +243,14 @@ func (s *Session) SaveTheme(c ThemeChoice) error {
 // internal.
 func (s *Session) OpenProgressWindow(id int64) error {
 	return openProgressWindow(id, s.openWindow, s.log)
+}
+
+// OpenProgressWindowRaised opens the progress window of download id as OpenProgressWindow
+// does, above the browser even without the foreground (RaiseFlag): the progress window of a
+// download the user just started in the browser, when downexd does not open it itself
+// (docs/DESKTOP-SPEC.md §7; SessionOptions.OpenRaisedWindow).
+func (s *Session) OpenProgressWindowRaised(id int64) error {
+	return openProgressWindow(id, s.openRaised, s.log)
 }
 
 // Diagnostics is the "Copy diagnostics" text of this window (Diagnostics); webview is the

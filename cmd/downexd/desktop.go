@@ -94,17 +94,24 @@ func desktopHooks(o options, log *slog.Logger) desktop {
 }
 
 // raiseFlag asks the window that a browser add opens to come above the browser
-// (ui/host.RaiseFlag).
-const raiseFlag = "--raise"
+// (ui/host.RaiseFlag); startedFlag tells a progress window that it opens as its download
+// starts (ui/host.StartedFlag).
+const (
+	raiseFlag   = "--raise"
+	startedFlag = "--started"
+)
 
 // browserAddWindow starts window w of browser add id with raiseFlag: its progress window
-// when it is installed (withProgress), its standalone Confirm download window
-// ("--confirm <id> --raise", docs/DESKTOP-SPEC.md §1). Nothing else: never the main window.
+// when it is installed (withProgress; with startedFlag as the download starts,
+// daemon.AddProgressStarted), its standalone Confirm download window ("--confirm <id>
+// --raise", docs/DESKTOP-SPEC.md §1). Nothing else: never the main window.
 func browserAddWindow(id int64, w daemon.AddWindow, withProgress bool) error {
 	n := strconv.FormatInt(id, 10)
 	switch {
 	case w == daemon.AddProgress && withProgress:
 		return openProgressApp("--progress", n, raiseFlag)
+	case w == daemon.AddProgressStarted && withProgress:
+		return openProgressApp("--progress", n, raiseFlag, startedFlag)
 	case w == daemon.AddConfirm:
 		return openUI("--confirm", n, raiseFlag)
 	}

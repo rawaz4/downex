@@ -266,6 +266,11 @@ func (p *ProgressStore) putLocked(d *Download, fromEvent bool, at uint64) func()
 	if !p.hasFirst {
 		p.firstState, p.hasFirst = next.GetState(), true
 	}
+	// A run that this window sees start (queued or running again after it stopped, whoever
+	// started it) shows in this window too: it is marked again (DESKTOP-SPEC §8).
+	if prev != nil && p.mark == markDone && !IsActive(prev.GetState()) && IsActive(next.GetState()) {
+		p.mark = markUnsent
+	}
 	p.download = next
 	p.missing = false
 	return p.markLocked(next)
@@ -273,13 +278,15 @@ func (p *ProgressStore) putLocked(d *Download, fromEvent bool, at uint64) func()
 
 // markLocked: a download whose progress window was opened gets the download complete
 // dialog, also when the window is closed before it completes: the window tells downexd
-// once. A completed download needs no mark (this window already shows its completion),
-// nor one marked already.
+// once, and again for each later run it sees start (putLocked). A completed download needs
+// no mark (this window already shows its completion). One marked already is told too:
+// downexd gives the dialog only to a run that a window shows or was open for (DESKTOP-SPEC
+// §8), and the stored mark may be an earlier run's.
 func (p *ProgressStore) markLocked(d *Download) func() {
 	if p.mark != markUnsent || p.disposed {
 		return nil
 	}
-	if d.GetCompletionDialog() || d.GetState() == StateCompleted {
+	if d.GetState() == StateCompleted {
 		p.mark = markDone
 		return nil
 	}
@@ -392,10 +399,11 @@ func (p *ProgressStore) Pause(ctx context.Context) error {
 	return err
 }
 
-// Resume resumes it (restart: from the start).
+// Resume resumes it (restart: from the start): the window's own Resume and Retry, so the run
+// they start shows in this window (ResumeRequest.progress_window, DESKTOP-SPEC §8).
 func (p *ProgressStore) Resume(ctx context.Context, restart bool) error {
 	_, err := p.ask(func() (*Download, error) {
-		resp, err := p.daemon.Resume(ctx, &downexv1.ResumeRequest{Id: p.id, Restart: restart})
+		resp, err := p.daemon.Resume(ctx, &downexv1.ResumeRequest{Id: p.id, Restart: restart, ProgressWindow: true})
 		return resp.GetDownload(), err
 	})
 	return err

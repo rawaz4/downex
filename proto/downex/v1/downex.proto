@@ -312,10 +312,11 @@ message ConfirmRequest {
   // SITE media of a page with several videos (SITE-MEDIA-SPEC §3.12): "" = keep the item; another
   // item's id resolves the page again for it (its tracks, title and part replace the old ones).
   string entry_id = 11;
-  // The caller opens the download's progress window when it starts now (the Confirm download
-  // window and the main window's dialog do, with show_progress_window on): downexd marks the
-  // download for the download complete dialog at once, so its outcome shows in that window,
-  // raised above the browser, instead of a tray notification.
+  // The caller wants the download's progress window when it starts (the Confirm download
+  // window and the main window's dialog ask, with show_progress_window on). downexd opens that
+  // window itself, above the browser, when the download starts now or waits in its queue
+  // (ConfirmResponse.progress_window_opening; DESKTOP-SPEC §7), and marks the run, so its
+  // outcome shows in that window instead of a tray notification (§8).
   bool progress_window = 12;
 }
 
@@ -421,6 +422,11 @@ message ProbeMediaResponse {
 
 message ConfirmResponse {
   Download download = 1;
+  // downexd opens this download's progress window itself (ConfirmRequest.progress_window, the
+  // setting on, a window to open): the caller must not open it too. False from a downexd that
+  // opens none (an older one, one without a window next to it, or the setting off): the caller
+  // opens it as before when the download starts now.
+  bool progress_window_opening = 2;
 }
 
 message PauseAllRequest {}
@@ -489,6 +495,11 @@ message ResumeRequest {
   // created at most 10 minutes ago. With show_progress_window on, its progress window
   // opens when it starts at once. Not combinable with restart.
   bool rescue_start = 6;
+  // The caller shows the download's progress window for this run (the progress window's own
+  // Resume or Retry, or the main window's single resume that opens one): when it starts now,
+  // downexd marks the run at once, so its outcome shows in that window (DESKTOP-SPEC §8).
+  // downexd opens no window for it.
+  bool progress_window = 7;
 }
 
 message ResumeResponse {
@@ -602,12 +613,19 @@ message RenewLinkRequest {
   bool restart_if_unproven = 6; // too little to compare: download again from the start
   bool start = 7; // queue it at once (else it stays paused)
   string page_url = 8; // optional: the page the new link was found on
+  // With start: the caller wants the download's progress window when it starts now (the
+  // Confirm download dialog's "Continue that download", with show_progress_window on). downexd
+  // opens it itself and marks the run, as ConfirmRequest.progress_window does.
+  bool progress_window = 9;
 }
 
 message RenewLinkResponse {
   Download download = 1;
   bool restarted = 2; // nothing could be kept: it downloads again from byte 0
   bool name_differs = 3;
+  // downexd opens the download's progress window itself (RenewLinkRequest.progress_window): the
+  // caller must not open it too.
+  bool progress_window_opening = 4;
 }
 
 // RescueRequest adopts a partial file another program (a browser) left unfinished and

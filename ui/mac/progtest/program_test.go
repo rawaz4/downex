@@ -232,6 +232,60 @@ func TestPlacementKeepsTheRestoredSize(t *testing.T) {
 	}
 }
 
+// TestRaiseWindowFollowsForItsSeconds: RaiseWindow (a "--raise" window: a download the user
+// just started in the browser) shows the window on the active Space without activating, and
+// follows the other apps' activations for its seconds only; a later call starts them again,
+// 0 seconds orders it front once, and a closed window is left alone.
+func TestRaiseWindowFollowsForItsSeconds(t *testing.T) {
+	w, _ := open(t, mac.WindowOptions{Title: "raised", Size: kit.Size{W: 300, H: 200}})
+	onMain(func() { w.Command(kit.WindowMinimize) })
+	runFor(t, w, 800*time.Millisecond)
+	var following, space, key, visible, mini bool
+	onMain(func() {
+		mac.RaiseWindow(w, 0.6)
+		following, space = w.RaiseState()
+		key, _, _ = w.FrontState()
+	})
+	if !space {
+		t.Error("a raised window does not move to the active Space")
+	}
+	if !following && !key { // a key window has nothing to follow
+		t.Error("a raised window that is not key does not follow the activations")
+	}
+	runFor(t, w, 500*time.Millisecond) // deminiaturised
+	onMain(func() { key, visible, mini = w.FrontState() })
+	if !visible || mini {
+		t.Errorf("raised: visible %v, minimised %v", visible, mini)
+	}
+	onMain(func() { mac.RaiseWindow(w, 0.6) }) // its 0.6 s start again
+	runFor(t, w, 300*time.Millisecond)         // past the first call's 0.6 s
+	onMain(func() { following, _ = w.RaiseState(); key, _, _ = w.FrontState() })
+	if !following && !key {
+		t.Error("the first call's end stopped the second call's following")
+	}
+	runFor(t, w, 600*time.Millisecond)
+	onMain(func() { following, space = w.RaiseState() })
+	if following || !space {
+		t.Errorf("after its seconds: following %v (want false), on the active Space %v", following, space)
+	}
+	onMain(func() {
+		mac.RaiseWindow(w, 0)
+		following, _ = w.RaiseState()
+	})
+	if following {
+		t.Error("RaiseWindow with 0 seconds follows the activations")
+	}
+	onMain(func() {
+		mac.RaiseWindow(w, 5)
+		w.CloseNow()
+		mac.RaiseWindow(w, 5) // closed: nothing
+		following, _ = w.RaiseState()
+	})
+	if following {
+		t.Error("a closed window still follows the activations")
+	}
+}
+
 // TestFrameSizeIsTheTitleBar: the frame is the title bar's height, before and after a
 // window exists.
 func TestFrameSizeIsTheTitleBar(t *testing.T) {

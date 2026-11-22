@@ -277,6 +277,65 @@ func done(edit func(d *downexv1.Download)) *downexv1.Download {
 	})
 }
 
+// A window that opens as its download starts ("--started": downexd's launch after Start)
+// shows the progress for at least MinProgressView before the completion view, even of a
+// download that completed at once; any other window shows the completion at once
+// (docs/DESKTOP-SPEC.md §7).
+func TestProgressWindowStartedShowsTheProgressFirst(t *testing.T) {
+	t.Run("complete when the window opens", func(t *testing.T) {
+		r := newRig(t, completed(nil), nil, rigOptions{started: true})
+		if r.completeShown() || r.s().complete || !visible(&r.s().bar.Element) {
+			t.Fatal("the completion showed at once")
+		}
+		r.advance(MinProgressView - 100*time.Millisecond)
+		if r.completeShown() {
+			t.Fatal("the completion showed before the least time")
+		}
+		r.advance(200 * time.Millisecond)
+		if !r.completeShown() {
+			t.Fatal("no completion after the least time")
+		}
+	})
+	t.Run("completes right after the window opens", func(t *testing.T) {
+		r := newRig(t, running(nil), nil, rigOptions{started: true})
+		r.advance(300 * time.Millisecond)
+		r.update(7, func(d *downexv1.Download) { d.State, d.Received, d.ConnectionInfo = state.StateCompleted, 100*MiB, nil })
+		if r.completeShown() {
+			t.Fatal("the completion showed after 300 ms")
+		}
+		r.advance(MinProgressView)
+		if !r.completeShown() {
+			t.Fatal("no completion after the least time")
+		}
+	})
+	t.Run("completes after the least time", func(t *testing.T) {
+		r := newRig(t, running(nil), nil, rigOptions{started: true})
+		r.advance(MinProgressView + 100*time.Millisecond)
+		r.update(7, func(d *downexv1.Download) { d.State, d.Received, d.ConnectionInfo = state.StateCompleted, 100*MiB, nil })
+		if !r.completeShown() {
+			t.Fatal("the completion waited after the least time")
+		}
+	})
+	t.Run("a window opened later shows the completion at once", func(t *testing.T) {
+		r := newRig(t, completed(nil), nil, rigOptions{})
+		if !r.completeShown() {
+			t.Fatal("no completion")
+		}
+	})
+	t.Run("the setting off closes the window after the least time", func(t *testing.T) {
+		s := settings()
+		offSettings(s)
+		r := newRig(t, completed(nil), s, rigOptions{started: true})
+		if r.api.closed != 0 {
+			t.Fatal("closed at once")
+		}
+		r.advance(MinProgressView + 100*time.Millisecond)
+		if r.api.closed != 1 {
+			t.Fatalf("closed %d times", r.api.closed)
+		}
+	})
+}
+
 func TestProgressWindowCompleteDialog(t *testing.T) {
 	sent := func(r *rig) int { return r.api.count("setDownloadOptions") }
 
@@ -302,11 +361,13 @@ func TestProgressWindowCompleteDialog(t *testing.T) {
 		}
 	})
 
-	t.Run("sends no mark for a download marked by an earlier window", func(t *testing.T) {
+	t.Run("marks a download marked by an earlier window again, once (the dialog is the run's)", func(t *testing.T) {
 		r := show(t, running(func(d *downexv1.Download) { d.CompletionDialog = true }))
-		if sent(r) != 0 {
+		r.update(7, func(d *downexv1.Download) { d.Received = 50 * MiB })
+		if sent(r) != 1 {
 			t.Fatal(sent(r))
 		}
+		wantArgs(t, r, "{completionDialog: true}")
 	})
 
 	t.Run("marks again after downexd could not be reached, but not after a refusal", func(t *testing.T) {

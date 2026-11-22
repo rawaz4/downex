@@ -54,6 +54,10 @@ type System struct {
 	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// StartDetached starts a process that outlives the daemon (platform.StartDetached).
 	StartDetached func(exe string, args ...string) error
+	// StartDetachedCommandLine is StartDetached with the whole command line, argv[0]
+	// included, given as it is (Windows: platform.StartDetachedCommandLine; the Setup's
+	// /D= must come last and unquoted).
+	StartDetachedCommandLine func(exe, cmdLine string) error
 	// Getenv reads the environment (os.Getenv): DOWNEX_ALLOW_UNSIGNED_UPDATE.
 	Getenv func(string) string
 	// Authenticode reports the Authenticode signature of a file (Windows): its signer and
@@ -101,6 +105,9 @@ func (s System) withDefaults() System {
 	}
 	if s.StartDetached == nil {
 		s.StartDetached = platform.StartDetached
+	}
+	if s.StartDetachedCommandLine == nil {
+		s.StartDetachedCommandLine = startDetachedCommandLine
 	}
 	if s.Getenv == nil {
 		s.Getenv = os.Getenv

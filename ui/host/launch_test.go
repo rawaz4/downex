@@ -64,6 +64,29 @@ func TestViewOfConfirm(t *testing.T) {
 	}
 }
 
+// "--progress <id> --started" (downexd's launch as the download starts) marks the progress
+// window Started; nothing else does, and it never makes another view.
+func TestViewOfStarted(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want View
+	}{
+		{[]string{"--progress", "5", "--raise", "--started"}, View{Progress: 5, Started: true}},
+		{[]string{"-started", "--progress=7"}, View{Progress: 7, Started: true}},
+		{[]string{"--progress", "5", "--raise"}, View{Progress: 5}},
+		{[]string{"--confirm", "5", "--raise", "--started"}, View{Confirm: 5}},
+		{[]string{"--started"}, View{}},
+		{[]string{"--progress", "5", "--startedx"}, View{Progress: 5}},
+	} {
+		if got := ViewOf(tc.args); got != tc.want {
+			t.Errorf("ViewOf(%q) = %+v, want %+v", tc.args, got, tc.want)
+		}
+	}
+	if !StartedArg([]string{"--started"}) || StartedArg([]string{"started"}) || StartedArg(nil) {
+		t.Error("StartedArg")
+	}
+}
+
 func TestConfirmArgs(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
@@ -221,15 +244,23 @@ func TestOpenProgressWindow(t *testing.T) {
 		t.Errorf("opened %v", opened)
 	}
 
-	// The session's opener is the one it was given.
-	var asked []int64
+	// The session's openers are the ones it was given: the plain one, and the one above the
+	// browser.
+	var asked, raised []int64
 	s := NewSession(SessionOptions{
 		Daemon: newFakeDaemon(), Shell: &fakeShell{}, ThemePath: filepath.Join(t.TempDir(), ThemeFileName),
-		OpenWindow: func(id int64) error { asked = append(asked, id); return nil },
+		OpenWindow:       func(id int64) error { asked = append(asked, id); return nil },
+		OpenRaisedWindow: func(id int64) error { raised = append(raised, id); return nil },
 	})
 	defer s.Close()
 	if err := s.OpenProgressWindow(9); err != nil || !slices.Equal(asked, []int64{9}) {
 		t.Errorf("Session.OpenProgressWindow = %v, opened %v", err, asked)
+	}
+	if err := s.OpenProgressWindowRaised(10); err != nil || !slices.Equal(raised, []int64{10}) || len(asked) != 1 {
+		t.Errorf("Session.OpenProgressWindowRaised = %v, raised %v, opened %v", err, raised, asked)
+	}
+	if err := s.OpenProgressWindowRaised(0); !hasPrefix(err, "invalid_argument: no such download: ") {
+		t.Errorf("Session.OpenProgressWindowRaised(0) = %v", err)
 	}
 }
 

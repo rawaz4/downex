@@ -61,6 +61,11 @@ func (p *Platform) RegisterBrowsers(context.Context) error { return p.Mock.Regis
 // OpenProgressWindow is Platform's.
 func (p *Platform) OpenProgressWindow(id int64) error { return p.Mock.OpenProgressWindow(id) }
 
+// OpenProgressWindowRaised is Platform's.
+func (p *Platform) OpenProgressWindowRaised(id int64) error {
+	return p.Mock.OpenProgressWindowRaised(id)
+}
+
 // PickFolder is Platform's.
 func (p *Platform) PickFolder(_ context.Context, initial string) (string, error) {
 	return p.Mock.PickFolder(initial), nil

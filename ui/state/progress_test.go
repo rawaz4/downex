@@ -49,15 +49,63 @@ func TestProgressReadsTheDownloadAndTheSettings(t *testing.T) {
 	}
 }
 
-func TestProgressMarksNothingForACompletedOrMarkedDownload(t *testing.T) {
+// A completed download needs no mark; one marked in an earlier run is told again, once:
+// downexd gives the complete dialog only to a run that a window shows (DESKTOP-SPEC §8).
+func TestProgressMarksNothingForACompletedDownload(t *testing.T) {
 	f := statetest.NewDaemon(dl(1, func(d *downexv1.Download) { d.State = state.StateCompleted }),
 		running(2, func(d *downexv1.Download) { d.CompletionDialog = true }))
-	for _, id := range []int64{1, 2} {
-		p, _ := progressStore(t, f, id)
-		p.Start(0)
-	}
+	p, _ := progressStore(t, f, 1)
+	p.Start(0)
 	if f.Count("setDownloadOptions") != 0 {
 		t.Fatal(f.Count("setDownloadOptions"))
+	}
+	q, _ := progressStore(t, f, 2)
+	q.Start(0)
+	f.Emit(statetest.Updated(running(2, func(d *downexv1.Download) { d.CompletionDialog, d.UpdatedAt = true, statetest.Ms(9e12) })))
+	if f.Count("setDownloadOptions") != 1 {
+		t.Fatal(f.Count("setDownloadOptions"))
+	}
+	if req, ok := f.Args("setDownloadOptions")[1].(*downexv1.SetDownloadOptionsRequest); !ok || req.GetId() != 2 || !req.GetCompletionDialog() {
+		t.Fatal(f.Args("setDownloadOptions"))
+	}
+}
+
+// A run that the open window sees start (resumed from the main window, the CLI or the queue)
+// is marked too, once: downexd gives the complete dialog to the runs a window shows.
+func TestProgressMarksEachRunItSeesStart(t *testing.T) {
+	f := statetest.NewDaemon(running(5, nil))
+	p, _ := progressStore(t, f, 5)
+	p.Start(0)
+	if f.Count("setDownloadOptions") != 1 {
+		t.Fatal(f.Count("setDownloadOptions"))
+	}
+	at := int64(9e12)
+	step := func(st downexv1.DownloadState) {
+		at += 1000
+		f.Emit(statetest.Updated(running(5, func(d *downexv1.Download) { d.State, d.CompletionDialog, d.UpdatedAt = st, true, statetest.Ms(at) })))
+	}
+	step(state.StatePaused)
+	if f.Count("setDownloadOptions") != 1 {
+		t.Fatal("marked when it stopped")
+	}
+	step(state.StateQueued)
+	step(state.StateDownloading)
+	if f.Count("setDownloadOptions") != 2 {
+		t.Fatal(f.Count("setDownloadOptions"))
+	}
+}
+
+// The window's own Resume and Retry tell downexd that the run they start shows in it.
+func TestProgressResumeShowsTheRunInTheWindow(t *testing.T) {
+	f := statetest.NewDaemon(dl(3, func(d *downexv1.Download) { d.State = state.StateFailed }))
+	p, _ := progressStore(t, f, 3)
+	p.Start(0)
+	if err := p.Resume(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	req, ok := f.Args("resume")[1].(*downexv1.ResumeRequest)
+	if !ok || req.GetId() != 3 || !req.GetProgressWindow() {
+		t.Fatal(f.Args("resume"))
 	}
 }
 

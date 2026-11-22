@@ -770,6 +770,24 @@ func TestAppProgressWindows(t *testing.T) {
 			t.Errorf("confirms %d, opened %v", f.calls("confirm"), f.fp.progress())
 		}
 	})
+	t.Run("opens none after \"Start download\" when downexd opens it itself", func(t *testing.T) {
+		f := lanes(t, setup{}, dl(1, state.StateAwaiting, func(d *downexv1.Download) {
+			d.Source = downexv1.AddSource_ADD_SOURCE_BROWSER
+			d.Size = -1
+		}))
+		f.d.SetOpensProgressWindows(true)
+		f.pastGuard()
+		f.press("Start download")
+		f.h.Settle()
+		f.advance(time.Second)
+		req, ok := f.d.Args("confirm")[1].(*downexv1.ConfirmRequest)
+		if f.calls("confirm") != 1 || !ok || !req.GetProgressWindow() {
+			t.Fatalf("confirm %v", f.d.Args("confirm"))
+		}
+		if got := f.fp.progress(); len(got) != 0 {
+			t.Errorf("opened %v as well as downexd", got)
+		}
+	})
 	t.Run("opens none for a download that waits in the queue (max_concurrent_downloads reached)", func(t *testing.T) {
 		// Like downexd with every slot taken: what it accepts is queued at position 1 (the
 		// fake's answer keeps the download's queue position).
@@ -801,6 +819,10 @@ func TestAppProgressWindows(t *testing.T) {
 		f.h.Settle()
 		if got := f.fp.progress(); !slices.Equal(got, []int64{1}) {
 			t.Fatalf("opened %v", got)
+		}
+		// downexd marks the run that the window shows (progress_window)
+		if req, ok := f.d.Args("resume")[1].(*downexv1.ResumeRequest); !ok || !req.GetProgressWindow() {
+			t.Fatalf("resume %v", f.d.Args("resume"))
 		}
 		f.h.App.Main.Downloads.Apply([]*downexv1.Event{statetest.Updated(f.d.Item(1))})
 		f.h.Settle()
@@ -836,6 +858,9 @@ func TestAppProgressWindows(t *testing.T) {
 		f.h.Settle()
 		if f.calls("resume") != 2 || len(f.fp.progress()) != 0 {
 			t.Fatalf("resumes %d, opened %v", f.calls("resume"), f.fp.progress())
+		}
+		if req, ok := f.d.Args("resume")[1].(*downexv1.ResumeRequest); !ok || req.GetProgressWindow() {
+			t.Fatalf("several resumed with progress_window: %v", f.d.Args("resume"))
 		}
 		// Resume all
 		f.h.App.Act.ResumeAll()

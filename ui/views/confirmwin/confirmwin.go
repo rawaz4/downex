@@ -63,6 +63,15 @@ type Options struct {
 	// MaxSize sets the largest client size the user can resize the window to, in DIPs, a side
 	// of 0 having none (nil: the kit window's host's SetMaxSize, when it has one).
 	MaxSize func(kit.Size)
+	// Closing is told, once, that the window is about to close, before Close: from then on the
+	// host gives a later start's "--confirm <id>" to a new Confirm download window, not to this
+	// one, which would drop it (nil: nobody).
+	Closing func()
+	// Reopen takes the ids of a request that came after the window began to close (a start
+	// the host handed to this window just before): the host opens a new Confirm download
+	// window for them. It runs on the UI thread. Nil: they are dropped (the downloads still
+	// await confirmation, and the main window lists them).
+	Reopen func(ids []int64)
 }
 
 // Screen is the window's content: the dialog of the download being confirmed.
@@ -113,8 +122,13 @@ func New(app *views.App, o Options) *Screen {
 }
 
 // Request asks for the confirmation of ids too (a later start's "--confirm <id>"), on the UI
-// thread.
+// thread. Once the window is closing, the ids go to Options.Reopen instead (reopen): a request
+// is never dropped for having come while the window closed.
 func (s *Screen) Request(ids []int64) {
+	if s.closed {
+		s.reopen(ids)
+		return
+	}
 	for _, id := range ids {
 		if id <= 0 {
 			continue
@@ -127,6 +141,31 @@ func (s *Screen) Request(ids []int64) {
 	}
 	if len(ids) > 0 {
 		s.sync()
+	}
+}
+
+// reopen hands the ids of a request that came after the window began to close to
+// Options.Reopen, once each: those of downloads still awaiting confirmation, and those not
+// listed yet (a browser add whose event has not come). A download the list shows confirmed,
+// put off or cancelled meanwhile is not asked for again.
+func (s *Screen) reopen(ids []int64) {
+	if s.o.Reopen == nil {
+		return
+	}
+	var left []int64
+	for _, id := range ids {
+		if id <= 0 || slices.Contains(left, id) {
+			continue
+		}
+		if m := s.app.Main; m != nil && m.Downloads.Ready() && !m.Downloads.Stale() {
+			if d, ok := m.Downloads.Get(id); ok && !views.IsAwaiting(d.GetState()) {
+				continue
+			}
+		}
+		left = append(left, id)
+	}
+	if len(left) > 0 {
+		s.o.Reopen(left)
 	}
 }
 
@@ -214,8 +253,10 @@ func (s *Screen) show(d *downexv1.Download, waiting int) {
 		Waiting:  waiting,
 		Window:   true,
 		Confirm: func(ctx context.Context, req *downexv1.ConfirmRequest) error {
-			got, err := s.app.Main.Downloads.Confirm(ctx, req)
-			if err == nil && req.GetStart() {
+			// downexd opens the progress window of a Start itself, above the browser
+			// (opening): this window opens it only when downexd says it does not.
+			got, opening, err := s.app.Main.Downloads.Confirm(ctx, req)
+			if err == nil && req.GetStart() && !opening {
 				s.app.UI(func() { s.progress = got })
 			}
 			return err
@@ -234,8 +275,8 @@ func (s *Screen) show(d *downexv1.Download, waiting int) {
 }
 
 // dialogClosed: a download confirmed, put off or cancelled shows the next one (the progress
-// window of one started is asked for first, so that it opens before this window closes);
-// Escape closes the window.
+// window of one started that downexd does not open itself is asked for first, above the
+// browser, so that it opens before this window closes); Escape closes the window.
 func (s *Screen) dialogClosed(c *add.Confirm, id int64) {
 	if s.current != c {
 		return
@@ -245,13 +286,18 @@ func (s *Screen) dialogClosed(c *add.Confirm, id int64) {
 	started := s.progress
 	s.progress = nil
 	if started != nil {
-		// Asked for before this window closes: when it is the process's last window, the
-		// host's request (posted to the UI thread, which runs posts in order) opens the
-		// progress window before the close, so the process does not end first.
+		// Asked for before this window closes: when it is the process's last window, a
+		// host's request posted to the UI thread (which runs posts in order) opens the
+		// progress window before the close, so the process does not end first; a start of
+		// "--progress <id> --raise" hands over to whichever window process runs then.
 		settings, _ := s.app.Settings()
 		if settings.GetShowProgressWindow() && views.StartsNow(started) {
 			sid := started.GetId()
-			if err := s.app.Platform.OpenProgressWindow(sid); err != nil {
+			open := s.app.Platform.OpenProgressWindow
+			if started.GetSource() == downexv1.AddSource_ADD_SOURCE_BROWSER {
+				open = s.app.Platform.OpenProgressWindowRaised // over the browser, as downexd's would
+			}
+			if err := open(sid); err != nil {
 				s.app.Log.Warn("cannot open the progress window", "download", sid, "error", err)
 			}
 		}
@@ -266,12 +312,16 @@ func (s *Screen) dialogClosed(c *add.Confirm, id int64) {
 	}
 }
 
-// finish closes the window once.
+// finish closes the window once, telling Options.Closing first: a start that comes while the
+// close is on its way then opens a new window rather than reaching this one.
 func (s *Screen) finish() {
 	if s.closed {
 		return
 	}
 	s.closed = true
+	if s.o.Closing != nil {
+		s.o.Closing()
+	}
 	if s.o.Close != nil {
 		s.o.Close()
 		return

@@ -167,6 +167,35 @@ func TestStartDetachedInJobWithoutBreakaway(t *testing.T) {
 	checkFacts(t, awaitMarker(t, marker))
 }
 
+// TestStartDetachedCommandLine: the command line reaches the process as it is given, not
+// requoted: an unquoted "/D=C:\a b" (the form an NSIS Setup needs) arrives as two
+// arguments, where StartDetached would have passed one.
+func TestStartDetachedCommandLine(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "marker")
+	cmdLine := `"` + os.Args[0] + `" -test.run=^TestHelperProcess$ -- ` + helperToken + ` record "` + marker + `" /S /D=C:\a b`
+	if err := StartDetachedCommandLine(os.Args[0], cmdLine); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(helperTimeout)
+	var data []byte
+	for {
+		var err error
+		if data, err = os.ReadFile(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the helper's marker")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got, want := string(data), "/S\n/D=C:\\a\nb\n"; got != want {
+		t.Errorf("the helper got the arguments %q, want %q", got, want)
+	}
+	if err := StartDetachedCommandLine(os.Args[0], ""); err == nil {
+		t.Error("an empty command line was accepted")
+	}
+}
+
 // diskUsage returns the bytes the file at path occupies on disk (GetCompressedFileSizeW,
 // which counts only allocated ranges of sparse files).
 func diskUsage(t *testing.T, path string) int64 {

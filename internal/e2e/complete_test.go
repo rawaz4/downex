@@ -126,8 +126,10 @@ func TestDownloadCompleteDialog(t *testing.T) {
 	if again := h.get(id); again.GetActiveMs() != stored.GetActiveMs() {
 		t.Fatalf("the active time grew while paused: %d -> %d ms", stored.GetActiveMs(), again.GetActiveMs())
 	}
+	// Resumed by its window (progress_window, as the window's own Resume sends): the dialog
+	// is the run's, and a run without a window would get the tray notification only.
 	resumed := time.Now()
-	if _, err := h.dl.Resume(ctx, connect.NewRequest(&downexv1.ResumeRequest{Id: id})); err != nil {
+	if _, err := h.dl.Resume(ctx, connect.NewRequest(&downexv1.ResumeRequest{Id: id, ProgressWindow: true})); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	if calls := inst.uiCalls(t); len(calls) != 0 {

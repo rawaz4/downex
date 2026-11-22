@@ -1,73 +1,87 @@
 Adding the Downex browser extension
 ===================================
 
-Downex takes over downloads from Chrome, Edge, Brave, Chromium (based on Chromium 116 or
-later) and Firefox (140 or later) through its browser extension. Browsers do not let programs install
-extensions themselves, so you add it by hand, once in each browser. Setup has already
+Downex takes over downloads from Chrome, Edge, Brave and Chromium (based on Chromium 116 or
+later) and Firefox (140 or later) through its browser extension. Browsers do not let programs
+install extensions themselves, so you add it once in each browser. Setup has already
 registered Downex with these browsers (the native-messaging host "com.downex.host"); only the
 extension itself is missing.
 
-The extension is not in any browser store yet. It is not on the Chrome Web Store, and the
-listings on Firefox Add-ons and Edge Add-ons are planned but not ready. For now, load it from
-the "extension" folder of the Downex installation, next to this file. By default that is:
+
+Add it from the store (recommended)
+-----------------------------------
+
+Chrome, Edge, Brave and Chromium ("Add to Chrome"):
+
+    https://chromewebstore.google.com/detail/llnofffhagcfejjcephcilcbndnhnbeg
+
+The listing also installs in Opera, Vivaldi and other Chromium browsers, but Setup registers
+Downex only with the browsers named above, so there the extension may say that Downex isn't
+set up.
+
+Firefox ("Add to Firefox"):
+
+    https://addons.mozilla.org/firefox/addon/downex/
+
+Open the link in the browser, click "Add to Chrome" (or "Add to Firefox"), then pin the
+extension: click the extensions (puzzle) icon in the toolbar, then the pin next to Downex.
+Downex's Settings > Integration has the same two buttons. Store copies update themselves.
+
+The Chrome Web Store copy has no YouTube download button: the store does not allow one. Every
+other site works the same, and the Firefox add-on keeps the button. Want the YouTube button in
+Chrome? The guide "The YouTube button in Chrome" shows how to install the full copy that comes
+with Downex:
+
+    https://downex.app/chrome-youtube
+
+Keep one copy per browser. If you install the copy from the folder (below), remove the Chrome
+Web Store copy first, or both take over downloads.
+
+
+Advanced: install from the folder
+---------------------------------
+
+The full copy of the extension is in the "extension" folder of the Downex installation, next
+to this file. By default that is:
 
     %LOCALAPPDATA%\Programs\Downex\extension\chrome-mv3     (Chrome, Edge, Brave, Chromium)
     %LOCALAPPDATA%\Programs\Downex\extension\firefox-mv3    (Firefox)
 
-If you installed Downex in another folder, use that one. In Downex, Settings > Integration
-shows both folders, with "Copy path" and "Open folder" buttons. In the browser's file window,
-paste the path into the address bar at the top and press Enter.
+If you installed Downex in another folder, use that one. In Downex, Settings > Integration >
+"Advanced: install from the folder" shows both folders, with "Copy path" and "Open folder"
+buttons. In the browser's file window, paste the path into the address bar at the top and
+press Enter.
 
 Do not move, rename or delete that folder while the extension is loaded from it.
 
+Chrome, Edge, Brave and Chromium:
 
-Chrome, Edge, Brave and Chromium
---------------------------------
-
-1. Open the extensions page (type it in the address bar and press Enter):
+1. Remove the Chrome Web Store copy of Downex, if you have it.
+2. Open the extensions page (type it in the address bar and press Enter):
    Chrome:   chrome://extensions
    Edge:     edge://extensions
    Brave:    brave://extensions
    Chromium: chrome://extensions
-2. Turn on "Developer mode" (a switch at the top right; in Edge, in the left pane).
-3. Click "Load unpacked" and select the folder "extension\chrome-mv3" of the Downex
+3. Turn on "Developer mode" (a switch at the top right; in Edge, in the left pane).
+4. Click "Load unpacked" and select the folder "extension\chrome-mv3" of the Downex
    installation.
-4. The extension "Downex" appears with the ID
+5. The extension "Downex" appears with the ID
 
        dlgpbdafcmciojddbbjikgeeefipejcn
 
    Downex accepts a copy loaded from this folder only with this ID. If a different ID is
    shown, the folder was not the one from this installation.
-5. Pin it: click the extensions (puzzle) icon in the toolbar, then the pin next to Downex
+6. Pin it: click the extensions (puzzle) icon in the toolbar, then the pin next to Downex
    (in Edge, the eye icon, "Show in toolbar").
 
 Keep "Developer mode" on. Recent versions of Chrome turn off extensions loaded this way when
-it is switched off, and downloads then stay in the browser. The browser may warn about
-developer-mode extensions when it starts; that is expected, and it is safe to keep Downex.
+it is switched off, and downloads then stay in the browser. The browser may show a notice
+about developer-mode extensions when it starts; that is normal, and it is safe to keep Downex.
 
-
-Firefox
--------
-
-Firefox keeps an add-on for good only when Mozilla has signed it. Downex is not signed yet,
-so release and Beta versions of Firefox load it as a temporary add-on, until Firefox closes:
-
-1. Open about:debugging#/runtime/this-firefox
-2. Click "Load Temporary Add-on..." and select the file "manifest.json" in the folder
-   "extension\firefox-mv3" of the Downex installation.
-3. Pin it: click the extensions (puzzle) icon in the toolbar, then the gear next to Downex,
-   and choose "Pin to Toolbar".
-
-Firefox removes temporary add-ons when it closes; repeat these steps after each restart.
-
-Firefox Developer Edition, Nightly and ESR can keep it: set xpinstall.signatures.required to
-false in about:config, copy the folder "extension\firefox-mv3" to another place, zip the
-files inside it (manifest.json at the top of the zip) into a file named downex.xpi, and
-install that file from about:addons (gear icon, "Install Add-on From File..."). Make the zip
-in File Explorer (select all, then Send to > Compressed (zipped) folder) or with 7-Zip, not
-with PowerShell's Compress-Archive. First turn on View > Show > File name extensions in File
-Explorer, or the renamed file becomes downex.xpi.zip. Make a new downex.xpi after each
-Downex update.
+Firefox (temporary add-on, until Firefox closes): remove the Firefox Add-ons copy first, open
+about:debugging#/runtime/this-firefox, click "Load Temporary Add-on..." and select the file
+"manifest.json" in the folder "extension\firefox-mv3". The Firefox Add-ons copy above is the
+one to keep.
 
 
 Checking that it works
@@ -81,23 +95,23 @@ Click the Downex button in the browser's toolbar (it may be hidden behind the ex
   "Register with browsers again", then "Check again". If it still says so, restart the
   browser.
 - "Downex doesn't accept this extension": the extension came from another build of Downex,
-  so its ID is wrong. Remove it, then load the folder "extension\chrome-mv3" of this
-  installation, or install the latest Downex.
-- The extension is gone or off in Chrome, Edge, Brave or Chromium: "Developer mode" was
-  switched off. Turn it on again, then turn the Downex card on (or load the folder again).
-- The add-on is gone from Firefox: a temporary add-on goes when Firefox closes; load it
-  again.
+  so its ID is wrong. Remove it, then add it from the store, or install the latest Downex.
+- Downloads are taken twice, or by the wrong copy: two copies of the extension are
+  installed in one browser. Keep one and remove the other on the extensions page.
+- The copy loaded from the folder is gone or off in Chrome, Edge, Brave or Chromium:
+  "Developer mode" was switched off. Turn it on again, then turn the Downex card on (or load
+  the folder again).
+- The temporary add-on is gone from Firefox: it goes when Firefox closes. Add Downex from
+  Firefox Add-ons instead, and it stays.
 
 
 After updating Downex
 ---------------------
 
-Setup replaces the files in the "extension" folder.
-
-- Chrome, Edge, Brave, Chromium: click the reload arrow of the Downex card on the
-  extensions page (or restart the browser).
-- Firefox, temporary add-on: load it again.
-- Firefox, downex.xpi: make and install a new one.
+- Store copies (Chrome Web Store, Firefox Add-ons) update themselves.
+- A copy loaded from the folder: Setup replaces the files in the "extension" folder. Click
+  the reload arrow of the Downex card on the extensions page (or restart the browser); a
+  Firefox temporary add-on is loaded again.
 
 
 Uninstalling

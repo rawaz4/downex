@@ -160,3 +160,32 @@ func TestCubicBezier(t *testing.T) {
 		t.Errorf("ease-out(0.2) = %v", v)
 	}
 }
+
+// TestEasedGlide: with Glide a streamed value glides at an even pace over the time since the
+// last change, so a download's progress moves smoothly between reports instead of in steps.
+func TestEasedGlide(t *testing.T) {
+	w, loop := open(t, box(kit.Style{}), kit.Size{W: 100, H: 100}, env100)
+	loop.Settle(10)
+	e := kit.Eased{Glide: true}
+	e.Reset(0)
+	e.SetTarget(w, 10)
+	loop.Run(time.Second) // the lone change eased in
+	if e.Value() != 10 {
+		t.Fatalf("value %v, want 10", e.Value())
+	}
+	e.SetTarget(w, 20) // a while after the last change: an ordinary ease
+	loop.Run(400 * time.Millisecond)
+	e.SetTarget(w, 40) // 400 ms after the last change: streaming, so it glides over 400 ms
+	if w.Animating() != 1 || e.Value() == 40 {
+		t.Fatalf("%d animations, value %v: want a glide, not a jump", w.Animating(), e.Value())
+	}
+	from := e.Value()
+	loop.Run(200 * time.Millisecond)
+	if v, mid := e.Value(), from+(40-from)/2; v < mid-3 || v > mid+3 {
+		t.Errorf("halfway the value is %v, want about %v", v, mid)
+	}
+	loop.Run(300 * time.Millisecond)
+	if e.Value() != 40 {
+		t.Errorf("value %v after the glide, want 40", e.Value())
+	}
+}

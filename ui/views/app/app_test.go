@@ -83,6 +83,8 @@ func (p *platform) OpenProgressWindow(id int64) error {
 	return p.openErr
 }
 
+func (p *platform) OpenProgressWindowRaised(id int64) error { return p.OpenProgressWindow(id) }
+
 func (p *platform) freeReads() int { p.mu.Lock(); defer p.mu.Unlock(); return len(p.reads) }
 func (p *platform) progress() []int64 {
 	p.mu.Lock()

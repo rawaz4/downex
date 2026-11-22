@@ -10,6 +10,8 @@ import {
   createCreatedFallbackListener,
   createDeterminingFilenameListener,
   candidateFromItem,
+  DAEMON_CONNECT_WAIT_MS,
+  nativeDaemonGate,
   requireDaemon,
   type DaemonGate,
   type DownloadItemLike,
@@ -610,19 +612,13 @@ export default defineBackground(() => {
   });
 
   // Capture only while downexd is known to run (BROWSER-SPEC §3): otherwise the browser
-  // keeps the download at once and the daemon state is refreshed for the next one.
-  let lastRefresh = 0;
-  const daemonGate: DaemonGate = {
-    ready: () => client.daemonReady,
-    refresh: () => {
-      const now = Date.now();
-      if (now - lastRefresh < DAEMON_REFRESH_MS) return;
-      lastRefresh = now;
-      void client.queryStatus();
-    },
-  };
+  // keeps the download and the daemon state is refreshed for the next one. Chromium's
+  // service worker is often started by the download itself, before its relay connected:
+  // there a relay that is merely not connected gets DAEMON_CONNECT_WAIT_MS to connect and
+  // say downexd runs. Firefox's blocking listener holds the page's response, so it never waits.
+  const daemonGate: DaemonGate = nativeDaemonGate(client, { refreshMs: DAEMON_REFRESH_MS });
   const captureDecide = requireDaemon(decide, daemonGate);
-  const captureDecideItem = requireDaemon(decideItem, daemonGate);
+  const captureDecideItem = requireDaemon(decideItem, daemonGate, isFirefox ? 0 : DAEMON_CONNECT_WAIT_MS);
 
   // --- Request context (observe-only webRequest) -----------------------------------------
   // Keyed by cookie store (Firefox containers); private-window requests are never recorded

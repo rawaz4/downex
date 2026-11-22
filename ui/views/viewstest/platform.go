@@ -96,6 +96,11 @@ func (p *FakePlatform) RegisterBrowsers(context.Context) error { return p.record
 // OpenProgressWindow is Platform's.
 func (p *FakePlatform) OpenProgressWindow(id int64) error { return p.record("OpenProgressWindow", id) }
 
+// OpenProgressWindowRaised is Platform's.
+func (p *FakePlatform) OpenProgressWindowRaised(id int64) error {
+	return p.record("OpenProgressWindowRaised", id)
+}
+
 // PickFolder is Platform's.
 func (p *FakePlatform) PickFolder(_ context.Context, initial string) (string, error) {
 	err := p.record("PickFolder", initial)

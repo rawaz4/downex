@@ -141,13 +141,14 @@ func (m *Manager) indexAdded(d *model.Download, awaiting bool, candidates []mode
 	// the queue does not (it starts later).
 	show := !awaiting && !held && handOff(d.Source) && e.run != nil && !m.closed &&
 		m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil
+	var launch func()
 	if show {
-		m.markWindowedLocked(e)
+		launch = m.showProgressLocked(e, d.Source)
 	}
 	pd := m.protoLocked(e)
 	// A browser add that opens neither shows nothing: never the main window (§7 "Above
 	// the browser").
-	if ask || show {
+	if ask {
 		m.wg.Add(1)
 	}
 	m.mu.Unlock()
@@ -158,13 +159,8 @@ func (m *Manager) indexAdded(d *model.Download, awaiting bool, candidates []mode
 			defer m.wg.Done()
 			m.confirm.request(pd)
 		}()
-	case show:
-		go func() {
-			defer m.wg.Done()
-			if err := m.openProgressFor(int64(d.ID), d.Source); err != nil {
-				m.log.Warn("cannot open the progress window", "download", int64(d.ID), "err", err)
-			}
-		}()
+	case launch != nil:
+		go launch()
 	}
 	return pd
 }
@@ -331,6 +327,9 @@ func (m *Manager) Pause(ctx context.Context, id int64) (*downexv1.Download, erro
 		m.mu.Unlock()
 		return nil, errAwaiting(e.id)
 	}
+	// Its later start is a new decision: a progress window that waited for its queued start
+	// (entry.next) does not carry over to it.
+	e.next = nextNone
 	wasQueued := m.parkLocked(e)
 	rec := e.rec
 	m.mu.Unlock()
@@ -360,7 +359,9 @@ func (m *Manager) Pause(ctx context.Context, id int64) (*downexv1.Download, erro
 // stops. A completed download is resumed only with restart: it is downloaded again, and
 // existing_file says what happens to its file (docs/ENGINE-SPEC.md §7.1; without restart
 // FailedPrecondition). existing_file without restart is InvalidArgument; for a download
-// that is not completed it is ignored.
+// that is not completed it is ignored. progress_window: the caller shows the download's
+// progress window for the run that this starts now (or that runs, or that a restart of a
+// running download starts), which is windowed at once (docs/DESKTOP-SPEC.md §8).
 func (m *Manager) Resume(ctx context.Context, r *downexv1.ResumeRequest) (*downexv1.Download, error) {
 	id := model.DownloadID(r.GetId())
 	if r.GetExistingFile() != downexv1.ExistingFile_EXISTING_FILE_UNSPECIFIED && !r.GetRestart() {
@@ -445,6 +446,9 @@ func (m *Manager) Resume(ctx context.Context, r *downexv1.ResumeRequest) (*downe
 			run.setIntent(intentResume)
 			fallthrough
 		default:
+			if r.GetProgressWindow() {
+				m.markWindowedLocked(e, true)
+			}
 			pd := m.protoLocked(e)
 			m.mu.Unlock()
 			if live {
@@ -452,6 +456,9 @@ func (m *Manager) Resume(ctx context.Context, r *downexv1.ResumeRequest) (*downe
 			}
 			m.hub.publish(e.id, kindUpdated)
 			return pd, nil
+		}
+		if r.GetProgressWindow() { // the run that the restart starts
+			e.next = nextShown
 		}
 		run.setIntent(intentRestart)
 		run.cancel()
@@ -524,23 +531,24 @@ func (m *Manager) Resume(ctx context.Context, r *downexv1.ResumeRequest) (*downe
 	}
 	m.unparkLocked(e)
 	m.scheduleLocked()
-	pd := m.protoLocked(e)
 	// A browser rescue's first start shows its progress window when it starts at once,
 	// as a browser hand-off does (docs/DESKTOP-SPEC.md §7); one that waits in its queue
-	// does not.
-	show := rescueStart && e.run != nil && !m.closed && m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil
-	if show {
-		m.wg.Add(1)
+	// does not. A caller that shows the window itself (progress_window) has the run
+	// marked at once when it starts now (§8); one that waits in its queue opens no window
+	// from that caller (a window already open on it marked its next run itself).
+	var launch func()
+	switch {
+	case m.closed:
+	case rescueStart && e.run != nil && m.settings.ShowProgressWindow && m.cfg.OpenProgress != nil:
+		launch = m.showProgressLocked(e, model.SourceBrowser)
+	case r.GetProgressWindow() && e.run != nil:
+		m.markWindowedLocked(e, true)
 	}
+	pd := m.protoLocked(e)
 	m.mu.Unlock()
 	m.hub.publish(e.id, kindUpdated)
-	if show {
-		go func() {
-			defer m.wg.Done()
-			if err := m.openProgressFor(int64(e.id), model.SourceBrowser); err != nil {
-				m.log.Warn("cannot open the progress window", "download", int64(e.id), "err", err)
-			}
-		}()
+	if launch != nil {
+		go launch()
 	}
 	return pd, nil
 }
@@ -555,7 +563,9 @@ func (m *Manager) Resume(ctx context.Context, r *downexv1.ResumeRequest) (*downe
 // at a safe point; more let the ramp-up add workers; a media download takes it on its
 // next start), and all are stored when the run stops, since only the run writes its
 // record meanwhile; clients see the new values at once, and the completion or failure
-// of that run already follows the new mark. Limits for a completed download are
+// of that run already follows the new mark. completion_dialog is a progress window's:
+// set, it marks the running run windowed (docs/DESKTOP-SPEC.md §8), or, for a stopped or
+// queued download, its next run; cleared, neither is. Limits for a completed download are
 // FailedPrecondition (its completion_dialog alone may still be set), as is any change
 // to one that a Remove is stopping.
 func (m *Manager) SetDownloadOptions(ctx context.Context, r *downexv1.SetDownloadOptionsRequest) (*downexv1.Download, error) {
@@ -615,10 +625,10 @@ func (m *Manager) SetDownloadOptions(ctx context.Context, r *downexv1.SetDownloa
 			e.pendMax = maxConn
 		}
 		if dialog != nil {
+			// Set: its progress window is open, and the run's outcome shows there. Cleared:
+			// this run gets no download complete dialog.
 			e.pendDialog = dialog
-			if *dialog { // its progress window is open: the run's outcome shows there
-				run.windowed = true
-			}
+			run.windowed, run.shown, run.marked = *dialog, *dialog, nil
 		}
 		pd := m.protoLocked(e)
 		m.mu.Unlock()
@@ -645,6 +655,14 @@ func (m *Manager) SetDownloadOptions(ctx context.Context, r *downexv1.SetDownloa
 	}
 	if dialog != nil && rec.CompletionDialog != *dialog {
 		rec.CompletionDialog, dirty = *dialog, true
+	}
+	if dialog != nil && rec.State != model.StateCompleted {
+		// Set: a progress window is open on the stopped or queued download, so its next run
+		// shows there (docs/DESKTOP-SPEC.md §8), whoever starts it; cleared: it does not.
+		e.next = nextNone
+		if *dialog {
+			e.next = nextShown
+		}
 	}
 	if !dirty {
 		pd := m.protoLocked(e)

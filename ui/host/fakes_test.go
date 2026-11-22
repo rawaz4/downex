@@ -651,8 +651,9 @@ func newTestSession(t *testing.T, d Daemon, args ...string) (*Session, *fakeShel
 		Args: args, Version: "1.2.3-test", Daemon: d, Shell: sh,
 		ThemePath:  filepath.Join(t.TempDir(), "Downex", ThemeFileName),
 		MinBackoff: time.Millisecond, MaxBackoff: 4 * time.Millisecond,
-		OpenWindow: func(int64) error { return errors.New("no windows in tests") },
-		Env:        func(string) string { return "" },
+		OpenWindow:       func(int64) error { return errors.New("no windows in tests") },
+		OpenRaisedWindow: func(int64) error { return errors.New("no windows in tests") },
+		Env:              func(string) string { return "" },
 	})
 	t.Cleanup(s.Close)
 	return s, sh

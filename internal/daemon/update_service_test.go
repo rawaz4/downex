@@ -876,6 +876,142 @@ func TestUpdateWatchEvent(t *testing.T) {
 	}
 }
 
+// TestUpdatePackagesCleaned: the packages an earlier update left go at the start, and one
+// that could not go then (the Setup that started this daemon still ran) goes with the next
+// automatic check; nothing goes while an install runs, and other files stay.
+func TestUpdatePackagesCleaned(t *testing.T) {
+	feed := newUpdateFeed(t)
+	timers := newFakeTimers()
+	dataDir, oldDir := t.TempDir(), t.TempDir()
+	put := func(dir, name string) string {
+		t.Helper()
+		p := filepath.Join(dir, updatesDirName, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	exists := func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	}
+	left := []string{put(dataDir, "Downex-Setup-0.3.2.exe"), put(oldDir, "Downex-Setup-0.3.1.exe"), put(dataDir, "Downex-0.3.2.dmg")}
+	other := put(dataDir, "notes.txt")
+	h := updateHarness(t, feed, UpdatesConfig{
+		AutoCheck: true, DataDir: dataDir, OldDataDirs: []string{oldDir},
+		now: timers.clock, afterFunc: timers.afterFunc,
+	})
+	timers.wantArmed(t, updateFirstDelay) // armed after the start's cleaning
+	for _, p := range left {
+		if exists(p) {
+			t.Errorf("%s was left at the start", p)
+		}
+	}
+	if !exists(other) {
+		t.Error("a file that is no package was removed")
+	}
+
+	// The Setup that installed this daemon ran on at its start: its package goes next time.
+	setup, part := put(dataDir, "Downex-Setup-0.3.3.exe"), put(dataDir, "Downex-Setup-0.4.0.exe.part")
+	timers.advance(updateFirstDelay)
+	timers.fire()
+	timers.wantArmed(t, time.Hour)
+	if exists(setup) || exists(part) {
+		t.Error("the automatic check left the packages of an earlier update")
+	}
+
+	// A running install keeps its package.
+	updateServices.mu.Lock()
+	u := updateServices.m[h.m]
+	updateServices.mu.Unlock()
+	u.jobMu.Lock()
+	u.job = &installJob{done: make(chan struct{})}
+	u.jobMu.Unlock()
+	busy := put(dataDir, "Downex-Setup-0.4.0.exe")
+	timers.advance(updateInterval)
+	timers.fire()
+	timers.wantArmed(t, time.Hour)
+	if !exists(busy) {
+		t.Error("the package of a running install was removed")
+	}
+	u.jobMu.Lock()
+	u.job = nil
+	u.jobMu.Unlock()
+}
+
+// leftoverInstaller is a fakeInstaller with leftovers of its own, as the macOS installer's
+// staging folders: RemoveLeftovers reports what it was given and waits for release.
+type leftoverInstaller struct {
+	*fakeInstaller
+	finds    atomic.Int32
+	removing chan []string
+	release  chan struct{}
+}
+
+func (l *leftoverInstaller) FindLeftovers() []string {
+	l.finds.Add(1)
+	return []string{"stale-staging"}
+}
+
+func (l *leftoverInstaller) RemoveLeftovers(paths []string) {
+	select {
+	case l.removing <- paths:
+	default:
+	}
+	<-l.release
+}
+
+// TestUpdateLeftoversRemovedOutsideTheInstallLock: the installer's leftovers (whole copies of
+// Downex.app) are found while installs are held off but removed after, so that an
+// InstallUpdate does not wait for their removal; none are looked for while an install runs.
+func TestUpdateLeftoversRemovedOutsideTheInstallLock(t *testing.T) {
+	feed := newUpdateFeed(t)
+	timers := newFakeTimers()
+	inst := &leftoverInstaller{fakeInstaller: &fakeInstaller{}, removing: make(chan []string, 1), release: make(chan struct{})}
+	h := updateHarness(t, feed, UpdatesConfig{
+		AutoCheck: true, DataDir: t.TempDir(), Installer: inst,
+		now: timers.clock, afterFunc: timers.afterFunc,
+	})
+	inst.m = h.m
+	updateServices.mu.Lock()
+	u := updateServices.m[h.m]
+	updateServices.mu.Unlock()
+
+	select {
+	case got := <-inst.removing:
+		if len(got) != 1 || got[0] != "stale-staging" {
+			t.Errorf("removing %q", got)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("the start removed no leftovers")
+	}
+	if !u.jobMu.TryLock() {
+		t.Error("installs are held off while the leftovers are removed")
+	} else {
+		u.jobMu.Unlock()
+	}
+	close(inst.release)
+	timers.wantArmed(t, updateFirstDelay)
+
+	// A running install: nothing is looked for.
+	u.jobMu.Lock()
+	u.job = &installJob{done: make(chan struct{})}
+	u.jobMu.Unlock()
+	finds := inst.finds.Load()
+	timers.advance(updateFirstDelay)
+	timers.fire()
+	timers.wantArmed(t, time.Hour)
+	if inst.finds.Load() != finds {
+		t.Error("leftovers were looked for while an install ran")
+	}
+	u.jobMu.Lock()
+	u.job = nil
+	u.jobMu.Unlock()
+}
+
 func TestUpdateComponentEndsWithManager(t *testing.T) {
 	feed := newUpdateFeed(t)
 	h := updateHarness(t, feed, UpdatesConfig{})

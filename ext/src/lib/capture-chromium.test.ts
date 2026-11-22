@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CREATED_FALLBACK_DELAY_MS,
   type ChromiumCaptureDeps,
+  DAEMON_CONNECT_WAIT_MS,
   DownloadClaims,
   candidateFromItem,
   createCreatedFallbackListener,
@@ -9,10 +10,13 @@ import {
   type DownloadItemLike,
   type DownloadsControl,
   HANDOFF_BACKSTOP_SLACK_MS,
+  handOffBudget,
+  nativeDaemonGate,
   pausedHandOff,
+  reconnectable,
   requireDaemon,
 } from './capture-chromium';
-import { failure, type Outcome } from './protocol';
+import { failure, NativeClient, type NativePort, type Outcome, PROTOCOL_VERSION } from './protocol';
 import type { CaptureDecision } from './rules';
 
 function item(over: Partial<DownloadItemLike> = {}): DownloadItemLike {
@@ -206,7 +210,9 @@ describe('onDeterminingFilename listener', () => {
   it('async decision (cold start): candidates are handed off', async () => {
     const { listener, suggest, calls, results } = setup({ decide: () => Promise.resolve(CAPTURE) });
     expect(listener(item(), suggest)).toBe(true);
-    await vi.waitFor(() => expect(results).toHaveLength(1));
+    // Decided at once: the add keeps its whole budget (waitFor would move the clock first).
+    await vi.advanceTimersByTimeAsync(0);
+    expect(results).toHaveLength(1);
     expect(calls).toEqual(['pause:7', 'add:7:3000', 'cancel:7', 'erase:7']);
   });
 
@@ -258,6 +264,227 @@ describe('requireDaemon', () => {
     });
     expect(listener(item(), suggest)).toBeUndefined();
     expect(calls).toEqual(['suggest']);
+  });
+});
+
+describe('requireDaemon with a wait', () => {
+  it('waits for a gate that can connect, and refreshes only without one', async () => {
+    const refresh = vi.fn();
+    let ok = true;
+    const connect = vi.fn(async (ms: number) => {
+      expect(ms).toBe(DAEMON_CONNECT_WAIT_MS);
+      return ok;
+    });
+    const gated = requireDaemon(() => CAPTURE, { ready: () => false, refresh, connect }, DAEMON_CONNECT_WAIT_MS);
+    await expect(gated('zip')).resolves.toEqual(CAPTURE);
+    ok = false;
+    await expect(gated('zip')).resolves.toEqual({ capture: false, reason: 'daemon_unavailable' });
+    expect(refresh).not.toHaveBeenCalled();
+    // A gate whose connect fails leaves the download to the browser.
+    const broken = requireDaemon(
+      () => CAPTURE,
+      { ready: () => false, refresh, connect: () => Promise.reject(new Error('gone')) },
+      DAEMON_CONNECT_WAIT_MS,
+    );
+    await expect(broken('zip')).resolves.toEqual({ capture: false, reason: 'daemon_unavailable' });
+    // No wait asked for (Firefox): at once, as before.
+    expect(requireDaemon(() => CAPTURE, { ready: () => false, refresh, connect })('zip')).toEqual({
+      capture: false,
+      reason: 'daemon_unavailable',
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(2);
+    // Nothing to connect to: at once too, refreshed for the next download.
+    const unreachable = requireDaemon(() => CAPTURE, { ready: () => false, refresh, connect: () => undefined }, DAEMON_CONNECT_WAIT_MS);
+    expect(unreachable('zip')).toEqual({ capture: false, reason: 'daemon_unavailable' });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes the wait off the add budget, at most DAEMON_CONNECT_WAIT_MS of it', () => {
+    expect(handOffBudget(3000, 0)).toBe(3000);
+    expect(handOffBudget(3000, -5)).toBe(3000);
+    expect(handOffBudget(3000, 310)).toBe(2690);
+    expect(handOffBudget(3000, 5000)).toBe(3000 - DAEMON_CONNECT_WAIT_MS);
+  });
+
+  it('reconnects only a relay that is merely not connected', () => {
+    const since = 0;
+    expect(reconnectable({ state: 'idle', since })).toBe(true);
+    expect(reconnectable({ state: 'connecting', since })).toBe(true);
+    expect(reconnectable({ state: 'disconnected', lastError: 'Native host has exited.', since })).toBe(true);
+    expect(reconnectable({ state: 'disconnected', lastError: HOST_NOT_FOUND, since })).toBe(false);
+    expect(reconnectable({ state: 'disconnected', lastError: HOST_FORBIDDEN, since })).toBe(false);
+    expect(reconnectable({ state: 'disconnected', lastError: 'relay protocol 2', incompatibleProtocol: 2, since })).toBe(false);
+    expect(reconnectable({ state: 'connected', daemonRunning: false, since })).toBe(false);
+  });
+});
+
+/** The browser's disconnect reasons for a host it cannot start. */
+const HOST_NOT_FOUND = 'Specified native messaging host not found.';
+const HOST_FORBIDDEN = 'Access to the specified native messaging host is forbidden.';
+
+interface RelayBehaviour {
+  /** Delay of the welcome; never answered when undefined. */
+  welcomeMs?: number;
+  /** The welcome's daemonVersion: '' when downexd is not running. */
+  daemonVersion?: string;
+  statusMs?: number;
+  /** The browser cannot start the host: the port disconnects with this reason. */
+  refuse?: string;
+}
+
+/** A relay port that answers like downex-nmhost, after the delays it is given. */
+class RelayPort implements NativePort {
+  readonly #messages: ((m: unknown) => void)[] = [];
+  readonly #disconnects: ((p: never) => void)[] = [];
+  readonly sent: string[] = [];
+  reason: string | undefined;
+  readonly onMessage = {
+    addListener: (l: (m: unknown) => void) => void this.#messages.push(l),
+    removeListener: () => undefined,
+  };
+  readonly onDisconnect = {
+    addListener: (l: (p: never) => void) => void this.#disconnects.push(l),
+    removeListener: () => undefined,
+  };
+
+  constructor(private readonly behaviour: RelayBehaviour) {
+    const { refuse } = behaviour;
+    // The browser reports a host it cannot start as a disconnect, after connectNative returned.
+    if (refuse !== undefined) setTimeout(() => this.drop(refuse), 5);
+  }
+
+  postMessage(m: unknown): void {
+    const msg = m as { id: string; type: string };
+    this.sent.push(msg.type);
+    const running = (this.behaviour.daemonVersion ?? '1.1.2') !== '';
+    const answer = (after: number | undefined, body: Record<string, unknown>) => {
+      if (after === undefined) return;
+      setTimeout(() => {
+        if (this.reason !== undefined) return;
+        for (const l of this.#messages) l({ id: msg.id, ok: true, ...body });
+      }, after);
+    };
+    if (msg.type === 'hello') {
+      answer(this.behaviour.welcomeMs, {
+        type: 'welcome',
+        protocol: PROTOCOL_VERSION,
+        daemonVersion: this.behaviour.daemonVersion ?? '1.1.2',
+        features: [],
+      });
+    } else if (msg.type === 'status') {
+      answer(this.behaviour.statusMs ?? 10, { type: 'status', running, active: 0, queued: 0 });
+    }
+  }
+
+  disconnect(): void {
+    this.reason ??= 'disconnected by the extension';
+  }
+
+  /** The host side ends the connection. */
+  drop(reason = 'Native host has exited.'): void {
+    this.reason = reason;
+    for (const l of this.#disconnects) l(this as never);
+  }
+}
+
+describe('a Chromium capture while the relay is not connected', () => {
+  function relaySetup(behaviour: RelayBehaviour) {
+    const ports: RelayPort[] = [];
+    let n = 0;
+    const client = new NativeClient({
+      connect: () => {
+        const p = new RelayPort(behaviour);
+        ports.push(p);
+        return p;
+      },
+      hello: () => ({ protocol: PROTOCOL_VERSION, browser: 'chrome', extVersion: '1.1.2' }),
+      disconnectReason: (p) => (p as RelayPort).reason,
+      newId: () => `r${++n}`,
+    });
+    const gate = nativeDaemonGate(client, { refreshMs: 2000 });
+    const s = setup({ decide: requireDaemon(() => CAPTURE, gate, DAEMON_CONNECT_WAIT_MS) });
+    return { client, ports, ...s };
+  }
+
+  it('the service worker just started: waits for the welcome and the status, then hands the download off', async () => {
+    const { client, ports, listener, suggest, calls, results } = relaySetup({ welcomeMs: 300 });
+    client.start();
+    expect(listener(item(), suggest)).toBe(true);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(11);
+    await vi.waitFor(() => expect(results).toHaveLength(1));
+    // 310 ms of the 3 s went to the relay's start: the add gets what is left.
+    expect(calls).toEqual(['pause:7', 'add:7:2690', 'cancel:7', 'erase:7']);
+    expect(suggest).not.toHaveBeenCalled();
+    expect(ports).toHaveLength(1);
+    expect(ports[0]?.sent).toEqual(['hello', 'status']);
+    client.stop();
+  });
+
+  it('the port dropped: connects again at once instead of after the backoff', async () => {
+    const { client, ports, listener, suggest, calls, results } = relaySetup({ welcomeMs: 20 });
+    client.start();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(client.daemonReady).toBe(true);
+    ports[0]?.drop();
+    expect(client.status).toMatchObject({ state: 'disconnected', lastError: 'Native host has exited.' });
+    expect(listener(item(), suggest)).toBe(true);
+    await vi.advanceTimersByTimeAsync(30);
+    await vi.waitFor(() => expect(results).toHaveLength(1));
+    expect(ports).toHaveLength(2);
+    expect(calls).toEqual(['pause:7', 'add:7:2970', 'cancel:7', 'erase:7']);
+    client.stop();
+  });
+
+  it('downloads that wait together share one status request', async () => {
+    const { client, ports, listener, results } = relaySetup({ welcomeMs: 100 });
+    client.start();
+    expect(listener(item({ id: 1 }), vi.fn())).toBe(true);
+    expect(listener(item({ id: 2 }), vi.fn())).toBe(true);
+    await vi.advanceTimersByTimeAsync(110);
+    await vi.waitFor(() => expect(results).toHaveLength(2));
+    expect(ports).toHaveLength(1);
+    expect(ports[0]?.sent).toEqual(['hello', 'status']);
+    client.stop();
+  });
+
+  it('no welcome within the wait: the browser keeps the download, never paused', async () => {
+    const { client, listener, suggest, calls } = relaySetup({});
+    client.start();
+    expect(listener(item(), suggest)).toBe(true);
+    await vi.advanceTimersByTimeAsync(DAEMON_CONNECT_WAIT_MS - 1);
+    expect(suggest).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(suggest).toHaveBeenCalledTimes(1));
+    expect(calls).toEqual(['suggest']);
+    client.stop();
+  });
+
+  for (const refuse of [HOST_FORBIDDEN, HOST_NOT_FOUND]) {
+    it(`the host cannot be started (${refuse}): the browser keeps the download at once`, async () => {
+      const { client, listener, suggest, calls } = relaySetup({ welcomeMs: 1, refuse });
+      client.start();
+      await vi.advanceTimersByTimeAsync(5);
+      expect(client.status.lastError).toBe(refuse);
+      expect(listener(item(), suggest)).toBeUndefined();
+      expect(calls).toEqual(['suggest']);
+      client.stop();
+    });
+  }
+
+  it('downexd is not running: the browser keeps the download at once', async () => {
+    const { client, ports, listener, suggest, calls } = relaySetup({ welcomeMs: 1, daemonVersion: '' });
+    client.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(client.status).toMatchObject({ state: 'connected', daemonRunning: false });
+    expect(listener(item(), suggest)).toBeUndefined();
+    expect(listener(item({ id: 8 }), suggest)).toBeUndefined();
+    expect(calls).toEqual(['suggest', 'suggest']);
+    // The daemon's state is asked for again for the next download, once per refresh period.
+    expect(ports[0]?.sent).toEqual(['hello', 'status']);
+    client.stop();
   });
 });
 

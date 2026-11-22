@@ -31,12 +31,11 @@ Contents: [Install (Windows)](#install-windows) · [macOS](#macos) · [Usage](#u
 says "Windows protected your PC", choose *More info* → *Run anyway*. On a PC with Smart App
 Control turned on, Windows may refuse unsigned apps altogether.
 
-The browser extension cannot be installed by Setup, and it is in no browser store yet: the
-finish page links to `EXTENSION.txt` in the installation folder, which shows how to add it by
-hand. In Chrome, Edge, Brave and Chromium, load `extension\chrome-mv3` with
-*Developer mode → Load unpacked* and keep *Developer mode* on. Firefox loads
-`extension\firefox-mv3\manifest.json` as a temporary add-on in `about:debugging` until it
-closes (see [Browser integration](#browser-integration)).
+The browser extension cannot be installed by Setup: the finish page links to `EXTENSION.txt` in
+the installation folder, which shows how to add it. Add it from the Chrome Web Store (Chrome,
+Edge, Brave and other Chromium browsers) or Firefox Add-ons; *Settings → Integration* has both
+buttons. The copy with the YouTube button in Chrome is loaded from `extension\chrome-mv3` with
+*Developer mode → Load unpacked* (see [Browser integration](#browser-integration)).
 
 **Upgrading.** Run the new Setup. Before it replaces any file it closes the Downex window and
 stops the daemon with `downex daemon stop` (running downloads are paused, their progress is
@@ -57,8 +56,8 @@ Remove the extension in the browser yourself.
 **Silent use** (NSIS conventions; `/D` must come last and is not quoted, even with spaces):
 
 ```powershell
-Downex-Setup-1.1.1.exe /S                                   # install or upgrade, default folder
-Downex-Setup-1.1.1.exe /S /D=C:\Users\me\Apps\Downex        # install into a folder
+Downex-Setup-1.1.2.exe /S                                   # install or upgrade, default folder
+Downex-Setup-1.1.2.exe /S /D=C:\Users\me\Apps\Downex        # install into a folder
 & "$env:LOCALAPPDATA\Programs\Downex\uninstall.exe" /S       # uninstall, keeping your data
 ```
 
@@ -70,7 +69,7 @@ with 0 on success and 2 when it was cancelled, for example because a file stayed
 `PATH` or in its default folder) into `bin\Downex-Setup-<version>.exe` (or `-Out`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.1 -Installer
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.2 -Installer
 ```
 
 `-Installer` cannot be combined with `-SkipExtension` or `-SkipUI`. The version is passed to
@@ -184,13 +183,13 @@ go test ./packaging/macos      # templates and script functions; uses Git for Wi
    /Applications/Downex.app/Contents/Helpers/downex-nmhost register
    ```
 
-4. Add the browser extension by hand (it is in no browser store yet). In Chrome, Edge, Brave
-   and Chromium, load it from inside the app with *Developer mode* → *Load unpacked* →
-   `/Applications/Downex.app/Contents/Resources/extension/chrome-mv3`, and keep
-   *Developer mode* on. Firefox loads `Contents/Resources/extension/firefox-mv3/manifest.json`
-   as a temporary add-on in `about:debugging` until it quits. The file dialogs show
-   `Downex.app` as one item: press **⌘⇧G** and paste the path.
-   `Contents/Resources/EXTENSION.txt` has the details (`open -e` it).
+4. Add the browser extension from its store: the Chrome Web Store for Chrome, Edge, Brave and
+   other Chromium browsers, Firefox Add-ons for Firefox (*Settings → Integration* has both
+   buttons; see [Browser integration](#browser-integration)). For the YouTube button in Chrome,
+   remove the store copy and load the full copy from inside the app with *Developer mode* →
+   *Load unpacked* → `/Applications/Downex.app/Contents/Resources/extension/chrome-mv3`, and keep
+   *Developer mode* on. The file dialogs show `Downex.app` as one item: press **⌘⇧G** and paste
+   the path. `Contents/Resources/EXTENSION.txt` has the details (`open -e` it).
 5. Optionally put the CLI on `PATH`:
    `sudo ln -sf /Applications/Downex.app/Contents/Helpers/downex /usr/local/bin/downex`.
 
@@ -1031,20 +1030,31 @@ The extension in `ext/` (one Manifest V3 build for Chrome, Edge and Firefox) han
 Nothing listens on a network port. See [BROWSER-SPEC.md](BROWSER-SPEC.md).
 
 **With a release of Downex,** Setup installs and registers the relay (on macOS the window
-registers it each time it opens; see step 3 of [Installing on a Mac](#installing-on-a-mac)). The
-extension is not in any browser store yet: it is not on the Chrome Web Store, and the listings on
-Firefox Add-ons and Edge Add-ons are planned but not ready. Add it by hand from the installation
-(a step-by-step guide per browser is in the [README](../README.md#the-browser-extension)):
+registers it each time it opens; see step 3 of [Installing on a Mac](#installing-on-a-mac)). Add
+the extension from its store; *Settings → Integration* has the same two buttons (a step-by-step
+guide is in the [README](../README.md#the-browser-extension)):
 
-- **Chrome, Edge, Brave and Chromium:** open the browser's extensions page, turn on
-  *Developer mode*, choose *Load unpacked* and select the `extension\chrome-mv3` folder in
-  Downex's installation folder (on macOS `Downex.app/Contents/Resources/extension/chrome-mv3`).
-  The ID shown must be `dlgpbdafcmciojddbbjikgeeefipejcn`. Keep *Developer mode* on, or the
-  browser may turn the extension off.
-- **Firefox:** load `extension\firefox-mv3\manifest.json` as a temporary add-on in
-  `about:debugging#/runtime/this-firefox`. Firefox removes it when it closes, because release
-  and Beta versions keep only add-ons that Mozilla has signed. Developer Edition, Nightly and ESR
-  can install it for good as an `.xpi` with `xpinstall.signatures.required` set to `false`.
+- **Chrome, Edge, Brave and Chromium:**
+  [Add to Chrome](https://chromewebstore.google.com/detail/llnofffhagcfejjcephcilcbndnhnbeg)
+  (Chrome Web Store, ID `llnofffhagcfejjcephcilcbndnhnbeg`). This copy has no YouTube download
+  button, which the store does not allow. The listing also installs in Opera, Vivaldi and other
+  Chromium browsers, but `downex-nmhost register` registers Downex only with Chrome, Edge,
+  Brave, Chromium and Firefox, so there the extension may say that Downex isn't set up.
+- **Firefox:** [Add to Firefox](https://addons.mozilla.org/firefox/addon/downex/) (Firefox
+  Add-ons), with the YouTube button.
+
+Store copies update themselves. **Want the YouTube button in Chrome?**
+[The YouTube button in Chrome](https://downex.app/chrome-youtube) installs the full copy that
+comes with Downex (*Settings → Integration → Advanced: install from the folder*): remove the
+Chrome Web Store copy first (one copy per browser, or both take over downloads), open the
+extensions page, turn on *Developer mode*, choose *Load unpacked* and select the
+`extension\chrome-mv3` folder in Downex's installation folder (on macOS
+`Downex.app/Contents/Resources/extension/chrome-mv3`). The ID shown must be
+`dlgpbdafcmciojddbbjikgeeefipejcn`. Keep *Developer mode* on, and click *Reload* on its card after
+each Downex update. Firefox can also load `extension\firefox-mv3\manifest.json` as a temporary
+add-on in `about:debugging#/runtime/this-firefox`, until it closes; the Firefox Add-ons copy
+already has the YouTube button and is the one to keep, so remove it first only to try the
+folder's copy.
 
 The steps below build and load everything from source.
 

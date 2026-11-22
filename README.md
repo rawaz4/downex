@@ -14,7 +14,7 @@
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0f1613?style=flat-square">
   <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13%2B-0f1613?style=flat-square">
   <img alt="Written in Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square">
-  <img alt="Version 1.1.1" src="https://img.shields.io/badge/version-1.1.1-3ccb8b?style=flat-square">
+  <img alt="Version 1.1.2" src="https://img.shields.io/badge/version-1.1.2-3ccb8b?style=flat-square">
   <a href="https://github.com/rawaz4/downex/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/rawaz4/downex/total?label=downloads&color=3ccb8b&style=flat-square"></a>
 </p>
 
@@ -36,10 +36,10 @@
 </p>
 
 > [!NOTE]
-> **Downex 1.1.1 is out:** updates that offer themselves with live progress, a cleaner Confirm
-> download window, and Quit that closes all of Downex, on top of 1.1.0's saving of the video playing
-> on social sites without signing in (see the [changelog](CHANGELOG.md)). Download it from the
-> [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.1) or
+> **Downex 1.1.2 is out:** the progress window now opens right after you start a download, a
+> smooth progress bar, the browser extension from the Chrome Web Store and Firefox Add-ons, and
+> updates that replace exactly your installation (see the [changelog](CHANGELOG.md)). Download it from the
+> [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.2) or
 > [downex.app](https://downex.app), or [build it from source](#build-from-source). The source
 > code is at [github.com/rawaz4/downex](https://github.com/rawaz4/downex).
 
@@ -116,12 +116,12 @@
 | | Windows | macOS |
 |---|---|---|
 | **Needs** | Windows 10 or 11 (x64) | macOS 13 Ventura or later (Intel and Apple silicon) |
-| **Download** | `Downex-Setup-1.1.1.exe` from the [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.1) or [downex.app](https://downex.app) | `Downex-1.1.1.dmg` from the same [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.1) or [downex.app](https://downex.app) |
+| **Download** | `Downex-Setup-1.1.2.exe` from the [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.2) or [downex.app](https://downex.app) | `Downex-1.1.2.dmg` from the same [release page](https://github.com/rawaz4/downex/releases/tag/v1.1.2) or [downex.app](https://downex.app) |
 | **Installs** | for you only, no administrator rights | drag **Downex** onto **Applications** |
 
 To check your download, compare its SHA-256 checksum with the one in `SHA256SUMS.txt` on the
-[release page](https://github.com/rawaz4/downex/releases/tag/v1.1.1). On Windows:
-`Get-FileHash Downex-Setup-1.1.1.exe` in PowerShell; on a Mac: `shasum -a 256 Downex-1.1.1.dmg`.
+[release page](https://github.com/rawaz4/downex/releases/tag/v1.1.2). On Windows:
+`Get-FileHash Downex-Setup-1.1.2.exe` in PowerShell; on a Mac: `shasum -a 256 Downex-1.1.2.dmg`.
 Upper and lower case letters count as the same.
 
 <details>
@@ -160,14 +160,10 @@ More: [docs/USAGE.md](docs/USAGE.md#installing-on-a-mac).
 ### The browser extension
 
 The extension hands your browser's downloads and videos to Downex. It works in **Google Chrome,
-Microsoft Edge, Brave and Chromium** (based on Chromium 116 or later) and in **Firefox** (140 or
-later).
-Other browsers are not supported yet.
-
-> [!IMPORTANT]
-> The extension is not in any browser store yet. It is not on the Chrome Web Store, and the
-> listings on Firefox Add-ons and Edge Add-ons are planned but not ready. For now, add it by
-> hand, once in each browser, from the folder that comes with Downex. The steps are below.
+Microsoft Edge, Brave** and **Chromium** (based on Chromium 116 or later) and in **Firefox** (140
+or later). The Chrome Web Store copy also installs in Opera, Vivaldi and other Chromium browsers,
+but Downex connects itself only to the browsers named here, so there the extension may say that
+Downex isn't set up.
 
 **Before you start.** Install Downex and open it once.
 
@@ -175,8 +171,33 @@ Other browsers are not supported yet.
 - **macOS:** each time it opens, Downex connects itself to the browsers you have opened at least
   once. If you install a browser later, open that browser once, then open Downex again.
 
-**Where the extension is.** Downex installs two copies of the extension: `chrome-mv3` for Chrome,
-Edge, Brave and Chromium, and `firefox-mv3` for Firefox.
+**Add it from the store.** One click, and the store keeps it up to date. Downex's
+*Settings → Integration* has the same buttons.
+
+| Browser | Install |
+|---|---|
+| Chrome, Edge, Brave and Chromium | [**Add to Chrome**](https://chromewebstore.google.com/detail/llnofffhagcfejjcephcilcbndnhnbeg) (Chrome Web Store) |
+| Firefox | [**Add to Firefox**](https://addons.mozilla.org/firefox/addon/downex/) (Firefox Add-ons) |
+
+Then pin it (the Extensions icon, the puzzle piece, in the toolbar) and click the Downex button:
+it should say **Connected**.
+
+> [!NOTE]
+> The Chrome Web Store copy has no YouTube download button: the store does not allow one. Every
+> other site works the same, and the Firefox add-on keeps the button.
+> **Want the YouTube button in Chrome?** See
+> [The YouTube button in Chrome](https://downex.app/chrome-youtube): it installs the full copy
+> that comes with Downex, from its folder (below).
+
+**Keep one copy per browser.** If you load the copy from Downex's folder, remove the Chrome Web
+Store copy first, or both take over downloads. Store copies update themselves; a copy loaded from
+the folder needs **Reload** on the extensions page after each Downex update.
+
+<details>
+<summary><b>Advanced: install from the folder</b></summary>
+
+Downex installs two copies of the extension: `chrome-mv3` for Chrome, Edge, Brave and Chromium
+(with the YouTube button), and `firefox-mv3` for Firefox.
 
 | | Chrome, Edge, Brave, Chromium | Firefox |
 |---|---|---|
@@ -184,8 +205,8 @@ Edge, Brave and Chromium, and `firefox-mv3` for Firefox.
 | **macOS** | `/Applications/Downex.app/Contents/Resources/extension/chrome-mv3` | `/Applications/Downex.app/Contents/Resources/extension/firefox-mv3` |
 
 These are the default places. If you installed Downex in another folder, or keep Downex.app
-somewhere else, use that location. In Downex, *Settings → Integration* shows both folders, with
-**Copy path** and **Open folder** buttons.
+somewhere else, use that location. In Downex, *Settings → Integration → Advanced: install from
+the folder* shows both folders, with **Copy path** and **Open folder** buttons.
 
 > [!TIP]
 > To pick the folder in the browser's file window: on Windows, paste the path into the address
@@ -193,98 +214,34 @@ somewhere else, use that location. In Downex, *Settings → Integration* shows b
 > as one item: press <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>G</kbd>, paste the path and press
 > <kbd>Return</kbd>.
 
-<details>
-<summary><b>Google Chrome</b></summary>
+**Chrome, Edge, Brave and Chromium**
 
-1. Type `chrome://extensions` in the address bar and press <kbd>Enter</kbd>.
-2. Turn on **Developer mode** (the switch at the top right).
-3. Click **Load unpacked** and choose the `chrome-mv3` folder from the table above.
-4. The **Downex** card appears. Check that its ID is `dlgpbdafcmciojddbbjikgeeefipejcn`.
-5. Pin it: click the Extensions icon (the puzzle piece) in the toolbar, then the pin next to
-   **Downex**.
-6. Click the Downex button in the toolbar. It should say **Connected**.
-</details>
-
-<details>
-<summary><b>Microsoft Edge</b></summary>
-
-1. Type `edge://extensions` in the address bar and press <kbd>Enter</kbd>.
-2. Turn on **Developer mode** (the switch in the left pane).
-3. Click **Load unpacked** and choose the `chrome-mv3` folder from the table above.
-4. The **Downex** card appears. Check that its ID is `dlgpbdafcmciojddbbjikgeeefipejcn`.
-5. Pin it: click the Extensions icon (the puzzle piece) in the toolbar, then the eye icon
-   (*Show in toolbar*) next to **Downex**.
-6. Click the Downex button in the toolbar. It should say **Connected**.
-</details>
-
-<details>
-<summary><b>Brave</b></summary>
-
-1. Type `brave://extensions` in the address bar and press <kbd>Enter</kbd>.
-2. Turn on **Developer mode** (the switch at the top right).
-3. Click **Load unpacked** and choose the `chrome-mv3` folder from the table above.
-4. The **Downex** card appears. Check that its ID is `dlgpbdafcmciojddbbjikgeeefipejcn`.
-5. Pin it: click the Extensions icon (the puzzle piece) in the toolbar, then the pin next to
-   **Downex**.
-6. Click the Downex button in the toolbar. It should say **Connected**.
-</details>
-
-<details>
-<summary><b>Chromium</b></summary>
-
-1. Type `chrome://extensions` in the address bar and press <kbd>Enter</kbd>.
-2. Turn on **Developer mode** (the switch at the top right).
-3. Click **Load unpacked** and choose the `chrome-mv3` folder from the table above.
-4. The **Downex** card appears. Check that its ID is `dlgpbdafcmciojddbbjikgeeefipejcn`.
-5. Pin it: click the Extensions icon (the puzzle piece) in the toolbar, then the pin next to
-   **Downex**.
-6. Click the Downex button in the toolbar. It should say **Connected**.
-</details>
-
-**For Chrome, Edge, Brave and Chromium:**
+1. Remove the Chrome Web Store copy of Downex, if you have it.
+2. Open the extensions page: `chrome://extensions` (Edge: `edge://extensions`, Brave:
+   `brave://extensions`).
+3. Turn on **Developer mode** (the switch at the top right; in Edge, in the left pane).
+4. Click **Load unpacked** and choose the `chrome-mv3` folder from the table above.
+5. The **Downex** card appears. Check that its ID is `dlgpbdafcmciojddbbjikgeeefipejcn`.
+6. Pin it and click the Downex button in the toolbar. It should say **Connected**.
 
 - **Keep Developer mode on.** Recent versions of Chrome turn off extensions loaded this way when
   Developer mode is switched off. Downloads then stay in the browser.
-- **Keep the folder where it is.** Do not move, rename or delete it: the browser loads the
-  extension from there. Load the folder of your Downex installation, not a copy: Downex updates
-  replace the files in that folder, and a copy would stay at the old version.
-- **A warning when the browser starts** about extensions in developer mode is expected. Close it
-  and keep Downex: it is safe to keep the extension on.
-- **After a Downex update,** the update replaces the files in the same folder. Click the reload
-  icon on the Downex card in the extensions page (or restart the browser).
+- **Keep the folder where it is.** Do not move, rename or delete it, and load the folder of your
+  Downex installation, not a copy: Downex updates replace the files in that folder.
+- **A notice about developer-mode extensions** when the browser starts is normal. Close it and
+  keep Downex.
+- **After a Downex update,** click the reload icon on the Downex card in the extensions page (or
+  restart the browser).
 
-<details>
-<summary><b>Firefox</b></summary>
+**Firefox (temporary add-on)**
 
-Firefox keeps an add-on for good only when Mozilla has signed it. Downex is not signed yet, so
-in Firefox (release and Beta) you load it as a *temporary* add-on. Firefox removes it when
-Firefox closes, so repeat these steps after each restart.
+The Firefox Add-ons copy above is the one to keep. To try the copy from the folder instead,
+remove that one first; Firefox removes a temporary add-on when it closes.
 
 1. Type `about:debugging#/runtime/this-firefox` in the address bar and press <kbd>Enter</kbd>.
 2. Click **Load Temporary Add-on…**.
 3. Open the `firefox-mv3` folder from the table above and choose the file `manifest.json` in it.
-4. Pin it: click the Extensions icon (the puzzle piece) in the toolbar, then the gear next to
-   **Downex**, and choose **Pin to Toolbar**.
-5. Click the Downex button in the toolbar. It should say **Connected**.
-
-After a Downex update, reload the temporary add-on in `about:debugging` (or make a new
-`downex.xpi`, below).
-
-**Firefox Developer Edition, Nightly and ESR** can keep an unsigned add-on after a restart:
-
-1. Open `about:config`, search for `xpinstall.signatures.required` and set it to `false`.
-2. Copy the `firefox-mv3` folder to another place, such as your Documents folder. On a Mac, do
-   not change anything inside Downex.app.
-3. In the copy, put all the files and folders that are inside `firefox-mv3` into one zip file.
-   `manifest.json` must be at the top of the zip, not in a sub-folder. On Windows, select them
-   all in File Explorer and choose **Send to** → **Compressed (zipped) folder**, or use 7-Zip
-   (not PowerShell's `Compress-Archive`). Rename the zip to `downex.xpi`. On Windows, first turn
-   on **View** → **Show** → **File name extensions** in File Explorer, or the file becomes
-   `downex.xpi.zip`.
-4. Open `about:addons`, click the gear, choose **Install Add-on From File…** and pick
-   `downex.xpi`.
-
-This copy does not follow Downex updates: make a new `downex.xpi` after each update.
+4. Click the Downex button in the toolbar. It should say **Connected**.
 </details>
 
 #### If something does not work
@@ -296,13 +253,15 @@ Click the Downex button in the browser's toolbar. It tells you what is wrong.
   **Register with browsers again**, then click **Check again**. If it still says so, restart the
   browser. On a Mac, open that browser once before you register.
 - **"Downex doesn't accept this extension".** The extension came from another build of Downex
-  (for example a development build), so its ID is wrong. Remove it, then load the `chrome-mv3`
-  folder of this installation, or install the latest Downex. Its ID must be
-  `dlgpbdafcmciojddbbjikgeeefipejcn`.
-- **The extension is gone or turned off in Chrome, Edge, Brave or Chromium.** Developer mode was
-  probably switched off. Turn it on again, then turn on the Downex card (or load the folder again).
-- **The add-on is gone from Firefox.** A temporary add-on is removed when Firefox closes. Load it
-  again as in step 1 to 3 above.
+  (for example a development build). Remove it, then add it from the store, or install the
+  latest Downex.
+- **Downloads are taken twice, or by the wrong copy.** Two copies of the extension are installed
+  in one browser. Keep one: remove the other on the extensions page.
+- **The copy loaded from the folder is gone or turned off in Chrome, Edge, Brave or Chromium.**
+  Developer mode was probably switched off. Turn it on again, then turn on the Downex card (or
+  load the folder again).
+- **The temporary add-on is gone from Firefox.** It is removed when Firefox closes. Add Downex from
+  Firefox Add-ons instead, and it stays.
 
 More help: [support@downex.app](mailto:support@downex.app).
 
@@ -350,12 +309,12 @@ with **pnpm**.
 
 ```powershell
 # Windows: everything into bin\ (add -Installer for Setup, needs NSIS 3)
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.1
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Version 1.1.2
 ```
 
 ```bash
 # macOS (Xcode Command Line Tools): the universal Downex.app and its disk image in dist/macos
-bash scripts/build-macos.sh -v 1.1.1
+bash scripts/build-macos.sh -v 1.1.2
 ```
 
 <details>

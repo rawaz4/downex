@@ -210,6 +210,37 @@ func TestALaterStartBringsTheWindowBack(t *testing.T) {
 	t.Logf("after an older build's start: %s", s)
 }
 
+// TestARaisedStartComesAboveTheBrowser: a later start with "--raise" (a download the user
+// just started in the browser) shows the minimised window again on the active Space
+// (mac.RaiseWindow); one without leaves the window's Space as it is.
+func TestARaisedStartComesAboveTheBrowser(t *testing.T) {
+	e := newHelperEnv(t)
+	c := startHelper(t, "host", e)
+	if l := c.line(t, 20*time.Second); l != "ready" {
+		t.Fatalf("host: %q", l)
+	}
+	if a := c.ask(t, "raise"); !strings.HasPrefix(a, "space=false ") {
+		t.Fatalf("before any start: %s", a)
+	}
+	for _, args := range [][]string{nil, {"--raise"}} {
+		c.ask(t, "minimize")
+		if s := c.waitState(t, "mini=true", 5*time.Second); !strings.Contains(s, "mini=true") {
+			t.Fatalf("not minimised: %s", s)
+		}
+		second := startHelper(t, "second", e, args...)
+		if l := second.line(t, 20*time.Second); l != "handed=true err=<nil>" {
+			t.Fatalf("start %q: %s", args, l)
+		}
+		c.waitState(t, "visible=true mini=false", 5*time.Second)
+		a := c.ask(t, "raise")
+		want := fmt.Sprintf("space=%v visible=true mini=false", args != nil)
+		if !strings.HasPrefix(a, want) {
+			t.Errorf("after a start %q: %s, want %s", args, a, want)
+		}
+		t.Logf("after a start %q: %s", args, a)
+	}
+}
+
 // TestAStartHandsOverToAnOlderBuild: when one of today's Wails windows holds the lock and no
 // native host answers, a start posts Wails' own hand-off (the JSON as the notification's
 // object) to the lock's name and exits.

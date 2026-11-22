@@ -19,7 +19,7 @@ func openProgress(a *osApp, b *backend, o options) (*osWindow, error) {
 	// Numbers, sizes and times in the user's locale (once for the process: userLocale).
 	userLocale()
 	pw, err := progress.New(progress.Options{
-		ID: b.view.Progress, Daemon: b.daemon, Events: b.events, Platform: b.platform, Caps: b.caps,
+		ID: b.view.Progress, Started: b.view.Started, Daemon: b.daemon, Events: b.events, Platform: b.platform, Caps: b.caps,
 		Theme: b.theme, Storage: b.storage, Call: b.call, Log: b.log,
 		FixedTheme: o.fixed, SystemDark: o.systemDark, OpenPrompt: openPrompt,
 	})

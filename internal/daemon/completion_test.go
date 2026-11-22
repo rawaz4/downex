@@ -99,8 +99,10 @@ func TestCompletionDialogOnComplete(t *testing.T) {
 	}
 }
 
-// TestCompletionDialogOnFailure marks a stopped download (stored at once): each of its
-// failures opens the window once.
+// TestCompletionDialogOnFailure marks a stopped download (stored at once): the failure of
+// the run its window waited for opens the window once, and so does the failure of each
+// retry that the window shows (progress_window, the window's own Retry); a retry without a
+// window (the CLI) gets the tray notification only.
 func TestCompletionDialogOnFailure(t *testing.T) {
 	missing := serve(t, testserver.Options{Size: 1, FailFirst: 1000, FailStatus: 404})
 	windows := &launcher{}
@@ -117,11 +119,20 @@ func TestCompletionDialogOnFailure(t *testing.T) {
 	h.waitState(d.GetId(), stFailed)
 	waitLaunches(t, windows, d.GetId())
 
-	// Retry fails again: one more window, for the new failure.
-	h.resume(&downexv1.ResumeRequest{Id: d.GetId()})
+	// The window's Retry fails again: one more window, for the new failure.
+	h.resume(&downexv1.ResumeRequest{Id: d.GetId(), ProgressWindow: true})
 	h.waitFor(d.GetId(), "the second failure", func(x *downexv1.Download) bool {
 		return x.GetState() == stFailed && len(windows.launched()) == 2
 	})
+	waitLaunches(t, windows, d.GetId(), d.GetId())
+
+	// A retry without its window: the tray tells the failure.
+	notices, stop := h.m.Subscribe()
+	defer stop()
+	h.resume(&downexv1.ResumeRequest{Id: d.GetId()})
+	if n := outcomeNotice(t, notices, NoticeFailed, d.GetId()); n.InWindow {
+		t.Error("a retry without a window left its failure to a window")
+	}
 	waitLaunches(t, windows, d.GetId(), d.GetId())
 }
 

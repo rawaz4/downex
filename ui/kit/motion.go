@@ -146,6 +146,10 @@ type Eased struct {
 	Duration time.Duration
 	// OnChange hears that Value changed (to invalidate what shows it).
 	OnChange func()
+	// Glide moves to a streaming target (one that comes within twice Duration of the last)
+	// at an even pace over the time since that last one, instead of showing it at once: a
+	// download's progress then advances smoothly between its reports rather than in steps.
+	Glide bool
 
 	value   float32
 	changed time.Time // when the target last changed
@@ -175,9 +179,16 @@ func (e *Eased) SetTarget(w *Window, target float32) {
 	if w != nil {
 		now = w.Now()
 	}
-	streaming := !e.changed.IsZero() && !now.IsZero() && now.Sub(e.changed) < 2*dur
+	since := now.Sub(e.changed)
+	streaming := !e.changed.IsZero() && !now.IsZero() && since < 2*dur
 	if target != from {
 		e.changed = now
+	}
+	if streaming && e.Glide && w != nil && w.MotionOK() && finite(target) && finite(from) && from != target {
+		e.w = w
+		e.tween = &Tween{From: from, To: target, Duration: GlideDuration(since), Ease: Linear, Set: e.show}
+		w.Animate(e.tween)
+		return
 	}
 	if streaming || w == nil || !w.MotionOK() || !finite(target) || !finite(from) || from == target {
 		e.show(target)
@@ -204,6 +215,17 @@ func (e *Eased) stop() {
 	}
 	e.tween = nil
 }
+
+// The bounds of a glide's length (Eased.Glide, SegmentBar): reports closer together than
+// minGlide still glide briefly, and a pause longer than maxGlide does not slow the motion down.
+const (
+	minGlide = 120 * time.Millisecond
+	maxGlide = 1200 * time.Millisecond
+)
+
+// GlideDuration is the length of a glide toward a value reported since after the last one:
+// since, kept between the bounds above.
+func GlideDuration(since time.Duration) time.Duration { return min(max(since, minGlide), maxGlide) }
 
 func finite(v float32) bool { return !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0) }
 

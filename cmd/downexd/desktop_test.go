@@ -60,15 +60,17 @@ func TestProgressWindowHook(t *testing.T) {
 		t.Errorf("started %q, want %q", started, want)
 	}
 
-	// A browser add's window comes above the browser ("--raise"): its progress window, or
-	// its standalone Confirm download window; never the main window.
+	// A browser add's window comes above the browser ("--raise"): its progress window (as the
+	// download starts: "--started"), or its standalone Confirm download window; never the
+	// main window.
 	started = nil
-	for _, w := range []daemon.AddWindow{daemon.AddProgress, daemon.AddConfirm} {
+	for _, w := range []daemon.AddWindow{daemon.AddProgress, daemon.AddProgressStarted, daemon.AddConfirm} {
 		if err := d.showBrowserAdd(9, w); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want = [][]string{{client.UIName(), "--progress", "9", "--raise"}, {client.UIName(), "--confirm", "9", "--raise"}}
+	want = [][]string{{client.UIName(), "--progress", "9", "--raise"}, {client.UIName(), "--progress", "9", "--raise", "--started"},
+		{client.UIName(), "--confirm", "9", "--raise"}}
 	if !slices.EqualFunc(started, want, slices.Equal) {
 		t.Errorf("started %q, want %q", started, want)
 	}

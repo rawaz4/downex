@@ -649,20 +649,11 @@ func TestAppendIDs(t *testing.T) {
 // lines are skipped. Every ID must be valid (a bad line fails the build, never dropped),
 // and the ID of this repository's key (testChromeID) must be among them.
 func TestExtensionIDFile(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "ext", "EXTENSION_ID.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ids []string
-	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	ids := extensionFileIDs(t)
+	for _, id := range ids {
+		if !chromeIDPattern.MatchString(id) {
+			t.Errorf("EXTENSION_ID.txt: %q is not a Chromium extension ID", id)
 		}
-		if !chromeIDPattern.MatchString(line) {
-			t.Errorf("EXTENSION_ID.txt: %q is not a Chromium extension ID", line)
-		}
-		ids = append(ids, line)
 	}
 	if !slices.Contains(ids, testChromeID) {
 		t.Errorf("EXTENSION_ID.txt lists %q, without the development ID %s", ids, testChromeID)
@@ -673,5 +664,91 @@ func TestExtensionIDFile(t *testing.T) {
 	}
 	if err := checkIDs(regOptions{browsers: []string{"chrome"}, chromeIDs: appendIDs(nil, joined)}); err != nil {
 		t.Error(err)
+	}
+}
+
+// storeChromeID is the ID the Chrome Web Store gave the extension (ext/EXTENSION_ID.txt).
+const storeChromeID = "llnofffhagcfejjcephcilcbndnhnbeg"
+
+// extensionFileIDs reads ext/EXTENSION_ID.txt as the build scripts do: one ID per line, "#"
+// starts a comment line, blank lines are skipped.
+func extensionFileIDs(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "ext", "EXTENSION_ID.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			ids = append(ids, line)
+		}
+	}
+	return ids
+}
+
+// TestRegisterAllowsEveryBuiltInID: a build whose DefaultChromeExtensionIDs are the IDs of
+// ext/EXTENSION_ID.txt (the installer's unpacked copy and the Chrome Web Store copy) allows
+// both in every Chromium manifest, when it registers afresh and when --keep (downexd and the
+// macOS window at their start) updates a manifest of an older build that allowed the first only.
+func TestRegisterAllowsEveryBuiltInID(t *testing.T) {
+	ids := extensionFileIDs(t)
+	if !slices.Contains(ids, testChromeID) || !slices.Contains(ids, storeChromeID) {
+		t.Fatalf("EXTENSION_ID.txt lists %q: want the unpacked copy's %s and the store copy's %s", ids, testChromeID, storeChromeID)
+	}
+	old := DefaultChromeExtensionIDs
+	t.Cleanup(func() { DefaultChromeExtensionIDs = old })
+	DefaultChromeExtensionIDs = strings.Join(ids, ",") // as scripts/build-windows.ps1 and build-macos.sh pass it
+
+	// The command takes them all when no --chrome-extension-id is given.
+	isolateUserDirs(t)
+	var stdout, stderr bytes.Buffer
+	if code := runRegister([]string{"--browsers", "chrome", "--keep", "--dry-run"}, &stdout, &stderr); code != exitOK ||
+		!strings.Contains(stdout.String(), "Chromium extension IDs: "+strings.Join(ids, ", ")+"\n") {
+		t.Fatalf("exit %d\n%s%s", code, stdout.String(), stderr.String())
+	}
+
+	var want []string
+	for _, id := range ids {
+		want = append(want, "chrome-extension://"+id+"/")
+	}
+	chromium := []string{"chrome", "edge", "chromium", "brave"}
+	check := func(what string, inst installation, exe string) {
+		t.Helper()
+		for _, b := range chromium {
+			if m := readManifest(t, inst.targets[b].file); !slices.Equal(m.AllowedOrigins, want) || m.Path != exe {
+				t.Errorf("%s: %s manifest %+v, want allowed_origins %q", what, b, m, want)
+			}
+		}
+	}
+	o := testOptions(t, append(slices.Clone(chromium), "firefox")...)
+	o.chromeIDs = appendIDs(nil, DefaultChromeExtensionIDs) // what runRegister does without the flag
+
+	fresh := testInstallation(t, newMemRegistry())
+	var out bytes.Buffer
+	if err := register(fresh, o, &out); err != nil {
+		t.Fatal(err)
+	}
+	check("register", fresh, o.exe)
+
+	// An older build in another folder registered the first ID only; --keep adds the others
+	// and names this executable.
+	inst := testInstallation(t, newMemRegistry())
+	older := o
+	older.exe = filepath.Join(t.TempDir(), filepath.Base(o.exe))
+	older.chromeIDs = ids[:1]
+	if err := register(inst, older, &out); err != nil {
+		t.Fatal(err)
+	}
+	keep := o
+	keep.keep = true
+	out.Reset()
+	if err := register(inst, keep, &out); err != nil {
+		t.Fatal(err)
+	}
+	check("register --keep", inst, o.exe)
+	out.Reset()
+	if err := register(inst, keep, &out); err != nil || !strings.Contains(out.String(), "Nothing to change") {
+		t.Errorf("a second --keep: %v\n%s", err, out.String())
 	}
 }

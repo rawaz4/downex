@@ -120,11 +120,15 @@ static int dxPressed(void) {
 @interface DXView : NSView
 @property(nonatomic) uintptr_t handle;
 @property(nonatomic, strong) NSTrackingArea *tracking;
+// firstMouse: the click that brings the window forward from another app also reaches the
+// content (WindowOptions.AcceptsFirstMouse).
+@property(nonatomic) BOOL firstMouse;
 @end
 
 @implementation DXView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)e { return self.firstMouse; }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (void)updateLayer {
 	// A paint the system asks for (first show, a backing change): Go repaints all.
@@ -392,6 +396,11 @@ void dxWindowSetColors(void *p, double r, double g, double b, double a, bool dar
 		w.contentView.layer.backgroundColor = c.CGColor;
 	}
 	w.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+}
+
+void dxWindowSetFirstMouse(void *p, bool on) {
+	NSView *v = ((__bridge DXWindow *)p).contentView;
+	if ([v isKindOfClass:[DXView class]]) ((DXView *)v).firstMouse = on;
 }
 
 void dxWindowPresent(void *p, CGImageRef img, double scale) {

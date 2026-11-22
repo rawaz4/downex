@@ -376,6 +376,13 @@ https.
       /Applications/Downex.app`, and whether anything was left in /Applications
       (`ls -a /Applications | grep -i downex`: a `.downex-update-*` folder) or still mounted
       (`hdiutil info`).
+- [ ] Interrupted install: run `$H/downex update install` again with an update available and, once
+      a `.downex-update-<n>` folder appears next to Downex.app, end downexd (`pkill -9 downexd`).
+      Open Downex: the folder stays while it is younger than 30 minutes; after that the next start
+      or automatic check removes it (`downexd.log`: "removed a leftover of an earlier update"), and
+      Downex.app itself is unchanged. **Record** whether the disk image is still attached
+      (`hdiutil info`, a `downex-update-*` mount point in `$TMPDIR`): nothing detaches it before a
+      restart or logout (M6-SPEC §4, residual).
 - [ ] An ad-hoc signed running build (no `DEVELOPER_ID`) installs an ad-hoc signed update whose
       `CFBundleShortVersionString` equals the manifest's version, without any environment variable,
       and refuses one whose version differs. The installed bundle has no `com.apple.quarantine`

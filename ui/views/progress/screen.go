@@ -56,6 +56,11 @@ const (
 	tabLimits = "limits"
 )
 
+// MinProgressView is how long a window that opened as its download started (Options.Started)
+// shows the progress before the completion view, even when the download completed at once:
+// the user sees that it downloaded, then that it is complete (docs/DESKTOP-SPEC.md §7).
+const MinProgressView = 1200 * time.Millisecond
+
 // Screen is the window's content (div.pw): a column 10 px apart in 12 × 16 px padding on
 // --surface, in var(--type-cell). Its methods belong to the UI thread.
 type Screen struct {
@@ -83,6 +88,11 @@ type Screen struct {
 	destroyed     bool
 	lim           limits
 	fit           fitState
+	// The progress view's least time (Options.Started, MinProgressView): when it first
+	// showed the download, the timer that ends the hold, and whether the hold is over.
+	shownAt   time.Time
+	holdTimer *kit.Timer
+	held      bool
 	// the retry countdown: the clock it reads, when each slot's notice was first seen
 	now       time.Time
 	retrySeen map[int32]retryNotice
@@ -698,7 +708,10 @@ func (s *Screen) sync() {
 	// and there is a running download to show them for. Collapsed, it fits its facts.
 	if !s.sized && ready && d != nil {
 		s.sized = true
-		if d.GetState() != downexv1.DownloadState_DOWNLOAD_STATE_COMPLETED {
+		s.shownAt = s.pw.Kit.Now()
+		// A window that opened as its download started shows the progress first, even of
+		// one complete already (holdProgress).
+		if d.GetState() != downexv1.DownloadState_DOWNLOAD_STATE_COMPLETED || s.pw.o.Started {
 			if s.expanded {
 				s.resize(true)
 			} else {
@@ -734,7 +747,7 @@ func (s *Screen) completion(d *downexv1.Download, ready bool) {
 		}
 		return
 	}
-	if s.complete || s.deciding {
+	if s.complete || s.deciding || s.holdProgress() {
 		return
 	}
 	first := !s.decidedOnce
@@ -765,6 +778,28 @@ func (s *Screen) completion(d *downexv1.Download, ready bool) {
 			}
 		})
 	})
+}
+
+// holdProgress keeps the progress view of a window that opened as its download started
+// (Options.Started) until MinProgressView has passed since it first showed the download, so
+// that a download that completes at once does not show only its completion. It reports a
+// hold; the completion is decided again when the hold ends (once per window).
+func (s *Screen) holdProgress() bool {
+	if !s.pw.o.Started || s.held {
+		return false
+	}
+	left := MinProgressView - s.pw.Kit.Now().Sub(s.shownAt)
+	if left <= 0 || s.pw.Kit.Host() == nil {
+		s.held = true
+		return false
+	}
+	if s.holdTimer == nil {
+		s.holdTimer = s.pw.Kit.After(left, func() {
+			s.holdTimer, s.held = nil, true
+			s.sync()
+		})
+	}
+	return true
 }
 
 func (s *Screen) showComplete() {
@@ -839,6 +874,7 @@ func (s *Screen) dispose() {
 	s.lim.connTimer.Stop()
 	s.copiedTimer.Stop()
 	s.countdown.Stop()
+	s.holdTimer.Stop()
 }
 
 // ---- actions -------------------------------------------------------------------------------

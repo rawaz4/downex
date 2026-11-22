@@ -18,9 +18,10 @@ import (
 const argsHint = "[File] is replaced by the downloaded file; no shell runs it."
 
 // integrationPage is Settings → Integration: the browser (whether its downloads wait for a
-// confirmation, where the extension that came with Downex is, and registering Downex with the
-// browsers again), the clipboard, and the safety of downloaded files (the file check,
-// marking, virus scan). Its sections go in two balanced columns.
+// confirmation, the extension's store listings first, registering Downex with the browsers
+// again, and the copy that came with Downex folded under a disclosure), the clipboard, and the
+// safety of downloaded files (the file check, marking, virus scan). Its sections go in two
+// balanced columns.
 type integrationPage struct {
 	page
 	cols                *columns
@@ -39,7 +40,33 @@ type integrationPage struct {
 	fail      *kit.Element
 	// folderNote is why the extension folders cannot be used as they are ("": they can)
 	folderNote string
+	// folderToggle folds the steps that load the extension from Downex's folder (folderSteps);
+	// folderOpen is whether they show.
+	folderToggle *disclosure
+	folderSteps  *kit.Element
+	folderOpen   bool
 }
+
+// Where the extension is listed, and the website's guide to the Chrome copy with the YouTube
+// button (the Chrome Web Store copy has none). The website links to the same addresses.
+const (
+	// ChromeStoreURL is the Chrome Web Store listing; Edge, Brave and Chromium install from it
+	// too (other Chromium browsers can install it, but downex-nmhost registers itself with
+	// those four and Firefox only, so the page names no other).
+	ChromeStoreURL = "https://chromewebstore.google.com/detail/llnofffhagcfejjcephcilcbndnhnbeg"
+	// FirefoxAddonsURL is the Firefox Add-ons listing.
+	FirefoxAddonsURL = "https://addons.mozilla.org/firefox/addon/downex/"
+	// ChromeYouTubeGuideURL is "The YouTube button in Chrome" on downex.app.
+	ChromeYouTubeGuideURL = "https://downex.app/chrome-youtube"
+)
+
+const (
+	youTubeLinkText  = "Want the YouTube button in Chrome?"
+	chromiumHint     = "Add to Chrome also works in Edge, Brave and Chromium."
+	copiesHint       = "Store copies update themselves; a copy loaded from the folder needs Reload after Downex updates. Keep one copy per browser."
+	folderDisclosure = "Advanced: install from the folder"
+	folderSummary    = "Load unpacked, Copy path, Open folder"
+)
 
 // The Safety card's first row: the file check (docs/DESKTOP-SPEC.md §9.9).
 const (
@@ -136,27 +163,68 @@ func newIntegrationPage(d *Dialog) *integrationPage {
 	p.register = button("Register with browsers again", "refresh", widgets.Secondary, true, p.registerBrowsers)
 	p.register.Semantics.AutomationID = "integration-register"
 	p.register.SetDisabled(d.app.Platform == nil, false)
-	chromeRow := p.folderRow(host.FolderExtensionChrome, "Chrome and Edge")
-	step1 := []kit.Widget{chromeRow}
-	if p.folderNote != "" {
-		step1 = append(step1, views.NewNote(views.NoteInfo, escapeBidi(p.folderNote)))
+
+	// The stores first: each button opens its listing in the system's browser.
+	addChrome := button("Add to Chrome", "external", widgets.Primary, true, func() { p.openPage(ChromeStoreURL) })
+	addChrome.Semantics.AutomationID = "integration-add-chrome"
+	addChrome.Tooltip = ChromeStoreURL
+	addFirefox := button("Add to Firefox", "external", widgets.Primary, true, func() { p.openPage(FirefoxAddonsURL) })
+	addFirefox.Semantics.AutomationID = "integration-add-firefox"
+	addFirefox.Tooltip = FirefoxAddonsURL
+	youtube := widgets.NewButton(youTubeLinkText, "", widgets.Link, widgets.SizeMd, func() { p.openPage(ChromeYouTubeGuideURL) })
+	youtube.Label().SetFont(linkFont)
+	youtube.Style.ColumnGap = kit.Px(4)
+	youtube.Add(icon("external", 12, views.InkAccent))
+	youtube.Tooltip = ChromeYouTubeGuideURL
+	youtube.Semantics.AutomationID = "integration-chrome-youtube"
+	for _, b := range []*widgets.Button{addChrome, addFirefox, youtube} {
+		b.SetDisabled(d.app.Platform == nil, false)
 	}
-	steps := el(kit.Style{Display: kit.DisplayBlock, RowGap: kit.Px(10), MinWidth: kit.Px(0), Padding: kit.Edges{Start: kit.Px(44)}},
-		step("1", step1,
-			plain("Chrome, Edge, Brave or Chromium: open "), code("chrome://extensions"), plain(" (Edge: "), code("edge://extensions"),
+	stores := el(kit.Style{Display: kit.DisplayFlex, Wrap: true, AlignItems: kit.AlignCenter, RowGap: kit.Px(8), ColumnGap: kit.Px(8), MinWidth: kit.Px(0)},
+		addChrome, addFirefox)
+	youtubeLine := el(kit.Style{Display: kit.DisplayFlex, MinWidth: kit.Px(0)}, youtube)
+	storeBlock := stack(kit.Px(8), stores, sHint(chromiumHint), youtubeLine, sHint(copiesHint))
+
+	relay := stack(kit.Px(8),
+		newInline(fontSteps, 1.5,
+			plain("The extension reaches Downex through the relay "), code("downex-nmhost"),
+			plain(", which the installer registers with your browsers. If the extension says Downex is not set up, register it again.")),
+		sAfter(p.register, p.said), p.fail)
+
+	// The copies in Downex's folder (the Chrome one keeps the YouTube button), folded away.
+	steps := el(kit.Style{Display: kit.DisplayBlock, RowGap: kit.Px(10), MinWidth: kit.Px(0), Hidden: true},
+		step("1", []kit.Widget{p.folderRow(host.FolderExtensionChrome, "Chrome and Edge")},
+			plain("Chrome, Edge, Brave or Chromium: remove the store copy first. Open "), code("chrome://extensions"), plain(" (Edge: "), code("edge://extensions"),
 			plain(", Brave: "), code("brave://extensions"),
-			plain("), turn on Developer mode and keep it on, choose Load unpacked and pick this folder. Reload it there after updating Downex.")),
+			plain("), turn on Developer mode and keep it on, choose Load unpacked and pick this folder. A notice about developer-mode extensions is normal. Reload it there after updating Downex.")),
 		step("2", []kit.Widget{p.folderRow(host.FolderExtensionFirefox, "Firefox")},
-			plain("Firefox: open "), code("about:debugging"),
+			plain("Firefox: the Firefox Add-ons copy already has the YouTube button and is the one to keep. To try this copy instead, remove that one first, open "),
+			code("about:debugging"),
 			plain(", choose This Firefox, then Load Temporary Add-on… and pick the "),
 			code("manifest.json"), plain(" file in this folder; Firefox removes it when it closes.")),
-		step("3", []kit.Widget{sAfter(p.register, p.said), p.fail},
-			plain("It reaches Downex through the relay "), code("downex-nmhost"),
-			plain(", which the installer registers with your browsers. If the extension says Downex is not set up, register it again.")),
 	)
 	steps.Semantics.Role = kit.RoleList
-	steps.Semantics.Name = "The Downex browser extension"
-	browser := sCard(confirmRow, sStack(extHead, steps))
+	steps.Semantics.Name = folderDisclosure
+	p.folderSteps = steps
+	// A nested disclosure: its label is smaller than the card's title (fontLabel), as About's
+	// component summaries are.
+	p.folderToggle = newDisclosure(folderDisclosure, fontCompTitle, func() { p.setFolderOpen(!p.folderOpen) })
+	p.folderToggle.Semantics.AutomationID = "integration-folder-steps"
+	p.folderToggle.Semantics.Controls = steps
+	p.folderToggle.set(false, folderSummary)
+
+	parts := []kit.Widget{storeBlock, relay}
+	if p.folderNote != "" {
+		// macOS runs a temporary copy (folderRow found out): why Copy path and Open folder are
+		// off, and what to do, shown while the steps are folded too, as it matters to the
+		// relay's registration as well.
+		parts = append(parts, views.NewNote(views.NoteInfo, escapeBidi(p.folderNote)))
+	}
+	parts = append(parts, stack(kit.Px(8), p.folderToggle, steps))
+	body := el(kit.Style{Display: kit.DisplayBlock, RowGap: kit.Px(14), MinWidth: kit.Px(0), Padding: kit.Edges{Start: kit.Px(44)}}, parts...)
+	body.Semantics.Role = kit.RoleGroup
+	body.Semantics.Name = "The Downex browser extension"
+	browser := sCard(confirmRow, sStack(extHead, body))
 
 	clipRow, p.clip = switchRow("Offer download links that I copy",
 		"When you copy the address of a file (a video, an archive, a program…), Downex asks whether to download it. Text that other apps mark as private, such as passwords, is ignored.",
@@ -348,6 +416,33 @@ func (p *integrationPage) registerBrowsers() {
 				return
 			}
 			p.say("Downex is registered with your browsers again.")
+		})
+	})
+}
+
+// setFolderOpen shows or folds the steps that load the extension from Downex's folder.
+func (p *integrationPage) setFolderOpen(open bool) {
+	p.folderOpen = open
+	p.folderToggle.set(open, folderSummary)
+	p.folderSteps.SetHidden(!open)
+}
+
+// openPage opens a fixed https address (a store listing, the website's guide) in the system's
+// browser; a failure says why under the relay's button.
+func (p *integrationPage) openPage(url string) {
+	d := p.d
+	if d.app.Platform == nil {
+		return
+	}
+	d.app.Go(func() {
+		ctx, cancel := d.app.CallContext()
+		defer cancel()
+		err := d.app.Platform.OpenExternal(ctx, url)
+		d.app.UI(func() {
+			if d.gone || err == nil {
+				return
+			}
+			p.showFail(failText("Could not open "+url, err))
 		})
 	})
 }

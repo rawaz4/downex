@@ -14,6 +14,8 @@
 ;   <folder>\uninstall.exe /S                           (keeps the user's data)
 ; /RELAUNCH (the in-app update, internal/update) opens the window again after a silent
 ; install when Setup closed it. A silent install keeps the desktop shortcut as the user left it.
+; The in-app update also passes /D=<the running installation's folder>, so that Setup
+; replaces that folder; an installation the Uninstall entry names elsewhere is removed.
 ;
 ; Replacing a program: it is renamed aside to <name>.old (Windows allows that also while
 ; the program runs, as a browser may run downex-nmhost.exe again at any moment), and the
@@ -84,6 +86,7 @@ Var PrevDir        ; InstallLocation of an existing installation, or ""
 Var Registered     ; uninstaller: 1 when $INSTDIR is the installation the Uninstall key names
 Var PowerShellExe  ; 64-bit Windows PowerShell where there is one (it can see 64-bit processes)
 Var Stopped        ; 1 once Setup has stopped the Downex programs of $INSTDIR
+Var Upgrade        ; 1 when $INSTDIR held a Downex (its downexd.exe) before Setup stopped it
 Var AsideNmhost    ; the aside copies of the programs being replaced ("" = none)
 Var AsideCli
 Var AsideDaemon
@@ -104,12 +107,15 @@ Var AsideUI
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 
-!define MUI_FINISHPAGE_TEXT "${PRODUCT} has been installed.$\r$\n$\r$\nTo hand downloads from Firefox, Edge, Chrome or Brave to ${PRODUCT}, add its browser extension once: browsers do not let programs install it for you. The link below shows how for each browser."
+!define MUI_FINISHPAGE_TEXT "${PRODUCT} has been installed.$\r$\n$\r$\nTo hand downloads from Firefox, Edge, Chrome or Brave to ${PRODUCT}, add its browser extension once from the Chrome Web Store or Firefox Add-ons (Settings > Integration in ${PRODUCT} has both buttons). The link below shows how for each browser."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\downex-ui.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT}"
 !define MUI_FINISHPAGE_LINK "How to add the ${PRODUCT} browser extension"
 !define MUI_FINISHPAGE_LINK_LOCATION "$INSTDIR\EXTENSION.txt"
 !define MUI_FINISHPAGE_NOREBOOTSUPPORT
+; The text takes 7 lines: without this, a page with the Start checkbox gives it 5 and cuts
+; it off mid-sentence (Modern UI 2's Finish.nsh).
+!define MUI_FINISHPAGE_TEXT_LARGE
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -323,13 +329,38 @@ Function .onInit
 FunctionEnd
 
 ; An installation in another folder than $INSTDIR is removed with its own uninstaller
-; (silently, keeping the user's data), so that one installation remains.
+; (silently, keeping the user's data), so that one installation remains. The same folder
+; spelt another way (a short 8.3 name, a junction or subst drive; the in-app update passes
+; the running installation's folder with /D=) is recognised by a file Setup writes into
+; $INSTDIR and finds in $PrevDir: its uninstaller must never run under the new files. A
+; marker an earlier Setup left there (it was ended between writing and deleting it) is
+; deleted first, so that it cannot pass another folder off as this one; when no marker can
+; be written, the other installation is kept rather than risk removing this one.
 Function RemovePreviousElsewhere
   ${If} $PrevDir == ""
   ${OrIf} $PrevDir == $INSTDIR
     Return
   ${EndIf}
   ${IfNot} ${FileExists} "$PrevDir\uninstall.exe"
+    Return
+  ${EndIf}
+  Delete "$PrevDir\.downex-setup-same"
+  ClearErrors
+  FileOpen $0 "$INSTDIR\.downex-setup-same" w
+  ${If} ${Errors}
+    DetailPrint "Kept the installation in $PrevDir: cannot tell whether it is this folder ($INSTDIR)."
+    Return
+  ${EndIf}
+  FileClose $0
+  StrCpy $1 0
+  ${If} ${FileExists} "$PrevDir\.downex-setup-same"
+    StrCpy $1 1
+  ${EndIf}
+  Delete "$INSTDIR\.downex-setup-same"
+  ${If} $1 = 1
+    DetailPrint "$PrevDir is this folder ($INSTDIR)."
+    ; The same installation, spelt as $INSTDIR from here on (.onInstFailed compares them).
+    StrCpy $PrevDir $INSTDIR
     Return
   ${EndIf}
   DetailPrint "Removing the previous installation in $PrevDir"
@@ -419,8 +450,13 @@ Section "${PRODUCT} (required)" SecCore
   Call RemovePreviousElsewhere
 
   ; An upgrade or reinstall: stop the window and the daemon, then set the old programs
-  ; aside (from here on a failure puts them back: .onInstFailed).
+  ; aside (from here on a failure puts them back and starts that Downex again:
+  ; .onInstFailed). $Upgrade does not rest on the Uninstall entry, which the in-app update's
+  ; /D= may not match (missing, another folder, the same one spelt another way).
   StrCpy $R0 "$INSTDIR"
+  ${If} ${FileExists} "$INSTDIR\downexd.exe"
+    StrCpy $Upgrade 1
+  ${EndIf}
   StrCpy $Stopped 1
   Call StopDownexIn
   !insertmacro DELETE_ASIDE_COPIES "$INSTDIR"
@@ -617,12 +653,15 @@ FunctionEnd
 ; place (replacing new files already written), and the daemon and, after an in-app
 ; update, the window start again, so that the earlier version keeps working.
 Function .onInstFailed
-  ; Nothing set aside: a first installation, or one that failed before it replaced anything
-  ; (the earlier programs, if any, are still in place and only need starting again).
+  ; Nothing set aside and no Downex in $INSTDIR before: a first installation. An upgrade
+  ; that failed before it set anything aside (a program in use) still has its earlier
+  ; programs in place, and they only need starting again: after an in-app update nothing
+  ; else would, as its daemon has already exited.
   ${If} $Stopped != 1
     Return
   ${EndIf}
   ${If} "$AsideNmhost$AsideCli$AsideDaemon$AsideUI" == ""
+  ${AndIf} $Upgrade != 1
   ${AndIf} $PrevDir != $INSTDIR
     Return
   ${EndIf}
@@ -754,6 +793,9 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\extension\chrome-mv3"
   RMDir /r "$INSTDIR\extension\firefox-mv3"
   RMDir "$INSTDIR\extension"
+  ; Setup's own marker files, should one have been ended before it deleted them.
+  Delete "$INSTDIR\.downex-setup-same"
+  Delete "$INSTDIR\.downex-setup-test"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

@@ -4,7 +4,16 @@
 
 import type { CaptureCandidate, CaptureDecision } from './rules';
 import { PREPARE_TIMEOUT_MS } from './handoff';
-import { type Outcome, type Timers, errorMessage, failure, systemTimers } from './protocol';
+import {
+  type ConnectionStatus,
+  type Outcome,
+  type StatusResult,
+  type Timers,
+  errorMessage,
+  failure,
+  systemTimers,
+} from './protocol';
+import { isHostForbidden, isHostMissing } from './ui-format';
 
 /** Budget of the `add` request itself, timed by the native client from when it is sent. */
 export const CHROMIUM_HANDOFF_TIMEOUT_MS = 3000;
@@ -13,32 +22,129 @@ export const CHROMIUM_HANDOFF_TIMEOUT_MS = 3000;
  * this extra time is abandoned; it is later than the add's own timeout, so it never races it.
  */
 export const HANDOFF_BACKSTOP_SLACK_MS = PREPARE_TIMEOUT_MS + 1000;
+/**
+ * How long a Chromium capture waits for a relay that is merely not connected (the MV3 service
+ * worker was just started for this download, or the port dropped) to connect again and say that
+ * downexd runs, before the browser keeps the download. The wait is taken off the add's budget
+ * (handOffBudget), so a hand-off that waited still answers within CHROMIUM_HANDOFF_TIMEOUT_MS
+ * of the download's event.
+ */
+export const DAEMON_CONNECT_WAIT_MS = 800;
 
 /** Whether downexd is known to run, and a way to refresh that knowledge. */
 export interface DaemonGate {
   ready(): boolean;
-  /** Called when a candidate is left to the browser because the daemon is not known to run. */
+  /** Called when a candidate is left to the browser at once because the daemon is not known to run. */
   refresh(): void;
+  /**
+   * Connects a relay that is merely not connected (connecting, disconnected or never started)
+   * and resolves whether downexd is then known to run, within `ms`; never rejects. Undefined
+   * when reconnecting cannot help: the host is missing or does not allow this extension, it
+   * speaks another protocol, or it is connected and says downexd is not running.
+   */
+  connect?(ms: number): Promise<boolean> | undefined;
 }
 
 /**
  * Captures only while downexd is known to run. Otherwise the browser keeps the download
  * at once: an add would have to autostart the daemon, which can outlast the hand-off
- * timeout and end with the file downloaded twice.
+ * timeout and end with the file downloaded twice. With `waitMs` > 0 and a gate that can
+ * connect, a relay that is merely not connected is first given up to `waitMs` to connect
+ * and report a running downexd (the decision is then a Promise); one that cannot be reached
+ * that way still leaves the download to the browser at once.
  */
 export function requireDaemon<C>(
   decide: (c: C) => CaptureDecision | Promise<CaptureDecision>,
   gate: DaemonGate,
+  waitMs = 0,
 ): (c: C) => CaptureDecision | Promise<CaptureDecision> {
-  const check = (d: CaptureDecision): CaptureDecision => {
+  const unavailable = (): CaptureDecision => ({ capture: false, reason: 'daemon_unavailable' });
+  const check = (d: CaptureDecision): CaptureDecision | Promise<CaptureDecision> => {
     if (!d.capture || gate.ready()) return d;
+    // The wait itself asks for the daemon's status: no refresh on top of it.
+    const waiting = waitMs > 0 ? gate.connect?.(waitMs) : undefined;
+    if (waiting) {
+      return waiting.then(
+        (ok) => (ok ? d : unavailable()),
+        () => unavailable(),
+      );
+    }
     gate.refresh();
-    return { capture: false, reason: 'daemon_unavailable' };
+    return unavailable();
   };
   return (c) => {
     const d = decide(c);
     return d instanceof Promise ? d.then(check) : check(d);
   };
+}
+
+/** The native client as the daemon gate sees it (NativeClient). */
+export interface DaemonConnection {
+  readonly daemonReady: boolean;
+  readonly status: ConnectionStatus;
+  /** Connects when not connected, waits for the welcome, then asks the relay for the status. */
+  queryStatus(options?: { timeoutMs?: number }): Promise<Outcome<StatusResult>>;
+}
+
+/**
+ * Whether connecting again may reach a running downexd: the relay is not connected, and the
+ * last attempt did not end because the browser has no host of that name, the host does not
+ * allow this extension, or the host speaks another protocol. Each of those needs Downex
+ * installed or updated, which no reconnect within a download's hand-off brings.
+ */
+export function reconnectable(s: ConnectionStatus): boolean {
+  if (s.state === 'connected' || s.incompatibleProtocol !== undefined) return false;
+  return !(s.lastError !== undefined && (isHostMissing(s.lastError) || isHostForbidden(s.lastError)));
+}
+
+export interface NativeDaemonGateOptions {
+  /** Least time between the status refreshes of skipped captures. */
+  refreshMs: number;
+  now?: () => number;
+}
+
+/**
+ * The daemon gate of a native client: ready while it is connected and downexd is known to run,
+ * refreshed at most once per `refreshMs`, and connected on demand while the relay is merely
+ * not connected. Captures that wait at the same time share one status request.
+ */
+export function nativeDaemonGate(conn: DaemonConnection, opts: NativeDaemonGateOptions): DaemonGate {
+  const now = opts.now ?? (() => Date.now());
+  let lastRefresh: number | undefined;
+  let waiting: Promise<boolean> | undefined;
+  const refresh = () => {
+    const t = now();
+    if (lastRefresh !== undefined && t - lastRefresh < opts.refreshMs) return;
+    lastRefresh = t;
+    void conn.queryStatus();
+  };
+  return {
+    ready: () => conn.daemonReady,
+    refresh,
+    connect: (ms) => {
+      if (conn.daemonReady) return Promise.resolve(true);
+      if (!reconnectable(conn.status)) return undefined;
+      waiting ??= conn
+        .queryStatus({ timeoutMs: ms })
+        .then(
+          () => conn.daemonReady,
+          () => false,
+        )
+        .finally(() => {
+          waiting = undefined;
+        });
+      return waiting;
+    },
+  };
+}
+
+/**
+ * The add budget left of `timeoutMs` once deciding took `decidedInMs`: the time spent waiting
+ * for the daemon (and loading the rules on a cold start) is taken off it, but never more than
+ * DAEMON_CONNECT_WAIT_MS, so the add always keeps most of its budget.
+ */
+export function handOffBudget(timeoutMs: number, decidedInMs: number): number {
+  return timeoutMs - Math.min(Math.max(0, decidedInMs), DAEMON_CONNECT_WAIT_MS);
 }
 
 /** The downloads.* calls the hand-off uses. */
@@ -243,14 +349,16 @@ export function createCreatedFallbackListener(
   return (item) => {
     timers.setTimeout(() => {
       if (!deps.claims.claim(item.id)) return;
+      const startedAt = timers.now();
       void (async () => {
         try {
           const decision = reportDecision(deps, item, await deps.decide(item));
           if (!decision.capture) return;
+          const budget = handOffBudget(timeoutMs, timers.now() - startedAt);
           const result = await pausedHandOff(item.id, {
             downloads: deps.downloads,
-            handOff: () => deps.handOff(item, timeoutMs),
-            timeoutMs,
+            handOff: () => deps.handOff(item, budget),
+            timeoutMs: budget,
             ...(deps.timers ? { timers: deps.timers } : {}),
           });
           deps.onResult?.(item, result);
@@ -274,12 +382,14 @@ export function createDeterminingFilenameListener(
   deps: ChromiumCaptureDeps,
 ): (item: DownloadItemLike, suggest: Suggest) => true | undefined {
   const timeoutMs = deps.timeoutMs ?? CHROMIUM_HANDOFF_TIMEOUT_MS;
+  const timers = deps.timers ?? systemTimers;
 
-  const capture = async (item: DownloadItemLike, suggestOnce: () => void, settled: () => void) => {
+  const capture = async (item: DownloadItemLike, startedAt: number, suggestOnce: () => void, settled: () => void) => {
+    const budget = handOffBudget(timeoutMs, timers.now() - startedAt);
     const result = await pausedHandOff(item.id, {
       downloads: deps.downloads,
-      handOff: () => deps.handOff(item, timeoutMs),
-      timeoutMs,
+      handOff: () => deps.handOff(item, budget),
+      timeoutMs: budget,
       ...(deps.timers ? { timers: deps.timers } : {}),
       release: suggestOnce,
     });
@@ -290,6 +400,7 @@ export function createDeterminingFilenameListener(
   };
 
   return (item, suggest) => {
+    const startedAt = timers.now();
     let suggested = false;
     const settled = () => {
       suggested = true;
@@ -324,7 +435,7 @@ export function createDeterminingFilenameListener(
         suggestOnce();
         return undefined;
       }
-      capture(item, suggestOnce, settled).catch((e: unknown) => {
+      capture(item, startedAt, suggestOnce, settled).catch((e: unknown) => {
         deps.onError?.(e);
         suggestOnce();
       });
@@ -332,7 +443,7 @@ export function createDeterminingFilenameListener(
     }
 
     decision
-      .then((d) => (reportDecision(deps, item, d).capture ? capture(item, suggestOnce, settled) : suggestOnce()))
+      .then((d) => (reportDecision(deps, item, d).capture ? capture(item, startedAt, suggestOnce, settled) : suggestOnce()))
       .catch((e: unknown) => {
         deps.onError?.(e);
       })

@@ -49,6 +49,9 @@ type Daemon struct {
 	gone     map[int64]bool
 	status   *downexv1.StatusResponse
 	install  *downexv1.UpdateInfo // InstallUpdate's answer (SetInstallUpdate)
+	// opensProgress: Confirm opens the progress window of a Start with progress_window
+	// itself, as downexd 1.1.2 does (SetOpensProgressWindows); false is an older downexd.
+	opensProgress bool
 
 	// Before runs after a call is recorded and before it is answered; an error it returns
 	// is the call's answer (a test's replacement of one api method). It may block.
@@ -131,6 +134,11 @@ func (d *Daemon) DeleteQueueItem(id int64) { d.mu.Lock(); delete(d.queues, id); 
 
 // SetTools sets what GetTools answers (nil: a downexd without site media, unimplemented).
 func (d *Daemon) SetTools(t *downexv1.ToolsStatus) { d.mu.Lock(); d.tools = t; d.mu.Unlock() }
+
+// SetOpensProgressWindows makes Confirm answer as a downexd that opens the progress window
+// of a Start with progress_window itself (ConfirmResponse.progress_window_opening, while
+// show_progress_window is on); off (the default), it answers as an older downexd.
+func (d *Daemon) SetOpensProgressWindows(on bool) { d.mu.Lock(); d.opensProgress = on; d.mu.Unlock() }
 
 // SetGone marks a download's file as gone (keep both then keeps the name).
 func (d *Daemon) SetGone(id int64) { d.mu.Lock(); d.gone[id] = true; d.mu.Unlock() }
@@ -328,7 +336,8 @@ func (d *Daemon) Confirm(_ context.Context, req *downexv1.ConfirmRequest) (*down
 	if err != nil {
 		return nil, err
 	}
-	return &downexv1.ConfirmResponse{Download: x}, nil
+	opening := d.opensProgress && req.GetStart() && req.GetProgressWindow() && d.settings.GetShowProgressWindow()
+	return &downexv1.ConfirmResponse{Download: x, ProgressWindowOpening: opening}, nil
 }
 
 var drm = regexp.MustCompile(`drm`)

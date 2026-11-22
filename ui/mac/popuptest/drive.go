@@ -38,6 +38,7 @@ int dptVisibleTitled(const char *title);
 void dptToggleFullScreen(void *win);
 bool dptPerform(void *win, const char *sel);
 bool dptFullScreen(void *win);
+bool dptAcceptsFirstMouse(void *win);
 void dptScreenContentMax(double *w, double *h);
 void dptRunAlert(double abortAfter);
 long dptAlertDone(void);
@@ -232,6 +233,10 @@ func ToggleFullScreen(win unsafe.Pointer) { C.dptToggleFullScreen(win) }
 
 // FullScreen reports win in full screen.
 func FullScreen(win unsafe.Pointer) bool { return bool(C.dptFullScreen(win)) }
+
+// AcceptsFirstMouse reports whether win's content view takes the click that brings win
+// forward from another app (acceptsFirstMouse:).
+func AcceptsFirstMouse(win unsafe.Pointer) bool { return bool(C.dptAcceptsFirstMouse(win)) }
 
 // ScreenContentMax is the largest content area of a standard window on the main screen.
 func ScreenContentMax() (w, h float64) {

@@ -100,14 +100,32 @@ const detachFlags = windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS | window
 // does not kill it. A job that does not permit breakaway gets the process as a member,
 // as before.
 func StartDetached(exe string, args ...string) error {
+	return startDetachedWith(exe, args, "")
+}
+
+// StartDetachedCommandLine is StartDetached with the whole command line given as it is,
+// argv[0] included, for a program that reads its command line by its own rules rather
+// than CommandLineToArgvW's: an NSIS Setup takes /D=<folder> only as its last option and
+// unquoted, also when the folder has spaces, where StartDetached would quote it.
+func StartDetachedCommandLine(exe, cmdLine string) error {
+	if cmdLine == "" {
+		return fmt.Errorf("platform: start %s: empty command line", exe)
+	}
+	return startDetachedWith(exe, nil, cmdLine)
+}
+
+// startDetachedWith implements StartDetached and StartDetachedCommandLine: it starts
+// the process in the Windows directory and breaks away from the caller's job where the
+// job allows it.
+func startDetachedWith(exe string, args []string, cmdLine string) error {
 	dir, err := windows.GetSystemWindowsDirectory()
 	if err != nil {
 		return fmt.Errorf("platform: locate the Windows directory: %w", err)
 	}
-	err = startDetached(exe, args, dir, detachFlags|windows.CREATE_BREAKAWAY_FROM_JOB)
+	err = startDetached(exe, args, cmdLine, dir, detachFlags|windows.CREATE_BREAKAWAY_FROM_JOB)
 	if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		// The caller's job does not allow breakaway.
-		err = startDetached(exe, args, dir, detachFlags)
+		err = startDetached(exe, args, cmdLine, dir, detachFlags)
 	}
 	if err != nil {
 		return fmt.Errorf("platform: start %s: %w", exe, err)
@@ -115,11 +133,12 @@ func StartDetached(exe string, args ...string) error {
 	return nil
 }
 
-// startDetached starts exe in dir with the given creation flags and releases it.
-func startDetached(exe string, args []string, dir string, flags uint32) error {
+// startDetached starts exe in dir with the given creation flags and releases it. A
+// non-empty cmdLine replaces the command line built from exe and args.
+func startDetached(exe string, args []string, cmdLine, dir string, flags uint32) error {
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: flags}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: flags, CmdLine: cmdLine}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

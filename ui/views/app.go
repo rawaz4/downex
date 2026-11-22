@@ -40,6 +40,10 @@ type Platform interface {
 	RegisterBrowsers(ctx context.Context) error
 	// OpenProgressWindow opens (or raises) the progress window of a download.
 	OpenProgressWindow(id int64) error
+	// OpenProgressWindowRaised opens it above the browser, even without the foreground: the
+	// progress window of a download the user just started in the browser, when downexd does
+	// not open it itself (the standalone Confirm download window's fallback, DESKTOP-SPEC §7).
+	OpenProgressWindowRaised(id int64) error
 	// PickFolder and PickFile show the system's pickers (titles host.FolderPickerTitle and
 	// host.FilePickerTitleOf(title), starting in host.ExistingDir(initial)); "" with a nil
 	// error is a cancelled picker (today's null).

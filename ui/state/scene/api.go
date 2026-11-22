@@ -335,7 +335,9 @@ func (m *Mock) ProbeMedia(ctx context.Context, req *downexv1.ProbeMediaRequest) 
 	})
 }
 
-// Confirm implements host.Daemon.
+// Confirm implements host.Daemon. As downexd, it opens the progress window of a Start with
+// progress_window itself while show_progress_window is on (WindowState.DaemonOpened), unless
+// Options.OldDaemon.
 func (m *Mock) Confirm(ctx context.Context, req *downexv1.ConfirmRequest) (*downexv1.ConfirmResponse, error) {
 	return call(m, ctx, func() (*downexv1.ConfirmResponse, error) {
 		s, err := m.get(req.GetId())
@@ -428,7 +430,11 @@ func (m *Mock) Confirm(ctx context.Context, req *downexv1.ConfirmRequest) (*down
 		}
 		m.queueDirty = true
 		m.touch(d)
-		return &downexv1.ConfirmResponse{Download: d.clone()}, nil
+		opening := req.GetStart() && req.GetProgressWindow() && m.settings.GetShowProgressWindow() && !m.opts.OldDaemon
+		if opening {
+			m.window.DaemonOpened = append(m.window.DaemonOpened, d.id)
+		}
+		return &downexv1.ConfirmResponse{Download: d.clone(), ProgressWindowOpening: opening}, nil
 	})
 }
 
@@ -1253,13 +1259,22 @@ func (m *Mock) Startup() Startup {
 }
 
 // OpenProgressWindow records the request (and calls Options.OnOpenProgressWindow).
-func (m *Mock) OpenProgressWindow(id int64) error {
+func (m *Mock) OpenProgressWindow(id int64) error { return m.openProgressWindow(id, false) }
+
+// OpenProgressWindowRaised records the request as one above the browser (WindowState.Raised)
+// and as OpenProgressWindow does.
+func (m *Mock) OpenProgressWindowRaised(id int64) error { return m.openProgressWindow(id, true) }
+
+func (m *Mock) openProgressWindow(id int64, raised bool) error {
 	m.mu.Lock()
 	if _, err := m.get(id); err != nil {
 		m.mu.Unlock()
 		return err
 	}
 	m.window.Opened = append(m.window.Opened, id)
+	if raised {
+		m.window.Raised = append(m.window.Raised, id)
+	}
 	m.mu.Unlock()
 	if m.opts.OnOpenProgressWindow != nil {
 		m.opts.OnOpenProgressWindow(id)

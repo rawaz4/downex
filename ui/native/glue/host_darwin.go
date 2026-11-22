@@ -50,6 +50,7 @@ type Window struct {
 	defers   []func()
 	shown    bool
 	ended    bool
+	closing  bool // the Confirm download window's close is on its way (MarkClosing)
 	menu     func(command string)
 
 	theme *themeLink
@@ -129,7 +130,7 @@ func (h *Host) request(args []string) error {
 	v := host.ViewOf(args)
 	if v.IsProgress() {
 		if w := h.progress[v.Progress]; w != nil {
-			w.front()
+			w.frontFor(args)
 			return nil
 		}
 		if !h.Role.hostsProgress() {
@@ -145,15 +146,17 @@ func (h *Host) request(args []string) error {
 	}
 	if v.IsConfirm() {
 		// A download the user just started in the browser: its own Confirm download window;
-		// the main window is left as it is.
-		if w := h.confirm; w != nil {
+		// the main window is left as it is. A window whose close is on its way would drop the
+		// request: a new one opens and takes it (it is h.confirm from then on, and the old
+		// one's end leaves it so).
+		if w := h.confirm; w != nil && !w.closing {
 			w.Session.SecondInstance(args, w.front)
 			return nil
 		}
 		return h.open(h.newWindow(v, args, nil))
 	}
 	if w := h.main; w != nil {
-		w.Session.SecondInstance(args, w.front)
+		w.Session.SecondInstance(args, func() { w.frontFor(args) })
 		return nil
 	}
 	return h.open(h.newWindow(v, args, nil))
@@ -256,10 +259,22 @@ func (h *Host) open(w *Window) (err error) {
 		// dock_darwin.m at each window's launch: ask for the activation as macOS 14+
 		// expects, and put the window in front of other apps' when it is not granted.
 		mac.RequestActivation()
-		mac.RaiseIfInactive(0.5)
+		if host.RaiseArg(w.Args) {
+			// The window of a download the user just started in the browser: over the
+			// browser, on its Space, and kept there when the browser is activated again
+			// (never for a §8 complete dialog or a clipboard add).
+			mac.RaiseWindow(ww, raiseSeconds)
+		} else {
+			mac.RaiseIfInactive(0.5)
+		}
 	}
 	return nil
 }
+
+// raiseSeconds is how long a "--raise" window is put in front again after another app
+// becomes active (mac.RaiseWindow): Downex.app ends and macOS activates the browser again
+// within about a second of Start in the Confirm download window.
+const raiseSeconds = 3.0
 
 // OpenProgress opens (or brings to the front) the progress window of download id from any
 // goroutine (a window's own request, in a process that hosts every window).
@@ -432,12 +447,28 @@ func (w *Window) ForeignClose() bool { return false }
 // views/app.Main.MenuCommand, run on its UI thread).
 func (w *Window) SetMenu(f func(command string)) { w.menu = f }
 
-// front shows w's window again in front (a later start asked for it), and activates.
+// front is frontFor for a start whose arguments are not at hand (an older build's hand-off,
+// Session.SecondInstance's focus): the standalone Confirm download window's starts always
+// carry "--raise" (host.ViewOf), so it comes above the browser; any other window as without.
 func (w *Window) front() {
+	var args []string
+	if w.View.IsConfirm() {
+		args = []string{"--" + host.RaiseFlag}
+	}
+	w.frontFor(args)
+}
+
+// frontFor shows w's window again in front for a later start with args, and activates; one
+// with "--raise" (a download the user just started in the browser) also puts it above the
+// browser, on its Space, when macOS does not grant the activation (mac.RaiseWindow).
+func (w *Window) frontFor(args []string) {
 	if w.win == nil {
 		return
 	}
 	w.win.BringToFront(!w.h.noActivate)
+	if !w.h.noActivate && host.RaiseArg(args) {
+		mac.RaiseWindow(w.win, raiseSeconds)
+	}
 }
 
 func (w *Window) command(c kit.WindowCommand) {

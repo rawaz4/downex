@@ -2536,10 +2536,11 @@ type ConfirmRequest struct {
 	// SITE media of a page with several videos (SITE-MEDIA-SPEC §3.12): "" = keep the item; another
 	// item's id resolves the page again for it (its tracks, title and part replace the old ones).
 	EntryId string `protobuf:"bytes,11,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
-	// The caller opens the download's progress window when it starts now (the Confirm download
-	// window and the main window's dialog do, with show_progress_window on): downexd marks the
-	// download for the download complete dialog at once, so its outcome shows in that window,
-	// raised above the browser, instead of a tray notification.
+	// The caller wants the download's progress window when it starts (the Confirm download
+	// window and the main window's dialog ask, with show_progress_window on). downexd opens that
+	// window itself, above the browser, when the download starts now or waits in its queue
+	// (ConfirmResponse.progress_window_opening; DESKTOP-SPEC §7), and marks the run, so its
+	// outcome shows in that window instead of a tray notification (§8).
 	ProgressWindow bool `protobuf:"varint,12,opt,name=progress_window,json=progressWindow,proto3" json:"progress_window,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -3440,10 +3441,15 @@ func (x *ProbeMediaResponse) GetMedia() *MediaInfo {
 }
 
 type ConfirmResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Download      *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Download *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
+	// downexd opens this download's progress window itself (ConfirmRequest.progress_window, the
+	// setting on, a window to open): the caller must not open it too. False from a downexd that
+	// opens none (an older one, one without a window next to it, or the setting off): the caller
+	// opens it as before when the download starts now.
+	ProgressWindowOpening bool `protobuf:"varint,2,opt,name=progress_window_opening,json=progressWindowOpening,proto3" json:"progress_window_opening,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ConfirmResponse) Reset() {
@@ -3481,6 +3487,13 @@ func (x *ConfirmResponse) GetDownload() *Download {
 		return x.Download
 	}
 	return nil
+}
+
+func (x *ConfirmResponse) GetProgressWindowOpening() bool {
+	if x != nil {
+		return x.ProgressWindowOpening
+	}
+	return false
 }
 
 type PauseAllRequest struct {
@@ -3956,9 +3969,14 @@ type ResumeRequest struct {
 	// "Rescue"): refused (FailedPrecondition) unless id is such a rescue, never started yet,
 	// created at most 10 minutes ago. With show_progress_window on, its progress window
 	// opens when it starts at once. Not combinable with restart.
-	RescueStart   bool `protobuf:"varint,6,opt,name=rescue_start,json=rescueStart,proto3" json:"rescue_start,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RescueStart bool `protobuf:"varint,6,opt,name=rescue_start,json=rescueStart,proto3" json:"rescue_start,omitempty"`
+	// The caller shows the download's progress window for this run (the progress window's own
+	// Resume or Retry, or the main window's single resume that opens one): when it starts now,
+	// downexd marks the run at once, so its outcome shows in that window (DESKTOP-SPEC §8).
+	// downexd opens no window for it.
+	ProgressWindow bool `protobuf:"varint,7,opt,name=progress_window,json=progressWindow,proto3" json:"progress_window,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ResumeRequest) Reset() {
@@ -4029,6 +4047,13 @@ func (x *ResumeRequest) GetExistingFile() ExistingFile {
 func (x *ResumeRequest) GetRescueStart() bool {
 	if x != nil {
 		return x.RescueStart
+	}
+	return false
+}
+
+func (x *ResumeRequest) GetProgressWindow() bool {
+	if x != nil {
+		return x.ProgressWindow
 	}
 	return false
 }
@@ -4562,8 +4587,12 @@ type RenewLinkRequest struct {
 	RestartIfUnproven bool      `protobuf:"varint,6,opt,name=restart_if_unproven,json=restartIfUnproven,proto3" json:"restart_if_unproven,omitempty"` // too little to compare: download again from the start
 	Start             bool      `protobuf:"varint,7,opt,name=start,proto3" json:"start,omitempty"`                                                    // queue it at once (else it stays paused)
 	PageUrl           string    `protobuf:"bytes,8,opt,name=page_url,json=pageUrl,proto3" json:"page_url,omitempty"`                                  // optional: the page the new link was found on
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// With start: the caller wants the download's progress window when it starts now (the
+	// Confirm download dialog's "Continue that download", with show_progress_window on). downexd
+	// opens it itself and marks the run, as ConfirmRequest.progress_window does.
+	ProgressWindow bool `protobuf:"varint,9,opt,name=progress_window,json=progressWindow,proto3" json:"progress_window,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RenewLinkRequest) Reset() {
@@ -4663,6 +4692,13 @@ func (x *RenewLinkRequest) GetPageUrl() string {
 	return ""
 }
 
+func (x *RenewLinkRequest) GetProgressWindow() bool {
+	if x != nil {
+		return x.ProgressWindow
+	}
+	return false
+}
+
 type isRenewLinkRequest_Link interface {
 	isRenewLinkRequest_Link()
 }
@@ -4680,12 +4716,15 @@ func (*RenewLinkRequest_Url) isRenewLinkRequest_Link() {}
 func (*RenewLinkRequest_FromDownload) isRenewLinkRequest_Link() {}
 
 type RenewLinkResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Download      *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
-	Restarted     bool                   `protobuf:"varint,2,opt,name=restarted,proto3" json:"restarted,omitempty"` // nothing could be kept: it downloads again from byte 0
-	NameDiffers   bool                   `protobuf:"varint,3,opt,name=name_differs,json=nameDiffers,proto3" json:"name_differs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Download    *Download              `protobuf:"bytes,1,opt,name=download,proto3" json:"download,omitempty"`
+	Restarted   bool                   `protobuf:"varint,2,opt,name=restarted,proto3" json:"restarted,omitempty"` // nothing could be kept: it downloads again from byte 0
+	NameDiffers bool                   `protobuf:"varint,3,opt,name=name_differs,json=nameDiffers,proto3" json:"name_differs,omitempty"`
+	// downexd opens the download's progress window itself (RenewLinkRequest.progress_window): the
+	// caller must not open it too.
+	ProgressWindowOpening bool `protobuf:"varint,4,opt,name=progress_window_opening,json=progressWindowOpening,proto3" json:"progress_window_opening,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RenewLinkResponse) Reset() {
@@ -4735,6 +4774,13 @@ func (x *RenewLinkResponse) GetRestarted() bool {
 func (x *RenewLinkResponse) GetNameDiffers() bool {
 	if x != nil {
 		return x.NameDiffers
+	}
+	return false
+}
+
+func (x *RenewLinkResponse) GetProgressWindowOpening() bool {
+	if x != nil {
+		return x.ProgressWindowOpening
 	}
 	return false
 }
@@ -8128,9 +8174,10 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\rcookie_domain\x18\a \x01(\tR\fcookieDomain\x12/\n" +
 	"\x06played\x18\b \x01(\v2\x17.downex.v1.PlayedSourceR\x06played\"@\n" +
 	"\x12ProbeMediaResponse\x12*\n" +
-	"\x05media\x18\x01 \x01(\v2\x14.downex.v1.MediaInfoR\x05media\"B\n" +
+	"\x05media\x18\x01 \x01(\v2\x14.downex.v1.MediaInfoR\x05media\"z\n" +
 	"\x0fConfirmResponse\x12/\n" +
-	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\"\x11\n" +
+	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\x126\n" +
+	"\x17progress_window_opening\x18\x02 \x01(\bR\x15progressWindowOpening\"\x11\n" +
 	"\x0fPauseAllRequest\"*\n" +
 	"\x10PauseAllResponse\x12\x16\n" +
 	"\x06paused\x18\x01 \x01(\x05R\x06paused\"\x12\n" +
@@ -8150,7 +8197,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\fPauseRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\"@\n" +
 	"\rPauseResponse\x12/\n" +
-	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\"\x92\x02\n" +
+	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\"\xbb\x02\n" +
 	"\rResumeRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x18\n" +
 	"\arestart\x18\x02 \x01(\bR\arestart\x12,\n" +
@@ -8158,7 +8205,8 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\vspeed_limit\x18\x04 \x01(\x03H\x01R\n" +
 	"speedLimit\x88\x01\x01\x12<\n" +
 	"\rexisting_file\x18\x05 \x01(\x0e2\x17.downex.v1.ExistingFileR\fexistingFile\x12!\n" +
-	"\frescue_start\x18\x06 \x01(\bR\vrescueStartB\x12\n" +
+	"\frescue_start\x18\x06 \x01(\bR\vrescueStart\x12'\n" +
+	"\x0fprogress_window\x18\a \x01(\bR\x0eprogressWindowB\x12\n" +
 	"\x10_max_connectionsB\x0e\n" +
 	"\f_speed_limit\"A\n" +
 	"\x0eResumeResponse\x12/\n" +
@@ -8191,7 +8239,7 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\abase_ms\x18\x04 \x01(\x05R\x06baseMs\x120\n" +
 	"\x05since\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\"9\n" +
 	"\rWatchResponse\x12(\n" +
-	"\x06events\x18\x01 \x03(\v2\x10.downex.v1.EventR\x06events\"\x9f\x02\n" +
+	"\x06events\x18\x01 \x03(\v2\x10.downex.v1.EventR\x06events\"\xc8\x02\n" +
 	"\x10RenewLinkRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
 	"\x03url\x18\x02 \x01(\tH\x00R\x03url\x12%\n" +
@@ -8200,12 +8248,14 @@ const file_downex_v1_downex_proto_rawDesc = "" +
 	"\x11allow_name_change\x18\x05 \x01(\bR\x0fallowNameChange\x12.\n" +
 	"\x13restart_if_unproven\x18\x06 \x01(\bR\x11restartIfUnproven\x12\x14\n" +
 	"\x05start\x18\a \x01(\bR\x05start\x12\x19\n" +
-	"\bpage_url\x18\b \x01(\tR\apageUrlB\x06\n" +
-	"\x04link\"\x85\x01\n" +
+	"\bpage_url\x18\b \x01(\tR\apageUrl\x12'\n" +
+	"\x0fprogress_window\x18\t \x01(\bR\x0eprogressWindowB\x06\n" +
+	"\x04link\"\xbd\x01\n" +
 	"\x11RenewLinkResponse\x12/\n" +
 	"\bdownload\x18\x01 \x01(\v2\x13.downex.v1.DownloadR\bdownload\x12\x1c\n" +
 	"\trestarted\x18\x02 \x01(\bR\trestarted\x12!\n" +
-	"\fname_differs\x18\x03 \x01(\bR\vnameDiffers\"\xa8\x04\n" +
+	"\fname_differs\x18\x03 \x01(\bR\vnameDiffers\x126\n" +
+	"\x17progress_window_opening\x18\x04 \x01(\bR\x15progressWindowOpening\"\xa8\x04\n" +
 	"\rRescueRequest\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12+\n" +
 	"\aheaders\x18\x02 \x03(\v2\x11.downex.v1.HeaderR\aheaders\x12!\n" +

@@ -292,7 +292,9 @@ func TestRescueRPC(t *testing.T) {
 	h.resume(&downexv1.ResumeRequest{Id: d.GetId(), RescueStart: true})
 	done := h.waitCompleted(d.GetId())
 	checkFile(t, done, 501, rescueSize)
-	waitLaunches(t, windows, d.GetId())
+	// Its progress window as it starts, then the download complete dialog in it: the run
+	// that downexd opened the window for is windowed (docs/DESKTOP-SPEC.md §8).
+	waitLaunches(t, windows, d.GetId(), d.GetId())
 	if done.GetRescuedBytes() != kept {
 		t.Fatalf("completed rescued %d", done.GetRescuedBytes())
 	}

@@ -81,19 +81,20 @@ type Config struct {
 	OpenConfirmation func(id int64) error
 	// OpenProgress opens the progress window of download id (docs/DESKTOP-SPEC.md §7;
 	// downexd starts "downex-ui --progress <id>" when it is installed next to it). It is
-	// called, outside any lock, for a browser hand-off that starts at once (no
-	// confirmation asked) while show_progress_window is on, and once when a download
-	// marked with completion_dialog completes or fails while show_complete_dialog is on
-	// (the window then shows the download complete dialog, §8). nil: there is no window.
+	// called, outside any lock, while show_progress_window is on, for a download that
+	// starts as the user asked (a hand-off that starts at once, a confirmation's Start with
+	// progress_window, a rescue's or a renewal's first start), and once when a windowed run
+	// completes or fails while show_complete_dialog is on (the window then shows the
+	// download complete dialog, §8). nil: there is no window, and no run is windowed.
 	OpenProgress func(id int64) error
-	// ShowBrowserAdd shows the window of a download the user just started in the browser
+	// ShowBrowserAdd shows the window of a download the user started in the browser
 	// (source browser) above the browser, without stealing the keyboard focus when the
 	// system does not grant it (docs/DESKTOP-SPEC.md §7 "Above the browser"): w is the
-	// progress window, the confirmation, or the main window when neither opens
-	// (show_progress_window off, or the add waits in its queue). downexd starts the UI
-	// with "--raise". It replaces OpenProgress and OpenConfirmation for such a download;
-	// nil: they are used as for other sources, and nothing shows the main window. Never
-	// called for the download complete dialog (§8) or a clipboard add.
+	// progress window as the download starts (AddProgressStarted), the confirmation, or the
+	// progress window with the outcome of a windowed run (AddProgress, §8). downexd starts
+	// the UI with "--raise". It replaces OpenProgress and OpenConfirmation for such a
+	// download; nil: they are used as for other sources. Nothing ever shows the main window,
+	// and a clipboard add keeps the plain hooks.
 	ShowBrowserAdd func(id int64, w AddWindow) error
 	// Now reads the clock that times the runs of downloads (started_at and active_ms);
 	// nil selects time.Now. Tests pass a fake clock.
@@ -266,10 +267,16 @@ type run struct {
 	// Guarded by Manager.mu.
 	intent     intent
 	finalizing bool
-	// windowed: a progress window shows this run (downexd opened it, the confirming window
-	// does, or it marked the download meanwhile). Its outcome then shows in that window,
-	// brought above the browser for a browser download, and the tray stays quiet about it.
+	// windowed: a progress window shows this run (downexd opened it as the run started, a
+	// window of the user's marked it, or it was open on the download before the run
+	// started: entry.next). Only such a run gets the download complete dialog: its outcome
+	// shows in that window, brought above the browser for a browser download, and the tray
+	// stays quiet about it (docs/DESKTOP-SPEC.md §8). shown: a window of the user's marked
+	// it (a failed launch of downexd's keeps the mark then); marked is the completion_dialog
+	// that markWindowedLocked set for it (unmarkWindowed takes back only that one).
 	windowed bool
+	shown    bool
+	marked   *bool
 	stopped  time.Time // when the run stopped (set with finalizing): the end of its active time
 }
 
@@ -315,6 +322,9 @@ type entry struct {
 	// start is ResumeRequest.rescue_start (rescue.go), until RescueStartWindow has passed.
 	// In memory only (zero = none).
 	rescueWait time.Time
+	// next: a progress window is open on the stopped (or queued) download, so its next run
+	// is windowed as it starts (startLocked; browseradd.go). In memory only.
+	next nextWindow
 }
 
 func newEntry(rec model.Download) *entry {
@@ -564,6 +574,10 @@ func (m *Manager) startLocked(e *entry, now time.Time) bool {
 	}
 	r.lim.setMeter(&m.polite.rx)
 	e.run, e.recheck, e.deferUntil, e.early = r, false, time.Time{}, nil
+	if e.next != nextNone { // a progress window waits for this run (browseradd.go)
+		m.markWindowedLocked(e, e.next == nextShown)
+		e.next = nextNone
+	}
 	m.active[e.id] = e
 	m.running++
 	m.runs++
@@ -814,11 +828,13 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 		}
 	}
 	// The download complete dialog (docs/DESKTOP-SPEC.md §8): once per completion or
-	// failure of a download whose progress window the user opened.
-	dialog := ended && rec.CompletionDialog && m.settings.ShowCompleteDialog && m.cfg.OpenProgress != nil && !m.closed
-	// A run that a progress window shows (r.windowed) has its outcome there: the window comes
-	// above the browser for a browser download and the tray shows no notification for it.
-	inWindow := dialog && r.windowed
+	// failure of a run that a progress window showed or was asked for (r.windowed; the
+	// stored completion_dialog of an earlier run does not count: a queue, scheduler or CLI
+	// start that showed no window gets the tray notification only). Its outcome shows in
+	// that window, above the browser for a browser download, and the tray stays quiet
+	// about it.
+	dialog := ended && r.windowed && m.settings.ShowCompleteDialog && m.cfg.OpenProgress != nil && !m.closed
+	inWindow := dialog
 	var outcome Notice // the notification left to the window (sent after all if it cannot open)
 	if dialog {
 		m.wg.Add(1)
@@ -859,13 +875,9 @@ func (m *Manager) finish(e *entry, r *run, runErr error, skipped bool) {
 		src := rec.Source
 		go func() {
 			defer m.wg.Done()
-			open := func() error { return m.cfg.OpenProgress(int64(e.id)) }
-			if inWindow {
-				open = func() error { return m.openProgressFor(int64(e.id), src) }
-			}
-			if err := open(); err != nil {
+			if err := m.openProgressFor(int64(e.id), src, false); err != nil {
 				m.log.Warn("cannot open the download complete dialog", "download", int64(e.id), "err", err)
-				if inWindow && outcome.Download != nil {
+				if outcome.Download != nil {
 					m.notify(outcome) // the outcome is not lost: the tray tells it
 				}
 			}

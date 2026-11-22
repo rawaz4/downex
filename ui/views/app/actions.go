@@ -305,8 +305,12 @@ func (m *Main) resume(ids []int64) {
 	}
 	if len(plain) > 0 {
 		single := len(ids) == 1
+		// The single resume opens the download's progress window when it starts now
+		// (showProgressIfStarted): downexd marks that run at once (DESKTOP-SPEC §8).
+		s, _ := m.settings()
+		opts := state.ResumeOptions{ProgressWindow: single && len(plain) == 1 && s.GetShowProgressWindow()}
 		m.do(func(ctx contextT) {
-			out := ds.Resume(ctx, plain, state.ResumeOptions{})
+			out := ds.Resume(ctx, plain, opts)
 			m.App.UI(func() {
 				m.report(out, "resume")
 				if single && len(out) == 1 && out[0].OK() {

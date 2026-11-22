@@ -39,6 +39,9 @@ double dxWindowScale(void *win);
 void dxWindowState(void *win, bool *zoomed, bool *mini);
 void dxWindowCommand(void *win, int cmd); // 1 minimise, 2 zoom, 3 unzoom, 4 performClose
 void dxWindowSetColors(void *win, double r, double g, double b, double a, bool dark);
+// dxWindowSetFirstMouse sets whether the content view takes the click that brings the
+// window forward while another app is active (acceptsFirstMouse:), as well as the window.
+void dxWindowSetFirstMouse(void *win, bool on);
 // dxWindowPresent shows img (y-down pixels of the whole content area) as the content.
 void dxWindowPresent(void *win, CGImageRef img, double scale);
 // dxWindowRequestTick asks for one goWindowTick at the next display refresh.

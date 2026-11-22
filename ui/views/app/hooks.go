@@ -38,10 +38,12 @@ func (m *Main) AddMedia(ctx contextT, req *downexv1.AddMediaRequest) (*downexv1.
 }
 
 // ConfirmDownload is the confirmation dialog's Start download / Download later: a download
-// started gets its progress window when that is on and it starts now.
+// started gets its progress window when that is on and it starts now. downexd opens that
+// window itself when it says so (progress_window_opening, asked for with
+// ConfirmRequest.progress_window); this window opens it only for a downexd that does not.
 func (m *Main) ConfirmDownload(ctx contextT, req *downexv1.ConfirmRequest) error {
-	d, err := m.App.Main.Downloads.Confirm(ctx, req)
-	if err == nil && req.GetStart() {
+	d, opening, err := m.App.Main.Downloads.Confirm(ctx, req)
+	if err == nil && req.GetStart() && !opening {
 		m.App.UI(func() { m.progressIfStarts(d) })
 	}
 	return err

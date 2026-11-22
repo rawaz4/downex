@@ -10,10 +10,12 @@ import (
 	"downex/internal/testserver"
 )
 
-// addWindows records Config.ShowBrowserAdd's calls.
+// addWindows records Config.ShowBrowserAdd's calls; a window kind in fail is refused with
+// its error (a launch that fails).
 type addWindows struct {
 	mu    sync.Mutex
 	shown []shownAdd
+	fail  map[AddWindow]error
 }
 
 type shownAdd struct {
@@ -25,7 +27,7 @@ func (a *addWindows) show(id int64, w AddWindow) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.shown = append(a.shown, shownAdd{id, w})
-	return nil
+	return a.fail[w]
 }
 
 func (a *addWindows) list() []shownAdd {
@@ -35,10 +37,11 @@ func (a *addWindows) list() []shownAdd {
 }
 
 // TestBrowserAddShowsItsWindowAboveTheBrowser: a download the user starts in the browser
-// shows its window through ShowBrowserAdd (downexd adds "--raise"): its progress window,
-// or its standalone Confirm download window; when neither opens, nothing shows (never the
-// main window). A clipboard add and the §8 complete dialog keep the plain hooks and never
-// come above the app in use.
+// shows its window through ShowBrowserAdd (downexd adds "--raise"): its progress window as
+// it starts ("--started"), or its standalone Confirm download window; when neither opens,
+// nothing shows (never the main window). A clipboard add keeps the plain hooks and never
+// comes above the app in use. The §8 complete dialog of a run whose window was open on the
+// stopped download comes above the browser too: the outcome shows in that window.
 func TestBrowserAddShowsItsWindowAboveTheBrowser(t *testing.T) {
 	ts := serve(t, testserver.Options{Size: 4 << 20, Seed: 141})
 	slow := int64(32 << 10)
@@ -51,8 +54,8 @@ func TestBrowserAddShowsItsWindowAboveTheBrowser(t *testing.T) {
 		d := h.add(&downexv1.AddRequest{Url: ts.URL + "/b.bin", Source: browser, SpeedLimit: slow})
 		c := h.add(&downexv1.AddRequest{Url: ts.URL + "/c.bin", Source: clip, SpeedLimit: slow})
 		waitUntil(t, "both windows", func() bool { return len(raised.list()) > 0 && len(windows.launched()) > 0 })
-		if got := raised.list(); !slices.Equal(got, []shownAdd{{d.GetId(), AddProgress}}) {
-			t.Fatalf("raised %v, want the browser add's progress window", got)
+		if got := raised.list(); !slices.Equal(got, []shownAdd{{d.GetId(), AddProgressStarted}}) {
+			t.Fatalf("raised %v, want the browser add's progress window as it starts", got)
 		}
 		if got := windows.launched(); !slices.Equal(got, []int64{c.GetId()}) {
 			t.Fatalf("plain progress windows %v, want the clipboard add's", got)
@@ -97,6 +100,27 @@ func TestBrowserAddShowsItsWindowAboveTheBrowser(t *testing.T) {
 		h := newHarness(t, harnessOptions{openProgress: windows.open, showBrowserAdd: raised.show,
 			settings: func(s *downexv1.Settings) { s.ConfirmBrowserDownloads = false }})
 		d := h.add(&downexv1.AddRequest{Url: small.URL + "/a.bin", Source: browser, StartPaused: true})
+		if _, err := h.setOptions(&downexv1.SetDownloadOptionsRequest{Id: d.GetId(), CompletionDialog: ptr(true)}); err != nil {
+			t.Fatal(err)
+		}
+		h.resume(&downexv1.ResumeRequest{Id: d.GetId()})
+		h.waitCompleted(d.GetId())
+		waitUntil(t, "the download complete dialog", func() bool { return len(raised.list()) > 0 })
+		time.Sleep(150 * time.Millisecond) // a duplicate would be on its way by now
+		if got := raised.list(); !slices.Equal(got, []shownAdd{{d.GetId(), AddProgress}}) {
+			t.Fatalf("raised %v, want the outcome in the progress window of %d", got, d.GetId())
+		}
+		if got := windows.launched(); len(got) != 0 {
+			t.Fatalf("plain windows %v for a browser download's outcome", got)
+		}
+	})
+
+	t.Run("clipboard complete dialog", func(t *testing.T) {
+		small := serve(t, testserver.Options{Size: 4 << 10, Seed: 143})
+		windows, raised := &launcher{}, &addWindows{}
+		h := newHarness(t, harnessOptions{openProgress: windows.open, showBrowserAdd: raised.show,
+			settings: func(s *downexv1.Settings) { s.ConfirmBrowserDownloads = false }})
+		d := h.add(&downexv1.AddRequest{Url: small.URL + "/c.bin", Source: clip, StartPaused: true})
 		if _, err := h.setOptions(&downexv1.SetDownloadOptionsRequest{Id: d.GetId(), CompletionDialog: ptr(true)}); err != nil {
 			t.Fatal(err)
 		}

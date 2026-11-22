@@ -75,7 +75,7 @@ func newUpdatesPage(d *Dialog) *updatesPage {
 	})
 	p.urlField = newField("Update address", urlIn, urlIn, views.NewHint(urlHint))
 	p.advCard = sCard(sStack(p.urlField))
-	p.disclosure = newDisclosure("Advanced", func() {
+	p.disclosure = newDisclosure("Advanced", fontLeadTitle, func() {
 		p.advancedOpen = !p.advancedShown()
 		p.sync()
 	})
@@ -308,7 +308,9 @@ func (p *updatesPage) sync() {
 }
 
 // disclosure is Updates' .disclosure: a full-width button with a chevron (turned a quarter when
-// open), the label (650 var(--type-lead) display) and, while closed, a summary of what it hides.
+// open), the label and, while closed, a summary of what it hides. Updates' label is 650
+// var(--type-lead) display (fontLeadTitle); one nested in a card takes a smaller font, below
+// the card's own title.
 type disclosure struct {
 	kit.Pressable
 	chev    *chevron
@@ -317,7 +319,7 @@ type disclosure struct {
 	open    bool
 }
 
-func newDisclosure(label string, onPress func()) *disclosure {
+func newDisclosure(label string, font kit.Font, onPress func()) *disclosure {
 	b := &disclosure{}
 	b.OnPress = onPress
 	b.Focus = kit.FocusTab
@@ -326,7 +328,7 @@ func newDisclosure(label string, onPress func()) *disclosure {
 	b.Style = kit.Style{Display: kit.DisplayFlex, AlignItems: kit.AlignCenter, ColumnGap: kit.Px(6), Width: kit.Pct(100), MinHeight: kit.Px(32),
 		Padding: kit.Edges{Start: kit.Px(4), End: kit.Px(8)}, Radius: kit.CornersAll(kit.Px(8))}
 	b.chev = newChevron(14, views.InkMuted)
-	b.label = para(label, fontLeadTitle, views.InkInk)
+	b.label = para(label, font, views.InkInk)
 	b.label.Style.Flex = kit.FlexNone
 	b.summary = views.NewLine("", fontHint, views.InkFaint)
 	b.summary.Style.Margin = kit.Edges{Start: kit.Px(6)}

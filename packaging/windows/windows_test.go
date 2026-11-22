@@ -74,7 +74,7 @@ func TestReleasePathAvoidsWailsTree(t *testing.T) {
 
 // TestSetupScript: what Setup's script promises the rest of Downex, checked in its text.
 func TestSetupScript(t *testing.T) {
-	src := string(repoFile(t, "installer", "downex.nsi"))
+	src := strings.ReplaceAll(string(repoFile(t, "installer", "downex.nsi")), "\r\n", "\n") // CRLF (.gitattributes)
 	uninstall := strings.Index(src, `Section "Uninstall"`)
 	if uninstall < 0 {
 		t.Fatal("downex.nsi has no Uninstall section")
@@ -93,10 +93,25 @@ func TestSetupScript(t *testing.T) {
 		"!insertmacro UnselectSection ${SecDesktop}",
 		// ARM64 needs Windows 11 for the x64 window.
 		"${AtLeastWin11}",
+		// The installation that the Uninstall entry names is removed only when it is in
+		// another folder, also when the update's /D= spells the same folder another way.
+		`${If} ${FileExists} "$PrevDir\.downex-setup-same"`,
+		// A failed upgrade starts the earlier Downex again also when the Uninstall entry
+		// does not name $INSTDIR (the in-app update's /D=) and nothing was set aside yet.
+		`${If} ${FileExists} "$INSTDIR\downexd.exe"` + "\n    StrCpy $Upgrade 1",
+		"${AndIf} $Upgrade != 1",
 	} {
 		if !strings.Contains(setup, want) {
 			t.Errorf("Setup's part of downex.nsi lacks %s", want)
 		}
+	}
+	// A marker an earlier Setup left in $PrevDir never passes another folder off as $INSTDIR.
+	if stale, mark := strings.Index(setup, `Delete "$PrevDir\.downex-setup-same"`), strings.Index(setup, `FileOpen $0 "$INSTDIR\.downex-setup-same" w`); stale < 0 || mark < 0 || stale > mark {
+		t.Error(`Setup does not delete "$PrevDir\.downex-setup-same" before it writes its own marker`)
+	}
+	// The finish page's text takes 7 lines: the large text box shows them all.
+	if large, page := strings.Index(setup, "!define MUI_FINISHPAGE_TEXT_LARGE"), strings.Index(setup, "!insertmacro MUI_PAGE_FINISH"); large < 0 || large > page {
+		t.Error("the finish page's text is cut off: !define MUI_FINISHPAGE_TEXT_LARGE before MUI_PAGE_FINISH")
 	}
 	// The extension folders are overwritten in place, never removed first.
 	if regexp.MustCompile(`(?i)RMDir\s+/r\s+"\$INSTDIR\\extension`).MatchString(setup) {
@@ -109,13 +124,19 @@ func TestSetupScript(t *testing.T) {
 	if !strings.Contains(src[uninstall:], `Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"`) || !strings.Contains(src[uninstall:], `!insertmacro DELETE_ASIDE_COPIES "$INSTDIR"`) {
 		t.Error("the uninstaller leaves THIRD-PARTY-NOTICES.txt or set-aside programs behind")
 	}
+	// Setup's markers, should one be left, would keep the folder from going.
+	for _, marker := range []string{".downex-setup-same", ".downex-setup-test"} {
+		if !strings.Contains(src[uninstall:], `Delete "$INSTDIR\`+marker+`"`) {
+			t.Errorf("the uninstaller leaves %s behind", marker)
+		}
+	}
 	// Only the programs' own aside copies go: the folder may hold other people's *.old files.
 	if regexp.MustCompile(`(?i)Delete\s+"[^"]*\\\*\.old"`).MatchString(src) {
 		t.Error(`downex.nsi deletes "*.old": only the four programs' aside copies may go`)
 	}
 	setupGo := string(repoFile(t, "internal", "update", "setup.go"))
-	if !strings.Contains(setupGo, `StartDetached(s.path, "/S", "/RELAUNCH")`) {
-		t.Error(`internal/update/setup.go does not start Setup with /S /RELAUNCH`)
+	if !strings.Contains(setupGo, "\" /S /RELAUNCH /D=` + dir") || !strings.Contains(setupGo, `StartDetachedCommandLine(s.path, s.cmdLine)`) {
+		t.Error(`internal/update/setup.go does not start Setup with /S /RELAUNCH /D=<the running folder>, unquoted`)
 	}
 }
 

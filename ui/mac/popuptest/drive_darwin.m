@@ -306,6 +306,13 @@ void dptToggleFullScreen(void *wp) { [(__bridge NSWindow *)wp toggleFullScreen:n
 
 bool dptFullScreen(void *wp) { return (((__bridge NSWindow *)wp).styleMask & NSWindowStyleMaskFullScreen) != 0; }
 
+bool dptAcceptsFirstMouse(void *wp) {
+	NSWindow *w = (__bridge NSWindow *)wp;
+	NSEvent *e = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:NSMakePoint(1, 1)
+		modifierFlags:0 timestamp:0 windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+	return [w.contentView acceptsFirstMouse:e];
+}
+
 void dptScreenContentMax(double *w, double *h) {
 	NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
 		NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;

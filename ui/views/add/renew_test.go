@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"testing"
 
 	"connectrpc.com/connect"
 
 	downexv1 "downex/internal/rpc/downex/v1"
+	"downex/ui/views"
 	"downex/ui/views/viewstest"
 )
 
@@ -49,7 +52,8 @@ func TestConfirmOfferCard(t *testing.T) {
 	}
 	r.h.Click(&r.c.OfferButton.Element)
 	r.h.Settle()
-	if sent == nil || sent.GetId() != 9 || sent.GetFromDownload() != 4 || !sent.GetStart() || !sent.GetAllowNameChange() {
+	if sent == nil || sent.GetId() != 9 || sent.GetFromDownload() != 4 || !sent.GetStart() || !sent.GetAllowNameChange() ||
+		!sent.GetProgressWindow() {
 		t.Fatalf("request %v", sent)
 	}
 	if !r.c.gone {
@@ -74,6 +78,73 @@ func TestConfirmOfferCard(t *testing.T) {
 
 	if plain := setupConfirm(t, confirmSetup{d: fileDownload(nil)}); plain.c.Offer != nil {
 		t.Error("a download without an offer shows a card")
+	}
+}
+
+// windowsOpened records the progress windows a dialog asks the platform for.
+type windowsOpened struct {
+	views.Platform
+	mu            sync.Mutex
+	plain, raised []int64
+}
+
+func (w *windowsOpened) OpenProgressWindow(id int64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.plain = append(w.plain, id)
+	return nil
+}
+
+func (w *windowsOpened) OpenProgressWindowRaised(id int64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.raised = append(w.raised, id)
+	return nil
+}
+
+// TestContinueThatDownloadOpensItsProgressWindow: "Continue that download" asks downexd for
+// the continued download's progress window (progress_window); the dialog opens it only when
+// downexd says it does not (an older downexd), above the browser from the standalone Confirm
+// download window, and never for one that does not start now.
+func TestContinueThatDownloadOpensItsProgressWindow(t *testing.T) {
+	queued := &downexv1.Download{Id: 9, State: downexv1.DownloadState_DOWNLOAD_STATE_QUEUED}
+	running := &downexv1.Download{Id: 9, State: downexv1.DownloadState_DOWNLOAD_STATE_DOWNLOADING}
+	behind := &downexv1.Download{Id: 9, State: downexv1.DownloadState_DOWNLOAD_STATE_QUEUED, QueuePosition: 1}
+	for _, c := range []struct {
+		name          string
+		window        bool
+		answer        *downexv1.RenewLinkResponse
+		plain, raised []int64
+	}{
+		{"downexd opens it", false, &downexv1.RenewLinkResponse{Download: running, ProgressWindowOpening: true}, nil, nil},
+		{"older downexd", false, &downexv1.RenewLinkResponse{Download: queued}, []int64{9}, nil},
+		{"older downexd, Confirm download window", true, &downexv1.RenewLinkResponse{Download: running}, nil, []int64{9}},
+		{"waits in its queue", false, &downexv1.RenewLinkResponse{Download: behind}, nil, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := offered(false)
+			d.Source = downexv1.AddSource_ADD_SOURCE_BROWSER
+			r := setupConfirm(t, confirmSetup{d: d})
+			r.c.o.Window = c.window
+			w := &windowsOpened{Platform: r.h.App.Platform}
+			r.h.App.Platform = w
+			r.c.o.Renew = func(_ context.Context, req *downexv1.RenewLinkRequest) (*downexv1.RenewLinkResponse, error) {
+				if !req.GetProgressWindow() {
+					t.Errorf("progress_window unset: %v", req)
+				}
+				return c.answer, nil
+			}
+			r.h.Click(&r.c.OfferButton.Element)
+			r.h.Settle()
+			if !r.c.gone {
+				t.Fatal("the dialog stayed")
+			}
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			if !slices.Equal(w.plain, c.plain) || !slices.Equal(w.raised, c.raised) {
+				t.Errorf("opened %v, raised %v; want %v, %v", w.plain, w.raised, c.plain, c.raised)
+			}
+		})
 	}
 }
 

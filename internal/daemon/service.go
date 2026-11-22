@@ -115,11 +115,11 @@ func (s downloadService) Watch(ctx context.Context, req *connect.Request[downexv
 }
 
 func (s downloadService) Confirm(ctx context.Context, req *connect.Request[downexv1.ConfirmRequest]) (*connect.Response[downexv1.ConfirmResponse], error) {
-	d, err := s.m.Confirm(ctx, req.Msg)
+	resp, err := s.m.Confirm(ctx, req.Msg)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&downexv1.ConfirmResponse{Download: d}), nil
+	return connect.NewResponse(resp), nil
 }
 
 func (s downloadService) PauseAll(ctx context.Context, _ *connect.Request[downexv1.PauseAllRequest]) (*connect.Response[downexv1.PauseAllResponse], error) {

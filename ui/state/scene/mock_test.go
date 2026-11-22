@@ -523,6 +523,33 @@ func TestConfirmsStartLaterFolderAndName(t *testing.T) {
 	}
 }
 
+// As downexd, the mock opens the progress window of a Start with progress_window itself
+// while show_progress_window is on, and says so; an older downexd (OldDaemon) does not.
+func TestConfirmOpensTheProgressWindowOfAStart(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		m := mk(t, func(o *Options) {
+			o.OldDaemon = old
+			o.Settings = func(s *downexv1.Settings) { s.ShowProgressWindow = true }
+		})
+		d, _ := m.BrowserHandoff(nil)
+		later, _ := m.BrowserHandoff(nil)
+		c, err := m.Confirm(ctx, &downexv1.ConfirmRequest{Id: d.GetId(), Start: true, ProgressWindow: true})
+		if err != nil || c.GetProgressWindowOpening() == old {
+			t.Fatal(old, c, err)
+		}
+		if c, _ := m.Confirm(ctx, &downexv1.ConfirmRequest{Id: later.GetId(), ProgressWindow: true}); c.GetProgressWindowOpening() {
+			t.Fatal("download later opened a progress window")
+		}
+		want := []int64{d.GetId()}
+		if old {
+			want = nil
+		}
+		if got := m.Window().DaemonOpened; !slices.Equal(got, want) {
+			t.Fatalf("old %v: downexd opened %v, want %v", old, got, want)
+		}
+	}
+}
+
 func TestStartsBrowserDownloadsWhenConfirmationIsOff(t *testing.T) {
 	m := mk(t, withSettings(func(s *downexv1.Settings) { s.ConfirmBrowserDownloads = false }))
 	if d, _ := m.BrowserHandoff(nil); d.GetState() != sQueued {

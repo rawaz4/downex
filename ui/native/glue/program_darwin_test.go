@@ -168,6 +168,11 @@ func hostCommand(f []string, gw *Window, w *mac.Window, g *Glue, onUI func(func(
 		var theme host.ThemeChoice
 		onUI(func() { theme = g.theme.Choice() })
 		return fmt.Sprintf("active=%v hidden=%v key=%v visible=%v mini=%v theme=%s", active, hidden, key, visible, mini, theme)
+	case "raise": // mac.RaiseWindow's state of the window
+		var following, space bool
+		onUI(func() { following, space = w.RaiseState() })
+		_, visible, mini := w.FrontState()
+		return fmt.Sprintf("space=%v visible=%v mini=%v following=%v", space, visible, mini, following)
 	case "minimize":
 		onUI(func() { w.Command(kit.WindowMinimize) })
 		return "ok"

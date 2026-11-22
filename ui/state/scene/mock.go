@@ -90,6 +90,9 @@ type Options struct {
 	// OnOpenProgressWindow and OnCloseWindow are called by those window requests.
 	OnOpenProgressWindow func(id int64)
 	OnCloseWindow        func()
+	// OldDaemon: the simulated downexd opens no progress window itself after a confirmed
+	// Start with progress_window (as downexd before 1.1.2): the confirming window opens it.
+	OldDaemon bool
 }
 
 // Kind is the list a Mock holds at start.
@@ -131,6 +134,11 @@ type WindowState struct {
 	Folders   []string
 	// Registered counts the page's registrations with the browsers.
 	Registered int
+	// Raised are the progress windows asked for above the browser (OpenProgressWindowRaised),
+	// also in Opened; DaemonOpened those the simulated downexd opened itself after a
+	// confirmed Start (ConfirmResponse.progress_window_opening).
+	Raised       []int64
+	DaemonOpened []int64
 }
 
 type slot struct {
@@ -788,6 +796,8 @@ func (m *Mock) Window() WindowState {
 	w := m.window
 	w.Sizes = slices.Clone(w.Sizes)
 	w.Opened = slices.Clone(w.Opened)
+	w.Raised = slices.Clone(w.Raised)
+	w.DaemonOpened = slices.Clone(w.DaemonOpened)
 	w.Themes = slices.Clone(w.Themes)
 	w.Folders = slices.Clone(w.Folders)
 	return w

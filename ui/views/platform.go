@@ -85,6 +85,11 @@ func (p *HostPlatform) RegisterBrowsers(ctx context.Context) error {
 // OpenProgressWindow is Platform's.
 func (p *HostPlatform) OpenProgressWindow(id int64) error { return p.Session.OpenProgressWindow(id) }
 
+// OpenProgressWindowRaised is Platform's.
+func (p *HostPlatform) OpenProgressWindowRaised(id int64) error {
+	return p.Session.OpenProgressWindowRaised(id)
+}
+
 // PickFolder is Platform's.
 func (p *HostPlatform) PickFolder(ctx context.Context, initial string) (string, error) {
 	if p.Pickers.PickFolder == nil {

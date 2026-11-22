@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // macOS tools (absolute paths: never looked up in $PATH).
@@ -91,6 +92,69 @@ func (m *macInstaller) target(ctx context.Context) (macTarget, error) {
 func allowUnsigned(getenv func(string) string) bool {
 	ok, err := strconv.ParseBool(strings.TrimSpace(getenv(AllowUnsignedEnv)))
 	return err == nil && ok
+}
+
+// stagingPattern is the name of a folder that Stage (os.MkdirTemp with ".downex-update-")
+// or Commit (the old bundle, <stage>.old) makes next to Downex.app.
+var stagingPattern = regexp.MustCompile(`^\.downex-update-[0-9]+(\.old)?$`)
+
+// staleStaging is how old such a folder must be before FindLeftovers names it: an install
+// of another user of the same folder may be staging one right now.
+const staleStaging = 30 * time.Minute
+
+// FindLeftovers lists what an install that was cut short left next to the running
+// Downex.app (the daemon was ended or the Mac went off between Stage and Commit, or Commit
+// could not remove everything): staging folders with a whole copy of a Downex.app, old or
+// new, which would otherwise stay in Applications for good. Only this installer's own folder
+// names count, and only once they are staleStaging old. It reads one folder and removes
+// nothing (RemoveLeftovers does).
+//
+// Not found here: the disk image that a daemon ended during Stage left mounted (hdiutil) at
+// a downex-update-* folder of $TMPDIR. It holds no copy in Applications and goes at the next
+// restart (docs/M6-SPEC.md §4).
+func (m *macInstaller) FindLeftovers() []string {
+	l, err := m.sys.Layout()
+	if err != nil || l.Bundle == "" || l.Translocated() {
+		return nil
+	}
+	parent := filepath.Dir(l.Bundle)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || !stagingPattern.MatchString(e.Name()) {
+			continue
+		}
+		p := filepath.Join(parent, e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.IsDir() || time.Since(fi.ModTime()) < staleStaging {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// RemoveLeftovers removes folders that FindLeftovers listed; a failure is logged.
+func (m *macInstaller) RemoveLeftovers(paths []string) {
+	for _, p := range paths {
+		if err := os.RemoveAll(p); err != nil {
+			m.sys.Logger.Warn("cannot remove a leftover of an earlier update", "path", p, "err", err)
+			continue
+		}
+		m.sys.Logger.Info("removed a leftover of an earlier update", "path", p)
+	}
+}
+
+// Leftovers is an Installer that can remove what an install cut short left behind
+// (macInstaller). FindLeftovers is quick, so that the daemon can call it while it holds off
+// installs; RemoveLeftovers, which removes whole app bundles, runs after: an install that
+// starts meanwhile stages under a new name and never uses a stale folder.
+type Leftovers interface {
+	FindLeftovers() []string
+	RemoveLeftovers(paths []string)
 }
 
 func (m *macInstaller) Stage(ctx context.Context, dmg string, want Version) (_ Staged, err error) {

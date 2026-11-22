@@ -153,7 +153,14 @@ All features work on Windows and macOS (Linux: compile + logic, platform hooks m
   compared rather than the thumbprint. A signer whose subject cannot be read is refused. An unsigned
   downexd, today's releases and development builds, leaves the Setup to the signed manifest, as
   before; amendment 2026-11-20), then Windows: run
-  `Downex-Setup-<v>.exe /S` detached and shut down gracefully; macOS: mount the DMG, verify the new
+  `Downex-Setup-<v>.exe /S /RELAUNCH /D=<the running installation's folder>` detached (the whole
+  command line as one string: NSIS reads `/D=` only last and unquoted, spaces included) and shut down
+  gracefully. Setup replaces that folder in place, opens the window again when it closed it
+  (`/RELAUNCH`), and removes an installation that its Uninstall entry names in another folder with
+  that one's uninstaller, so one installation remains (DESKTOP-SPEC §6). Amendment 2026-11-22 (1.1.2):
+  before, the command line was `/S /RELAUNCH` and Setup installed into the folder its Uninstall entry
+  named, or the default one without it. The daemon that starts Setup decides, so an update started
+  by 1.1.1 still runs without `/D=`. macOS: mount the DMG, verify the new
   app's code signature (`codesign --verify --deep --strict`) and identifier, and then for a running
   build signed with a Developer ID its team; for an ad-hoc signed running build (the releases) the
   signed manifest is the trust anchor instead, and the new bundle's `CFBundleShortVersionString` must
@@ -161,4 +168,16 @@ All features work on Windows and macOS (Linux: compile + logic, platform hooks m
   for tests). The bundle is copied with `ditto --noqtn` and `xattr -dr com.apple.quarantine` (a failure
   is only logged), replaced in place and relaunched; the main window reopens Downex.app after it
   exits. Linux: not supported (package managers).
+- Leftovers (amendment 2026-11-22): downexd removes update packages (`Downex-Setup-*.exe`,
+  `Downex-*.dmg`) and partial downloads (`*.part`) from its `updates` folders (also the roaming one
+  an older daemon used) at its start and again before each automatic check, while no install runs
+  or has committed: at the start, the Setup that installed and started this daemon usually still
+  runs, and Windows keeps a running program's file. On macOS it also removes the staging folders an
+  interrupted install left next to Downex.app (`.downex-update-<n>` and `.downex-update-<n>.old`,
+  each a whole Downex.app) once they are 30 minutes old (another user's install may be staging
+  one); it lists them while installs are held off and removes them after, so that an
+  `InstallUpdate` never waits for that. **Residual:** a daemon ended during Stage leaves the disk
+  image attached (`hdiutil`, `-nobrowse`: not shown in the Finder) at a `downex-update-*` folder of
+  `$TMPDIR`; nothing detaches it before the Mac restarts or the user logs out (it holds no copy in
+  Applications).
 - `scripts/release-sign.go` (go run): generate a key pair, sign a manifest; private key never in the repo.

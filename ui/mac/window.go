@@ -29,6 +29,11 @@ type WindowOptions struct {
 	// NoActivate shows the window without making the application active (a progress
 	// window the daemon opens by itself).
 	NoActivate bool
+	// AcceptsFirstMouse lets the click that brings the window forward while another app is
+	// active also press what it lands on (the Confirm download and progress windows, which
+	// open over the browser the user is in); otherwise, as for the main window, that click
+	// only brings the window forward.
+	AcceptsFirstMouse bool
 	// [program]
 	// Zoomed opens the window zoomed (the main window left maximised); Size is the size it
 	// restores to.
@@ -92,6 +97,9 @@ func (a *App) NewWindow(root kit.Root, o WindowOptions) (*Window, error) {
 	}
 	if o.MinSize.W > 0 || o.MinSize.H > 0 {
 		C.dxWindowSetMinSize(w.ns, C.double(o.MinSize.W), C.double(o.MinSize.H))
+	}
+	if o.AcceptsFirstMouse {
+		C.dxWindowSetFirstMouse(w.ns, C.bool(true))
 	}
 	w.readSize()
 	w.limitSize()

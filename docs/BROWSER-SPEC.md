@@ -25,12 +25,30 @@ and have **not yet run in a real browser**.
     development builds alike and refuse none. When a store listing replaces the unpacked copy,
     its ID goes on a line of its own in `EXTENSION_ID.txt`, and the development line can then be
     dropped from the release (the installer would ship the store link instead of the folder).
+  - **Store first (amendment 2026-11-22).** The Chrome Web Store listing
+    (`https://chromewebstore.google.com/detail/llnofffhagcfejjcephcilcbndnhnbeg`, ID
+    `llnofffhagcfejjcephcilcbndnhnbeg`, the store build: no YouTube button) and the Firefox
+    Add-ons listing (`https://addons.mozilla.org/firefox/addon/downex/`, with the YouTube button)
+    are public. Settings → Integration, `EXTENSION.txt`, the README and USAGE explain those
+    first: **Add to Chrome** (also Edge, Brave and Chromium) and **Add to Firefox** open the
+    listings in the system's browser, and **Want the YouTube button in Chrome?** opens
+    `https://downex.app/chrome-youtube` ("The YouTube button in Chrome"). The
+    unpacked `chrome-mv3` copy (ID `dlgpbdafcmciojddbbjikgeeefipejcn`, with the YouTube button)
+    keeps shipping and stays accepted; its Load unpacked steps, Copy path and Open folder are
+    folded under **Advanced: install from the folder**. One copy per browser: whoever loads the
+    unpacked copy removes the store copy first, or both take over downloads (in Firefox the
+    Add-ons copy, which has the YouTube button, is the one to keep). Store copies update
+    themselves; the unpacked copy needs Reload after each Downex update. The listing installs in
+    Opera, Vivaldi and other Chromium browsers too, but `register` covers only `allBrowsers`
+    (Chrome, Edge, Chromium, Brave, Firefox) and the relay has not been tried in the others, so
+    the app names only those five, and the guides say no more than that the listing installs
+    elsewhere (where the extension may report that Downex isn't set up).
 - Firefox add-on ID (gecko id): `extension@downex.app`, permanent from the first addons.mozilla.org
   upload, and the only one in `downex-nmhost`'s `allowed_extensions`. **Amendment 2026-11-20:**
   `browser@downex.local`, the ID of copies loaded by hand before the listing, is no longer allowed:
   `downex.local` is not a domain Downex owns, so any add-on could declare that ID. Every released
   build has `extension@downex.app`. `register` writes manifests without it, and `register --keep`
-  (macOS) drops it from a manifest it otherwise keeps; only `--firefox-extension-id
+  (the macOS window and downexd at their start) drops it from a manifest it otherwise keeps; only `--firefox-extension-id
   browser@downex.local` writes it again. The Firefox build needs Firefox 140 or later and declares
   `data_collection_permissions.required` = `browsingActivity`, `websiteContent`, `websiteActivity`,
   `authenticationInfo`.
@@ -41,6 +59,13 @@ and have **not yet run in a real browser**.
   given again) a protected DACL: full control for SYSTEM and Administrators, read for Users. A
   directory, manifest or backup there that someone else owns, a link/junction, or a hard-linked
   file is refused.
+- **Kept registered (amendment 2026-11-22).** The user's own downexd (default database and
+  endpoint) runs `downex-nmhost register --keep` next to it in the background, 5 s after it starts,
+  so that an ID added to `EXTENSION_ID.txt` by an update reaches the manifests even when only the
+  Confirm and progress windows run. It does so only from an installed layout: on Windows not in a
+  `bin` folder, on macOS inside a Downex.app that App Translocation does not run, and on neither
+  inside a source checkout (a `go.mod`, or a worktree's `.git` file, in a folder above it). A
+  development build would otherwise point the browsers at itself. Linux registers nothing then.
 
 ## 2. Native messaging protocol (extension ↔ downex-nmhost)
 Framing per the browser spec: 32-bit length in native byte order + UTF-8 JSON. Host → browser
@@ -191,6 +216,15 @@ Chromium (downloads API, pause → hand-off → commit):
    the download-like responses `webRequest.onHeadersReceived` saw, both downloads events, each
    decision with its skip reason and each hand-off result. A download that could not be paused is
    also listed in the hand-off history.
+
+Capture needs downexd known to run (`daemonReady`): otherwise the candidate is left to the browser
+with reason `daemon_unavailable` and the status is asked for again (at most every 2 s), since an
+`add` would have to start downexd and could outlast the hand-off. **Amendment 2026-11-22:** on
+Chromium the download itself often starts the MV3 service worker, before its relay connected, and a
+dropped port waits out its backoff. A relay that is merely not connected (not a missing host, a
+host that does not allow this extension, or one that speaks another protocol) is connected at once
+and given 800 ms to welcome and report downexd running; the wait is taken off the `add`'s 3 s, and
+captures that wait together share one `status` request. Firefox's blocking listener never waits.
 
 Firefox: blocking `webRequest.onHeadersReceived` (main_frame/sub_frame) classifies attachments
 (`Content-Disposition: attachment`, MIME, extension, length) and returns a Promise that resolves

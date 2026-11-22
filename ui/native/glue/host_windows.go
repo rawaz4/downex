@@ -58,6 +58,7 @@ type Window struct {
 	defers   []func()
 	shown    bool // FirstFrame ran
 	ended    bool
+	closing  bool // the Confirm download window's close is on its way (MarkClosing)
 
 	theme *themeLink
 	ui    *uiStorage // UIStorage's
@@ -142,8 +143,10 @@ func (h *Host) request(args []string) (err error) {
 	}
 	if v.IsConfirm() {
 		// A download the user just started in the browser: its own Confirm download window,
-		// and the main window is left as it is (hidden, minimised or wherever it is).
-		if w := h.confirm; w != nil {
+		// and the main window is left as it is (hidden, minimised or wherever it is). A window
+		// whose close is on its way would drop the request: a new one opens and takes it (it is
+		// h.confirm from then on, and the old one's end leaves it so).
+		if w := h.confirm; w != nil && !w.closing {
 			w.Session.SecondInstance(args, func() { w.frontFor(args) })
 			return nil
 		}

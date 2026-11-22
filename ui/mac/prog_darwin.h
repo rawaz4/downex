@@ -48,6 +48,15 @@ void dxgWindowZoom(void *win);           // zoom before the window shows
 void dxgWindowFrameSize(void *win, double *w, double *h);
 void dxgSystemFrameSize(double *w, double *h);
 void dxgWindowFront(void *win, bool activate);
+// dxgWindowRaise puts win in front of other apps' windows without activating the app (a
+// window of a download the user just started in the browser): the app is unhidden, win is
+// deminiaturised, moves to the active Space and is ordered front at once, then again after
+// each activation of an app that is not Downex for seconds, until win becomes key or closes
+// (seconds <= 0: only at once). A later call replaces an earlier one's following.
+void dxgWindowRaise(void *win, double seconds);
+// dxgWindowRaiseState reports whether dxgWindowRaise still follows the activations for win
+// and whether win moves to the active Space (tests and tools).
+void dxgWindowRaiseState(void *win, bool *following, bool *activeSpace);
 long dxgWindowNumber(void *win);
 bool dxgWindowFullScreen(void *win);
 // dxgKeyWindowHandle is the handle of the key window (else the main window, else the front

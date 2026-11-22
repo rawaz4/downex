@@ -251,8 +251,13 @@ HTTP/2 cleartext) on a local endpoint from `internal/ipc`.
   INFO "download completed" record carries `bytes`, `active_ms` and `avg_bps` (bytes / active time,
   rounded, `dlview.AverageBps`; 0 when no running time is known; a stream's `bytes` is its file's
   size), so whole downloads can be compared. A run
-  that completes or fails a download marked `completion_dialog` starts its window once
-  (`downex-ui --progress <id>`) while `show_complete_dialog` is on.
+  that a progress window showed or was asked for (DESKTOP-SPEC §8: downexd opened it as the run
+  started, a window marked it, or `ResumeRequest.progress_window`) and that completes or fails the
+  download starts its window once (`downex-ui --progress <id>`, with `--raise` for a browser download)
+  while `show_complete_dialog` is on; the stored `completion_dialog` of an earlier run does not count.
+  `Confirm` with `start` and `progress_window` (and `RenewLink` with them) opens the progress window
+  itself (`--progress <id> --raise --started` for a browser download) when the download starts now or
+  waits in its queue, and answers `progress_window_opening`.
 
 ## 6. Errors
 - Map engine errors to stable `error_code` strings: `validator_changed`, `disk_full`, `tls`,

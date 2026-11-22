@@ -481,6 +481,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if own {
 		unquarantine(log, toolsDir)
 	}
+	// An installed Downex keeps its relay registered with the browsers (register.go).
+	stopRegister := browserRegistration().start(ctx, log, own)
+	defer stopRegister()
 	// The clipboard monitor (docs/M6-SPEC.md §3) only for the user's own daemon; it
 	// follows the clipboard_monitor setting and ends with the Manager.
 	var helpers sync.WaitGroup
